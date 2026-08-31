@@ -1,0 +1,13 @@
+node_modules/
+.expo/
+.vscode/
+dist/
+.tmp-production-export/
+.tmp-web-export/
+customer-emulator-current.png
+.env
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision

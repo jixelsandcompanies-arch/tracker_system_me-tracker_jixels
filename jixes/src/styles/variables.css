@@ -1,0 +1,18 @@
+:root {
+  --ink: #0f172a;
+  --muted: #64748b;
+  --line: #dce6f2;
+  --paper: #f8fbff;
+  --white: #ffffff;
+  --nav: #0b3d91;
+  --nav-muted: #dce6f2;
+  --mint: #e8f3ff;
+  --green: #1565c0;
+  --orange: #fff2e0;
+  --orange-ink: #ff8c00;
+  --blue: #e8f3ff;
+  --blue-ink: #1565c0;
+  --red: #fef2f2;
+  --red-ink: #ef4444;
+  --sidebar-width: 258px;
+}

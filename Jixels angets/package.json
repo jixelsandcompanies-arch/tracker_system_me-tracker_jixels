@@ -8,8 +8,9 @@
     "start": "expo start",
     "android": "expo start --android",
     "ios": "expo start --ios",
+    "check:production": "node scripts/check-production.cjs",
     "build:android:play": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"$env:EAS_NO_VCS='1'; $env:EAS_PROJECT_ROOT=(Get-Location).Path; npx eas-cli build --platform android --profile production\"",
-    "submit:android:play": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"$env:EAS_NO_VCS='1'; $env:EAS_PROJECT_ROOT=(Get-Location).Path; npx eas-cli submit --platform android --profile production\"",
+    "submit:android:play": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"$env:EAS_NO_VCS='1'; $env:EAS_PROJECT_ROOT=(Get-Location).Path; npx eas-cli submit --platform android --profile production --latest\"",
     "release:android:play": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"$env:EAS_NO_VCS='1'; $env:EAS_PROJECT_ROOT=(Get-Location).Path; npx eas-cli build --platform android --profile production --auto-submit\""
   },
   "dependencies": {

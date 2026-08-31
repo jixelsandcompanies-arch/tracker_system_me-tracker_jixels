@@ -46,11 +46,6 @@ const reportPeriods = [
 const nativeTap = () => Haptics.selectionAsync().catch(() => {});
 const nativeSuccess = () => Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
 
-function demoMpesaReceipt() {
-  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-  return Array.from({ length: 10 }, () => alphabet[Math.floor(Math.random() * alphabet.length)]).join("");
-}
-
 async function enableNotifications() {
   if (Platform.OS === "android") await Notifications.setNotificationChannelAsync("default", { name: "Jixels Customer Trackings", description: "Payment, tracker and account notifications from Jixels Customer Trackings", importance: Notifications.AndroidImportance.HIGH, vibrationPattern: [0, 250, 150, 250], lightColor: colors.green, sound: "default" });
   const current = await Notifications.getPermissionsAsync();
@@ -99,14 +94,16 @@ const Logo = memo(function Logo({ compact = false }) {
 });
 
 function Field({ icon, label, secureTextEntry, keyboardType, value, onChangeText, placeholder, editable = true }) {
-  return <View style={styles.fieldWrap}><Text style={styles.fieldLabel}>{label}</Text><View style={[styles.field, !editable && styles.fieldReadonly]}><Ionicons name={icon} size={18} color={colors.gray} /><TextInput value={value} onChangeText={onChangeText} placeholder={placeholder} placeholderTextColor="#94A3B8" secureTextEntry={secureTextEntry} keyboardType={keyboardType} autoCapitalize="none" editable={editable} style={styles.fieldInput} />{!editable && <Ionicons name="lock-closed" size={15} color={colors.gray} />}</View></View>;
+  const [passwordVisible, setPasswordVisible] = useState(false);
+  const isSecure = Boolean(secureTextEntry);
+  return <View style={styles.fieldWrap}><Text style={styles.fieldLabel}>{label}</Text><View style={[styles.field, !editable && styles.fieldReadonly]}><Ionicons name={icon} size={18} color={colors.gray} /><TextInput value={value} onChangeText={onChangeText} placeholder={placeholder} placeholderTextColor="#94A3B8" secureTextEntry={isSecure && !passwordVisible} keyboardType={keyboardType} autoCapitalize="none" editable={editable} style={styles.fieldInput} />{isSecure && editable && <Pressable accessibilityRole="button" accessibilityLabel={passwordVisible ? "Hide password" : "Show password"} onPress={() => setPasswordVisible(visible => !visible)} style={styles.passwordToggle}><Ionicons name={passwordVisible ? "eye-off-outline" : "eye-outline"} size={18} color={colors.gray} /></Pressable>}{!editable && <Ionicons name="lock-closed" size={15} color={colors.gray} />}</View></View>;
 }
 
 function AuthScreen({ onAuthenticated, onPendingApproval, pendingEmail, approvedEmail }) {
   const [mode, setMode] = useState("login");
   const [resettingPassword, setResettingPassword] = useState(false);
   const [name, setName] = useState("");
-  const [email, setEmail] = useState(() => config.demoMode ? customer.email : "");
+  const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
@@ -125,12 +122,12 @@ function AuthScreen({ onAuthenticated, onPendingApproval, pendingEmail, approved
     setBusy(true);
     try {
       if (mode === "register") {
-        const application = config.demoMode ? { status: "pending" } : await authApi.register({ name: name.trim(), email: normalizedEmail, phone: phone.trim(), password });
+        const application = await authApi.register({ name: name.trim(), email: normalizedEmail, phone: phone.trim(), password });
         if (application?.status !== "pending" && application?.status !== "submitted") throw new Error("Registration was not accepted.");
         onPendingApproval({ name: name.trim(), email: normalizedEmail, phone: phone.trim() });
         return;
       }
-      const session = config.demoMode ? { accessToken: "demo-session", expiresAt: Date.now() + 60 * 60_000, user: { id: customer.id, name: customer.name, email: normalizedEmail, phone: customer.phone } } : await authApi.login(normalizedEmail, password);
+      const session = await authApi.login(normalizedEmail, password);
       if (!session?.accessToken || !session?.user) throw new Error("The backend returned an invalid session.");
       onAuthenticated(session);
     } catch (error) {
@@ -145,7 +142,7 @@ function AuthScreen({ onAuthenticated, onPendingApproval, pendingEmail, approved
     const normalizedEmail = normalizeEmail(email);
     if (!isValidEmail(normalizedEmail)) return Alert.alert("Enter your email", "Enter the valid email address registered on your account.");
     setBusy(true);
-    (config.demoMode ? Promise.resolve() : authApi.requestPasswordReset(normalizedEmail)).catch(() => {}).finally(() => {
+    authApi.requestPasswordReset(normalizedEmail).catch(() => {}).finally(() => {
       setBusy(false);
       setResettingPassword(false);
       Alert.alert("Check your email", "If an approved account exists, Jixels Customer Trackings will send a secure reset link. Open it and create a new password of at least 8 characters.");
@@ -166,7 +163,7 @@ function AuthScreen({ onAuthenticated, onPendingApproval, pendingEmail, approved
 
 function PendingApproval({ applicant, onEnterCode, onBackToLogin }) {
   useEffect(() => {
-    if (config.demoMode || !applicant?.email) return undefined;
+    if (!applicant?.email) return undefined;
     let active = true;
     let notified = false;
     const check = async () => {
@@ -206,9 +203,7 @@ function OtpVerification({ applicant, onVerified, onBack, initialGate = false })
     if (initialGate && !identity) return Alert.alert("Enter your registered contact", "Enter the email address or Kenyan phone number that received this code.");
     setBusy(true);
     try {
-      if (config.demoMode) {
-        if (code !== "123456") throw new Error("Invalid or expired code");
-      } else await authApi.verifyOtp({ identifier: identity ?? applicant?.email, code, purpose: initialGate ? "app-access" : "account-approval" });
+      await authApi.verifyOtp({ identifier: identity ?? applicant?.email, code, purpose: initialGate ? "app-access" : "account-approval" });
       onVerified();
     } catch (cause) {
       Alert.alert("Code not verified", cause instanceof Error ? cause.message : "Request a new code and try again.");
@@ -219,7 +214,7 @@ function OtpVerification({ applicant, onVerified, onBack, initialGate = false })
     if (initialGate && !identity) return Alert.alert("Enter your registered contact", "Enter the approved email address or Kenyan phone number where Jixels should send the code.");
     setBusy(true);
     try {
-      if (!config.demoMode) await authApi.requestOtp({ identifier: identity ?? applicant?.email, purpose: initialGate ? "app-access" : "account-approval" });
+      await authApi.requestOtp({ identifier: identity ?? applicant?.email, purpose: initialGate ? "app-access" : "account-approval" });
       setCode("");
       setResendIn(30);
       Alert.alert("New code requested", initialGate ? "A new security code is available for this login." : "A new approval code is available in your private customer portal notification.");
@@ -689,7 +684,7 @@ function CustomerApp({ session, onLogout }) {
   useEffect(() => { if (queueHydrated) AsyncStorage.setItem("jixels:sync-queue", JSON.stringify(syncQueue)).catch(() => {}); }, [queueHydrated, syncQueue]);
   useEffect(() => () => { paymentTimers.current.forEach(clearTimeout); paymentTimers.current.clear(); }, []);
   useEffect(() => {
-    if (config.demoMode || !isOnline || !session?.accessToken) return undefined;
+    if (!isOnline || !session?.accessToken) return undefined;
     let active = true;
     const refreshSecurity = async () => {
       let vehiclesToCheck = bikes;
@@ -752,7 +747,7 @@ function CustomerApp({ session, onLogout }) {
       if (content.data?.inAppRecorded) return;
       const eventId = content.data?.eventId ?? content.data?.mpesaReceiptNumber ?? notification.request.identifier;
       setAlerts(current => upsertById(current, { id: eventId, type: content.data?.type ?? "tracker", icon: content.data?.type === "payment" ? "checkmark-circle-outline" : "notifications-outline", title: content.title ?? "Jixels update", message: content.body ?? "You have a new account update.", age: "now", unread: true }));
-      if (!config.demoMode && content.data?.type === "payment" && session?.accessToken) {
+      if (content.data?.type === "payment" && session?.accessToken) {
         customerApi.getPayments(session.accessToken).then(response => {
           const serverPayments = response?.payments ?? response;
           if (Array.isArray(serverPayments)) setPayments(dedupeById(serverPayments));
@@ -823,11 +818,6 @@ function CustomerApp({ session, onLogout }) {
       return false;
     }
     try {
-      if (config.demoMode) {
-        const demoBody = reportType === "routes" ? `Jixels Customer Trackings route report\nVehicle: ${reportBike.registration}\nPeriod: ${reportPeriod}\nDate: ${routeDate}\nDistance: 18.4 km\nStops: 3\nLast recorded position: Nairobi, Kenya\nCustomer: ${profile.name}` : `Jixels Customer Trackings payment report\nPeriod: ${reportPeriod}\nCustomer: ${profile.name}\nMonthly instalment: KES 700`;
-        await FileSystem.writeAsStringAsync(fileUri, demoBody);
-        return { uri: fileUri, name: fileName };
-      }
       const response = await customerApi.generateReport(session.accessToken, action);
       const reportUrl = response?.downloadUrl ?? response?.pdfUrl ?? response?.url ?? response?.documentUrl;
       if (!reportUrl) throw new ApiError("The report service did not return a PDF download link.", 502, "MISSING_REPORT_URL");
@@ -840,7 +830,7 @@ function CustomerApp({ session, onLogout }) {
   };
   const updateMonitoring = async (vehicle, armed) => {
     try {
-      if (!config.demoMode) await trackingApi.setMonitoring(vehicle.id, armed, session.accessToken);
+      await trackingApi.setMonitoring(vehicle.id, armed, session.accessToken);
       setSecurity(current => ({ ...current, [vehicle.id]: { ...current[vehicle.id], monitoringArmed: armed } }));
       setAlerts(current => upsertById(current, { id: `monitoring-${vehicle.id}-${Date.now()}`, type: "tracker", icon: armed ? "shield-checkmark-outline" : "shield-outline", title: armed ? "Vehicle monitoring armed" : "Vehicle monitoring disarmed", message: `${vehicle.registration}: ${armed ? "movement and tamper alerts are active" : "movement alerts paused; GPS remains online"}.`, age: "now", unread: true }));
       return true;
@@ -849,52 +839,25 @@ function CustomerApp({ session, onLogout }) {
   const updateImmobilizer = async (vehicle, immobilized) => {
     if (!isOnline) { Alert.alert("You are offline", "A secure immobilizer command requires a live tracker connection."); return false; }
     try {
-      if (!config.demoMode) await trackingApi.setImmobilizer(vehicle.id, immobilized, session.accessToken);
+      await trackingApi.setImmobilizer(vehicle.id, immobilized, session.accessToken);
       setSecurity(current => ({ ...current, [vehicle.id]: { ...current[vehicle.id], immobilized } }));
       setAlerts(current => upsertById(current, { id: `immobilizer-${vehicle.id}-${Date.now()}`, type: "tracker", icon: immobilized ? "lock-closed-outline" : "lock-open-outline", title: immobilized ? "Vehicle immobilized" : "Engine start allowed", message: `${vehicle.registration}: ${immobilized ? "engine start is blocked after stationary confirmation" : "immobilizer released"}.`, age: "now", unread: true }));
       return true;
     } catch (error) { Alert.alert("Command failed", error instanceof ApiError ? error.message : "The bike did not confirm the command."); return false; }
   };
   const addPayment = async (amount, payerPhone, idempotencyKey) => {
-    const currentFinanceBalance = financeBalances[selectedBike.id] ?? selectedBike.balance;
-    if (!config.demoMode) {
-      try {
-        const response = await paymentsApi.requestMpesa(session.accessToken, { vehicleId: selectedBike.id, amount, phone: payerPhone, idempotencyKey });
-        const payment = response?.payment ?? response ?? {};
-        const requestId = payment.id ?? payment.requestId ?? payment.checkoutRequestId;
-        if (!requestId) throw new ApiError("The payment service returned an invalid response.", 502, "INVALID_PAYMENT_RESPONSE");
-        setPayments(current => upsertById(current, { id: requestId, bikeId: selectedBike.id, registration: selectedBike.registration, date: "Today", amount, payerPhone, method: "M-Pesa", status: payment.status ?? "Processing", mpesaReceiptNumber: payment.mpesaReceiptNumber ?? "Pending", notificationMessage: "M-Pesa request sent. Confirm the prompt on the selected phone." }));
-        Alert.alert("M-Pesa request sent", "Complete the prompt on the selected phone. Jixels will notify you after M-Pesa confirms the payment.");
-        return true;
-      } catch (error) {
-        Alert.alert("Payment request failed", error instanceof ApiError ? error.message : "The M-Pesa request could not be sent. Please try again.");
-        return false;
-      }
+    try {
+      const response = await paymentsApi.requestMpesa(session.accessToken, { vehicleId: selectedBike.id, amount, phone: payerPhone, idempotencyKey });
+      const payment = response?.payment ?? response ?? {};
+      const requestId = payment.id ?? payment.requestId ?? payment.checkoutRequestId;
+      if (!requestId) throw new ApiError("The payment service returned an invalid response.", 502, "INVALID_PAYMENT_RESPONSE");
+      setPayments(current => upsertById(current, { id: requestId, bikeId: selectedBike.id, registration: selectedBike.registration, date: "Today", amount, payerPhone, method: "M-Pesa", status: payment.status ?? "Processing", mpesaReceiptNumber: payment.mpesaReceiptNumber ?? "Pending", notificationMessage: "M-Pesa request sent. Confirm the prompt on the selected phone." }));
+      Alert.alert("M-Pesa request sent", "Complete the prompt on the selected phone. Jixels will notify you after M-Pesa confirms the payment.");
+      return true;
+    } catch (error) {
+      Alert.alert("Payment request failed", error instanceof ApiError ? error.message : "The M-Pesa request could not be sent. Please try again.");
+      return false;
     }
-    const mpesaReceiptNumber = demoMpesaReceipt();
-    const remainingBalance = Math.max(0, currentFinanceBalance - amount);
-    const configuredTarget = Number(selectedBike.monthlyPayment);
-    const monthlyTarget = Number.isFinite(configuredTarget) && configuredTarget > 0 ? configuredTarget : null;
-    const paidBefore = monthlyProgress[selectedBike.id] ?? selectedBike.paidThisMonth ?? 0;
-    const paidThisMonth = paidBefore + amount;
-    const monthlyRemaining = monthlyTarget ? Math.max(0, monthlyTarget - paidThisMonth) : null;
-    const monthlyComplete = monthlyTarget ? monthlyRemaining === 0 : false;
-    const receipt = { id: mpesaReceiptNumber, mpesaReceiptNumber, bikeId: selectedBike.id, registration: selectedBike.registration, date: "Today", amount, payerPhone, method: "M-Pesa", status: "Processing" };
-    setPayments(current => upsertById(current, receipt));
-    const confirmationTimer = setTimeout(() => {
-      paymentTimers.current.delete(confirmationTimer);
-      setFinanceBalances(current => ({ ...current, [selectedBike.id]: remainingBalance }));
-      if (monthlyTarget) setMonthlyProgress(current => ({ ...current, [selectedBike.id]: monthlyComplete ? 0 : paidThisMonth }));
-      setSelectedBike(current => current.id === selectedBike.id ? { ...current, balance: remainingBalance, nextPayment: monthlyTarget ? (monthlyComplete ? "Agreed instalment completed" : `${money(monthlyRemaining)} remaining`) : current.nextPayment } : current);
-      const paymentMessage = monthlyTarget ? (monthlyComplete ? `${money(amount)} received for ${selectedBike.registration}. Your agreed instalment of ${money(monthlyTarget)} is fully paid. Vehicle finance balance: ${money(remainingBalance)}. Receipt ${mpesaReceiptNumber}.` : `${money(amount)} received for ${selectedBike.registration}. ${money(monthlyRemaining)} remains toward your agreed ${money(monthlyTarget)} instalment. Vehicle finance balance: ${money(remainingBalance)}. Receipt ${mpesaReceiptNumber}.`) : `${money(amount)} received for ${selectedBike.registration}. Vehicle finance balance: ${money(remainingBalance)}. Receipt ${mpesaReceiptNumber}.`;
-      const confirmedReceipt = { ...receipt, status: "Confirmed", monthlyTarget, monthlyRemaining, monthlyComplete, remainingBalance, notificationMessage: paymentMessage };
-      setPayments(current => current.map(payment => payment.id === receipt.id ? confirmedReceipt : payment));
-      setAlerts(current => upsertById(current, { id: `payment-${mpesaReceiptNumber}`, type: "receipt", icon: "checkmark-circle-outline", title: monthlyComplete ? "Agreed instalment completed" : "Payment confirmed", message: paymentMessage, age: "now", unread: true }));
-      setPaymentReceipt(confirmedReceipt);
-      Notifications.scheduleNotificationAsync({ content: { title: monthlyComplete ? "Agreed instalment completed" : "Payment confirmed", subtitle: "Jixels Customer Trackings", body: paymentMessage, sound: "default", data: { screen: "history", type: "payment", inAppRecorded: true, mpesaReceiptNumber, vehicleId: selectedBike.id, remainingBalance, monthlyRemaining } }, trigger: null }).catch(() => {});
-    }, 1800);
-    paymentTimers.current.add(confirmationTimer);
-    return true;
   };
   const refreshable = { onRefresh: refreshApp };
   const acceptPermissions = async () => {
@@ -1089,7 +1052,7 @@ const styles = StyleSheet.create({
   successOverlay: { flex: 1, backgroundColor: "rgba(7,29,54,.72)", alignItems: "center", justifyContent: "center", padding: 24 }, successCard: { width: "100%", maxWidth: 370, backgroundColor: colors.white, borderRadius: 26, padding: 22, alignItems: "center" }, successIcon: { width: 78, height: 78, borderRadius: 39, backgroundColor: colors.green, alignItems: "center", justifyContent: "center", marginTop: -58, borderWidth: 7, borderColor: colors.white, shadowColor: colors.green, shadowOpacity: .3, shadowRadius: 14, elevation: 8 }, successTitle: { color: colors.ink, fontSize: 23, fontWeight: "900", marginTop: 14 }, successAmount: { color: colors.green, fontSize: 29, fontWeight: "900", marginTop: 10 }, successVehicle: { color: colors.gray, fontSize: 12, fontWeight: "700", marginTop: 3 }, receiptBox: { alignSelf: "stretch", backgroundColor: colors.surface, borderRadius: 15, padding: 14, alignItems: "center", marginVertical: 20 }, receiptLabel: { color: colors.gray, fontSize: 8, fontWeight: "900", letterSpacing: 1 }, receiptId: { color: colors.ink, fontSize: 16, fontWeight: "900", marginTop: 5, letterSpacing: .8 }, receiptTime: { color: colors.gray, fontSize: 9, marginTop: 4 },
   logoRow: { flexDirection: "row", alignItems: "center" }, logo: { width: 39, height: 39, borderRadius: 12, backgroundColor: colors.blue, alignItems: "center", justifyContent: "center", marginRight: 10 }, logoCompact: { marginRight: 0 }, logoText: { color: colors.white, fontSize: 24, fontWeight: "900" }, brandName: { color: colors.white, fontSize: 15, fontWeight: "900", letterSpacing: 1.2 }, brandSub: { color: "#AFC6E0", fontSize: 8, fontWeight: "700", letterSpacing: 1.4, marginTop: 2 },
   authPage: { flex: 1, backgroundColor: colors.surface }, authHero: { height: 260, backgroundColor: colors.blueDark, paddingTop: 54, paddingHorizontal: 25, overflow: "hidden" }, authOrbOne: { position: "absolute", width: 220, height: 220, borderRadius: 110, backgroundColor: "rgba(9,105,218,.28)", right: -55, top: -55 }, authOrbTwo: { position: "absolute", width: 150, height: 150, borderRadius: 75, borderWidth: 28, borderColor: "rgba(255,255,255,.05)", right: 28, bottom: -70 }, authHeading: { color: colors.white, fontSize: 30, fontWeight: "900", marginTop: 30 }, authLead: { color: "#C8D8EA", fontSize: 14, lineHeight: 21, marginTop: 8, maxWidth: 330 }, authCard: { flex: 1, marginTop: -20, backgroundColor: colors.white, borderTopLeftRadius: 28, borderTopRightRadius: 28, padding: 22 }, authTabs: { flexDirection: "row", backgroundColor: colors.surface, padding: 4, borderRadius: 14, marginBottom: 20 }, authTab: { flex: 1, alignItems: "center", paddingVertical: 11, borderRadius: 11 }, authTabActive: { backgroundColor: colors.white, shadowColor: colors.ink, shadowOpacity: .1, shadowRadius: 8, elevation: 3 }, authTabText: { color: colors.gray, fontWeight: "800" }, authTabTextActive: { color: colors.blue },
-  fieldWrap: { marginBottom: 14 }, fieldLabel: { color: colors.ink, fontSize: 12, fontWeight: "800", marginBottom: 7 }, field: { height: 51, borderWidth: 1, borderColor: colors.line, borderRadius: 14, backgroundColor: colors.surface, flexDirection: "row", alignItems: "center", paddingHorizontal: 14 }, fieldInput: { flex: 1, marginLeft: 10, color: colors.ink, fontSize: 14 }, forgot: { color: colors.blue, fontWeight: "700", fontSize: 13, textAlign: "right", marginBottom: 16 }, primaryButton: { minHeight: 50, borderRadius: 14, backgroundColor: colors.blue, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 9, paddingHorizontal: 16 }, primaryButtonText: { color: colors.white, fontWeight: "900", fontSize: 14 }, authFormScroll: { flex: 1 }, copyright: { color: colors.gray, fontSize: 9, textAlign: "center", paddingTop: 2, paddingBottom: 18, transform: [{ translateY: -22 }] }, resetIcon: { width: 54, height: 54, borderRadius: 18, backgroundColor: colors.bluePale, alignItems: "center", justifyContent: "center", alignSelf: "center", marginTop: 6 }, resetTitle: { color: colors.ink, fontSize: 19, fontWeight: "900", textAlign: "center", marginTop: 12 }, resetCopy: { color: colors.gray, fontSize: 11, lineHeight: 17, textAlign: "center", marginTop: 5, marginBottom: 20 }, backToLogin: { minHeight: 44, flexDirection: "row", gap: 6, alignItems: "center", justifyContent: "center", marginTop: 8 }, backToLoginText: { color: colors.blue, fontSize: 12, fontWeight: "800" }, buttonPressed: { opacity: .82, transform: [{ scale: .97 }] }, disabledButton: { opacity: .45 },
+  fieldWrap: { marginBottom: 14 }, fieldLabel: { color: colors.ink, fontSize: 12, fontWeight: "800", marginBottom: 7 }, field: { height: 51, borderWidth: 1, borderColor: colors.line, borderRadius: 14, backgroundColor: colors.surface, flexDirection: "row", alignItems: "center", paddingHorizontal: 14 }, fieldInput: { flex: 1, marginLeft: 10, color: colors.ink, fontSize: 14 }, passwordToggle: { width: 34, height: 34, alignItems: "center", justifyContent: "center", marginRight: -8 }, forgot: { color: colors.blue, fontWeight: "700", fontSize: 13, textAlign: "right", marginBottom: 16 }, primaryButton: { minHeight: 50, borderRadius: 14, backgroundColor: colors.blue, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 9, paddingHorizontal: 16 }, primaryButtonText: { color: colors.white, fontWeight: "900", fontSize: 14 }, authFormScroll: { flex: 1 }, copyright: { color: colors.gray, fontSize: 9, textAlign: "center", paddingTop: 2, paddingBottom: 18, transform: [{ translateY: -22 }] }, resetIcon: { width: 54, height: 54, borderRadius: 18, backgroundColor: colors.bluePale, alignItems: "center", justifyContent: "center", alignSelf: "center", marginTop: 6 }, resetTitle: { color: colors.ink, fontSize: 19, fontWeight: "900", textAlign: "center", marginTop: 12 }, resetCopy: { color: colors.gray, fontSize: 11, lineHeight: 17, textAlign: "center", marginTop: 5, marginBottom: 20 }, backToLogin: { minHeight: 44, flexDirection: "row", gap: 6, alignItems: "center", justifyContent: "center", marginTop: 8 }, backToLoginText: { color: colors.blue, fontSize: 12, fontWeight: "800" }, buttonPressed: { opacity: .82, transform: [{ scale: .97 }] }, disabledButton: { opacity: .45 },
   drawer: { position: "absolute", zIndex: 30, left: 0, top: 0, bottom: 0, backgroundColor: colors.blueDark, overflow: "hidden", shadowColor: colors.ink, shadowOpacity: .24, shadowRadius: 14, elevation: 30 }, drawerTop: { height: 78, minWidth: DRAWER_OPEN, paddingTop: 12, paddingHorizontal: 12, flexDirection: "row", alignItems: "center", gap: 10, borderBottomWidth: 1, borderBottomColor: "rgba(255,255,255,.08)" }, drawerToggle: { width: 36, height: 36, borderRadius: 11, backgroundColor: "rgba(255,255,255,.1)", alignItems: "center", justifyContent: "center" }, drawerScroll: { flex: 1 }, drawerMenu: { paddingHorizontal: 5, paddingTop: 9, paddingBottom: 20, gap: 7 }, drawerItem: { width: DRAWER_OPEN - 10, height: 48, borderRadius: 13, paddingHorizontal: 12, flexDirection: "row", alignItems: "center" }, drawerItemActive: { backgroundColor: colors.blue }, drawerLabel: { color: "#BED0E3", fontWeight: "700", fontSize: 13, marginLeft: 14 }, drawerLabelActive: { color: colors.white }, menuBadge: { position: "absolute", top: -8, right: -11, minWidth: 17, height: 17, borderRadius: 9, backgroundColor: "#EF4444", alignItems: "center", justifyContent: "center", borderWidth: 2, borderColor: colors.blueDark }, menuBadgeText: { color: colors.white, fontSize: 8, fontWeight: "900" }, logout: { width: DRAWER_OPEN, minHeight: 60, borderTopWidth: 1, borderColor: "rgba(255,255,255,.09)", paddingHorizontal: 17, flexDirection: "row", alignItems: "center" }, logoutText: { color: "#F9A8A8", marginLeft: 14, fontWeight: "800" },
   pageHeader: { height: 70, zIndex: 20, elevation: 20, backgroundColor: colors.white, borderBottomWidth: 1, borderBottomColor: colors.line, flexDirection: "row", alignItems: "center", paddingHorizontal: 12 }, headerMenu: { width: 38, height: 38, borderRadius: 12, backgroundColor: colors.bluePale, alignItems: "center", justifyContent: "center" }, headerTitleWrap: { flex: 1, minWidth: 0, marginHorizontal: 11 }, pageTitle: { color: colors.ink, fontSize: 18, fontWeight: "900" }, pageSubtitle: { color: colors.gray, fontSize: 10, marginTop: 2 }, headerBell: { width: 38, height: 38, borderRadius: 19, borderWidth: 1, borderColor: colors.line, alignItems: "center", justifyContent: "center" }, headerBadge: { position: "absolute", top: -3, right: -3, minWidth: 17, height: 17, borderRadius: 9, backgroundColor: "#EF4444", alignItems: "center", justifyContent: "center" }, headerBadgeText: { color: colors.white, fontSize: 9, fontWeight: "900" },
   welcomeCard: { backgroundColor: colors.blueDark, borderRadius: 20, padding: 18, flexDirection: "row", gap: 13 }, welcomeIcon: { width: 44, height: 44, borderRadius: 15, backgroundColor: colors.blue, alignItems: "center", justifyContent: "center" }, eyebrow: { color: colors.blue, fontSize: 9, fontWeight: "900", letterSpacing: 1.2 }, welcomeName: { color: colors.white, fontSize: 21, fontWeight: "900", marginTop: 3 }, welcomeCopy: { color: "#BED0E3", fontSize: 11, lineHeight: 16, marginTop: 4 }, statGrid: { flexDirection: "row", flexWrap: "wrap", gap: 10 }, statCard: { width: "47.8%", minHeight: 112, backgroundColor: colors.white, borderRadius: 17, padding: 14, borderWidth: 1, borderColor: colors.line }, statIcon: { width: 36, height: 36, borderRadius: 12, alignItems: "center", justifyContent: "center" }, statValue: { color: colors.ink, fontWeight: "900", fontSize: 19, marginTop: 7 }, statLabel: { color: colors.gray, fontSize: 10, marginTop: 2 }, sectionTitleRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginTop: 5 }, sectionTitle: { color: colors.ink, fontSize: 17, fontWeight: "900" }, sectionAction: { color: colors.blue, fontSize: 12, fontWeight: "800" },

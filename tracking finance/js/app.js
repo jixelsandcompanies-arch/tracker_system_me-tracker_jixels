@@ -1,9 +1,10 @@
-/* Offline finance portal: no React, Babel, or internet connection required. */
+/* Finance portal shell: no React, Babel, or CDN dependency required. */
 (function () {
-  const { readData, saveData, money } = window.FinanceStore;
+  const { readData, saveData, registerFinanceUser, authenticateFinanceUser, money } = window.FinanceStore;
   const root = document.getElementById("root");
   let data = readData();
   let page = "dashboard";
+  let authMode = "login";
   let sidebarOpen = false;
   let sidebarCollapsed = false;
   let notificationsOpen = false;
@@ -11,7 +12,6 @@
   let loadingMode = "launch";
   let launchSeconds = 7;
   let online = navigator.onLine;
-  let offlineAcknowledged = false;
   let session = JSON.parse(sessionStorage.getItem("jixels-finance-session") || "null");
   let reconciliationMessage = "";
   let editingAccountId = null;
@@ -31,11 +31,12 @@
     reports: icon('<path d="M5 21V10M12 21V3M19 21v-7"/>'),
     alerts: icon('<path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/>'),
     settings: icon('<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.2h-4V21a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9A1.7 1.7 0 0 0 3 14H2.8v-4H3a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7 7 4.2l.1.1A1.7 1.7 0 0 0 9 4.6 1.7 1.7 0 0 0 10 3V2.8h4V3a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2v4H21a1.7 1.7 0 0 0-1.6 1Z"/>'),
+    eye: icon('<path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z"/><circle cx="12" cy="12" r="3"/>'),
     audit: icon('<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>'),
     logout: icon('<path d="M10 5H5v14h5M14 8l4 4-4 4M18 12H9"/>')
   };
   const navigation = [
-    ["dashboard", icons.dashboard, "Dashboard"], ["commissions", icons.commissions, "Commissions"],
+    ["dashboard", icons.dashboard, "Dashboard"], ["accounts", icons.accounts, "Accounts"], ["commissions", icons.commissions, "Commissions"],
     ["payments", icons.payments, "Payments"], ["overdue", icons.overdue, "Overdue"],
     ["reconciliation", icons.reconciliation, "Reconciliation"], ["reports", icons.reports, "Reports"],
     ["alerts", icons.alerts, "Alerts"], ["settings", icons.settings, "Settings"], ["audit", icons.audit, "Audit Logs"]
@@ -48,6 +49,9 @@
   const rowCheck = (scope, id) => `<label class="row-select"><input type="checkbox" data-select-row="${scope}" value="${escapeHtml(id)}"><span></span></label>`;
   const selectAll = scope => `<label class="row-select row-select-all"><input type="checkbox" data-select-all="${scope}"><span></span></label>`;
   const bulkActions = scope => `<div class="bulk-actions"><button class="button button-secondary" type="button" data-delete-selected="${scope}">Delete selected</button><button class="button danger-button" type="button" data-delete-all="${scope}">Delete all</button></div>`;
+  const passwordInput = (name, autocomplete, placeholder) => `<span class="password-field"><input name="${name}" type="password" placeholder="${placeholder}" autocomplete="${autocomplete}" required><button type="button" class="password-toggle" data-toggle-password aria-label="Show password">${icons.eye}</button></span>`;
+  const isValidEmail = value => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+  const isStrongPassword = value => /[a-z]/.test(value) && /[A-Z]/.test(value) && /\d/.test(value) && /[^A-Za-z0-9]/.test(value) && !/\s/.test(value) && value.length >= 8;
   const commissionRate = () => Math.max(0, Number(data.settings.commissionRate || 5)) / 100;
   const sameDay = (left, right) => left && right && left.toDateString() === right.toDateString();
   const parseDate = value => {
@@ -103,7 +107,8 @@
   };
 
   function loginView(message = "") {
-    return `<main class="login-screen"><section class="login-shell"><div class="login-story"><div class="login-brand"><img src="./assets/jixels-form-ni-tenje.svg" alt="Jixels Form Ni Tenje"></div><div class="login-story-copy"><span class="login-kicker"><i></i> FINANCE OPERATIONS PLATFORM</span><h1>Every payment.<br>One clear view.</h1><p>Manage financed accounts, collections, overdue balances, reconciliation, and reports from one secure workspace.</p><div class="login-feature-grid"><div><span>↗</span><strong>Live finance</strong><small>Collections and account health</small></div><div><span>✓</span><strong>Controlled access</strong><small>Protected finance workspace</small></div></div></div><div class="login-system-status"><span><i></i> Systems operational</span><small>Secure Jixels workspace</small></div></div><div class="login-form-panel"><form class="login-card" id="login-form"><div class="login-form-mark">✓</div><div class="eyebrow">FINANCE WORKSPACE</div><h2>Welcome back</h2><p>Enter your details to continue to Jixels Finance.</p><label>Email address<input name="email" type="email" placeholder="you@jixels.com" autocomplete="email" required></label><label>Password<input name="password" type="password" placeholder="Enter your password" autocomplete="current-password" required></label>${message ? `<div class="login-error">! ${escapeHtml(message)}</div>` : ""}<button class="button button-primary login-button">Sign in securely <span>↗</span></button><small class="login-security-note">✓ Protected financial access</small></form><footer class="login-panel-footer">© 2026 Jixels Technologies</footer></div></section></main>`;
+    const registering = authMode === "register";
+    return `<main class="login-screen"><section class="login-shell"><div class="login-story"><div class="login-brand"><img src="./assets/jixels-form-ni-tenje.svg" alt="Jixels Form Ni Tenje"></div><div class="login-story-copy"><span class="login-kicker"><i></i> FINANCE OPERATIONS PLATFORM</span><h1>Every payment.<br>One clear view.</h1><p>Manage financed accounts, collections, overdue balances, reconciliation, and reports from one secure workspace.</p><div class="login-feature-grid"><div><span>↗</span><strong>Live finance</strong><small>Collections and account health</small></div><div><span>✓</span><strong>Controlled access</strong><small>Protected finance workspace</small></div></div></div><div class="login-system-status"><span><i></i> Systems operational</span><small>Secure Jixels workspace</small></div></div><div class="login-form-panel"><form class="login-card" id="login-form"><div class="login-form-mark">✓</div><div class="eyebrow">FINANCE WORKSPACE</div><h2>${registering ? "Register finance user" : "Welcome back"}</h2><p>${registering ? "Create a finance user before accessing payment and account records." : "Enter your registered finance user details."}</p><div class="login-tabs"><button type="button" data-auth-mode="login" class="${!registering ? "active" : ""}">Login</button><button type="button" data-auth-mode="register" class="${registering ? "active" : ""}">Register</button></div>${registering ? '<label>Full name<input name="name" placeholder="Full name" autocomplete="name" required></label><label>Phone number<input name="phone" placeholder="07++++++++++" autocomplete="tel" required></label>' : ""}<label>Email address<input name="email" type="email" placeholder="you@jixels.com" autocomplete="email" required></label><label>Password${passwordInput("password", registering ? "new-password" : "current-password", "Enter your password")}</label>${registering ? `<label>Confirm password${passwordInput("confirm", "new-password", "Repeat your password")}</label>` : ""}${message ? `<div class="login-error">! ${escapeHtml(message)}</div>` : ""}<button class="button button-primary login-button">${registering ? "Create finance user" : "Sign in securely"} <span>↗</span></button><small class="login-security-note">✓ Protected financial access</small></form><footer class="login-panel-footer">© 2026 Jixels Technologies</footer></div></section></main>`;
   }
 
   function accountTable(accounts, allowRemove) {
@@ -265,11 +270,11 @@
   }
 
   function offlineView() {
-    return `<main class="finance-offline"><div class="finance-offline-icon">⌁</div><div class="finance-offline-road"><i class="vehicle-one">●</i><i class="vehicle-two">●</i><i class="vehicle-three">●</i></div><h1>Network is down</h1><p>Check your internet connection to receive live finance and tracker updates. You can continue with records already saved in this browser.</p><button class="offline-retry" data-retry>Check connection</button><button class="offline-continue" data-continue>Continue offline →</button></main>`;
+    return `<main class="finance-offline"><div class="finance-offline-icon">⌁</div><div class="finance-offline-road"><i class="vehicle-one">●</i><i class="vehicle-two">●</i><i class="vehicle-three">●</i></div><h1>Network is down</h1><p>Live finance records require an internet connection. Reconnect before opening the workspace.</p><button class="offline-retry" data-retry>Check connection</button></main>`;
   }
 
   function render() {
-    if (!online && !offlineAcknowledged) { root.innerHTML = offlineView(); bindOfflineEvents(); return; }
+    if (!online) { root.innerHTML = offlineView(); bindOfflineEvents(); return; }
     if (loading) { root.innerHTML = loadingView(); return; }
     if (!session) { root.innerHTML = loginView(); bindLoginEvents(); return; }
     const currentLabel = navigation.find(item => item[0] === page)[2];
@@ -277,19 +282,52 @@
     const userEmail = session?.email || "";
     const userName = session?.name || userEmail.split("@")[0] || "Finance user";
     const initials = userName.split(/\s+/).map(part => part[0]).join("").slice(0, 2).toUpperCase() || "FU";
-    root.innerHTML = `<div class="app ${sidebarCollapsed ? "sidebar-collapsed" : ""}"><aside class="sidebar ${sidebarOpen ? "open" : ""} ${sidebarCollapsed ? "collapsed" : ""}"><div class="sidebar-header"><button class="sidebar-toggle" data-collapse aria-label="Toggle navigation">${icons.menu}</button><div class="brand"><img class="finance-brand-logo" src="./assets/jixels-form-ni-tenje.svg?v=3" alt="Jixels Form Ni Tenje"></div></div><nav class="nav">${navigation.map(([id, navIcon, label], index) => `${index === 0 ? '<div class="nav-section">FINANCE</div>' : index === 5 ? '<div class="nav-section">REPORTING</div>' : index === 7 ? '<div class="nav-section">ADMIN</div>' : ''}<button data-go="${id}" class="${page === id ? "active" : ""}" title="${label}" aria-label="${label}"><span class="nav-icon">${navIcon}</span><span class="nav-label">${label}</span></button>`).join("")}</nav><div class="sidebar-footer"><button data-logout>${icons.logout}<span>Logout</span></button></div></aside>${sidebarOpen ? '<button class="scrim" data-close-menu aria-label="Close menu"></button>' : ""}<main class="main"><header class="topbar"><button class="menu-button" data-menu aria-label="Open navigation">${icons.menu}</button><div class="topbar-actions"><button class="notification-button ${data.notifications.some(item => item.unread) ? "has-unread" : ""}" data-notifications aria-label="Notifications">${icons.alerts}</button><div class="top-profile"><span class="user-avatar">${escapeHtml(initials)}</span><span><strong>${escapeHtml(userName)}</strong><small>${escapeHtml(userEmail || "Finance workspace")}</small></span></div></div>${notificationsOpen ? `<div class="notification-panel"><div class="notification-panel-heading"><strong>Notifications</strong><button data-mark-notifications>Mark all read</button></div><div class="notification-list">${noticeRows || "<p>No finance notifications.</p>"}</div><button data-go="alerts">View alert center</button></div>` : ""}</header><div class="content">${view()}</div><footer class="system-footer"><span><strong>JIXELS FINANCE</strong> · Form Ni Tenje · Finance workspace</span><span>© 2026 Jixels Technologies</span></footer></main></div>${commissionModal()}`;
+    root.innerHTML = `<div class="app ${sidebarCollapsed ? "sidebar-collapsed" : ""}"><aside class="sidebar ${sidebarOpen ? "open" : ""} ${sidebarCollapsed ? "collapsed" : ""}"><div class="sidebar-header"><button class="sidebar-toggle" data-collapse aria-label="Toggle navigation">${icons.menu}</button><div class="brand"><img class="finance-brand-logo" src="./assets/jixels-form-ni-tenje.svg?v=3" alt="Jixels Form Ni Tenje"></div></div><nav class="nav">${navigation.map(([id, navIcon, label], index) => `${index === 0 ? '<div class="nav-section">FINANCE</div>' : index === 6 ? '<div class="nav-section">REPORTING</div>' : index === 8 ? '<div class="nav-section">ADMIN</div>' : ''}<button data-go="${id}" class="${page === id ? "active" : ""}" title="${label}" aria-label="${label}"><span class="nav-icon">${navIcon}</span><span class="nav-label">${label}</span></button>`).join("")}</nav><div class="sidebar-footer"><button data-logout>${icons.logout}<span>Logout</span></button></div></aside>${sidebarOpen ? '<button class="scrim" data-close-menu aria-label="Close menu"></button>' : ""}<main class="main"><header class="topbar"><button class="menu-button" data-menu aria-label="Open navigation">${icons.menu}</button><div class="topbar-actions"><button class="notification-button ${data.notifications.some(item => item.unread) ? "has-unread" : ""}" data-notifications aria-label="Notifications">${icons.alerts}</button><div class="top-profile"><span class="user-avatar">${escapeHtml(initials)}</span><span><strong>${escapeHtml(userName)}</strong><small>${escapeHtml(userEmail || "Finance workspace")}</small></span></div></div>${notificationsOpen ? `<div class="notification-panel"><div class="notification-panel-heading"><strong>Notifications</strong><button data-mark-notifications>Mark all read</button></div><div class="notification-list">${noticeRows || "<p>No finance notifications.</p>"}</div><button data-go="alerts">View alert center</button></div>` : ""}</header><div class="content">${view()}</div><footer class="system-footer"><span><strong>JIXELS FINANCE</strong> · Form Ni Tenje · Finance workspace</span><span>© 2026 Jixels Technologies</span></footer></main></div>${commissionModal()}`;
     bindEvents();
   }
 
   function bindLoginEvents() {
-    document.getElementById("login-form")?.addEventListener("submit", event => {
+    document.querySelectorAll("[data-auth-mode]").forEach(button => button.addEventListener("click", () => {
+      authMode = button.dataset.authMode;
+      root.innerHTML = loginView();
+      bindLoginEvents();
+    }));
+    document.querySelectorAll("[data-toggle-password]").forEach(button => button.addEventListener("click", () => {
+      const input = button.closest(".password-field")?.querySelector("input");
+      if (!input) return;
+      const visible = input.type === "text";
+      input.type = visible ? "password" : "text";
+      button.setAttribute("aria-label", visible ? "Show password" : "Hide password");
+      button.classList.toggle("active", !visible);
+    }));
+    document.getElementById("login-form")?.addEventListener("submit", async event => {
       event.preventDefault(); const formData = new FormData(event.currentTarget);
       const email = formData.get("email").trim().toLowerCase();
       const password = formData.get("password");
       if (!email || !password) {
         root.innerHTML = loginView("Enter your finance workspace email and password."); bindLoginEvents(); return;
       }
-      session = { email, name: email.split("@")[0].replace(/[._-]+/g, " "), role: "Finance" }; sessionStorage.setItem("jixels-finance-session", JSON.stringify(session)); startWorkspaceLoading();
+      if (!isValidEmail(email)) {
+        root.innerHTML = loginView("Enter a valid finance workspace email address."); bindLoginEvents(); return;
+      }
+      try {
+        if (authMode === "register") {
+          const name = formData.get("name").trim();
+          const phone = formData.get("phone").trim();
+          const confirm = formData.get("confirm");
+          if (!name || !phone) throw new Error("Complete your full name and phone number.");
+          if (password !== confirm) throw new Error("Passwords do not match.");
+          if (!isStrongPassword(password)) throw new Error("Use 8+ characters with uppercase, lowercase, number, and special character.");
+          session = await registerFinanceUser({ name, email, phone, password });
+        } else {
+          session = await authenticateFinanceUser(email, password);
+        }
+        sessionStorage.setItem("jixels-finance-session", JSON.stringify(session));
+        startWorkspaceLoading();
+      } catch (error) {
+        root.innerHTML = loginView(error instanceof Error ? error.message : "Finance access could not be verified.");
+        bindLoginEvents();
+      }
     });
   }
 
@@ -309,7 +347,6 @@
 
   function bindOfflineEvents() {
     root.querySelector("[data-retry]")?.addEventListener("click", () => { online = navigator.onLine; render(); });
-    root.querySelector("[data-continue]")?.addEventListener("click", () => { offlineAcknowledged = true; loading = true; loadingMode = "page"; render(); window.setTimeout(() => { loading = false; render(); }, 650); });
   }
 
   function openPage(nextPage) {
@@ -568,8 +605,8 @@
     bindSelectionControls();
   }
 
-  window.addEventListener("online", () => { online = true; offlineAcknowledged = false; render(); });
-  window.addEventListener("offline", () => { online = false; offlineAcknowledged = false; render(); });
+  window.addEventListener("online", () => { online = true; render(); });
+  window.addEventListener("offline", () => { online = false; render(); });
   if (session) startWorkspaceLoading();
   else render();
 })();

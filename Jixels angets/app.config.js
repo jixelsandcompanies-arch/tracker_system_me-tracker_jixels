@@ -15,7 +15,6 @@ export default {
     },
     android: {
       package: "com.jixelstechnologies.agent",
-      versionCode: 1,
       adaptiveIcon: {
         foregroundImage: "./assets/jixels-agent-icon.png",
         backgroundColor: "#FFFFFF"

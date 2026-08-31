@@ -24,6 +24,8 @@ import * as Haptics from "expo-haptics";
 import * as ImagePicker from "expo-image-picker";
 import * as Network from "expo-network";
 import * as Notifications from "expo-notifications";
+import { ApiError } from "./src/services/api";
+import { authApi } from "./src/services/auth";
 
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
@@ -88,6 +90,19 @@ function displayNameFromEmail(email) {
   return localPart.replace(/[._-]+/g, " ").replace(/\b\w/g, letter => letter.toUpperCase());
 }
 
+function normalizeAgentSession(session, fallbackEmail) {
+  const user = session?.user || {};
+  return {
+    name: user.name || user.fullName || user.full_name || displayNameFromEmail(fallbackEmail),
+    email: user.email || fallbackEmail,
+    phone: user.phone || user.phoneNumber || "",
+    role: user.role || "Field Agent",
+    code: user.code || user.agentCode || user.id || "Signed in",
+    accessToken: session?.accessToken,
+    session
+  };
+}
+
 function tap() {
   Haptics.selectionAsync().catch(() => {});
 }
@@ -109,18 +124,25 @@ function Pill({ value }) {
 }
 
 function Field({ label, value, onChangeText, placeholder, secureTextEntry, keyboardType }) {
+  const [passwordVisible, setPasswordVisible] = useState(false);
+  const isSecure = Boolean(secureTextEntry);
   return <View style={styles.fieldWrap}>
     <Text style={styles.fieldLabel}>{label}</Text>
-    <TextInput
-      value={value}
-      onChangeText={onChangeText}
-      placeholder={placeholder || label}
-      placeholderTextColor="#94A3B8"
-      secureTextEntry={secureTextEntry}
-      keyboardType={keyboardType}
-      autoCapitalize="none"
-      style={styles.input}
-    />
+    <View style={styles.inputShell}>
+      <TextInput
+        value={value}
+        onChangeText={onChangeText}
+        placeholder={placeholder || label}
+        placeholderTextColor="#94A3B8"
+        secureTextEntry={isSecure && !passwordVisible}
+        keyboardType={keyboardType}
+        autoCapitalize="none"
+        style={styles.input}
+      />
+      {isSecure && <Pressable accessibilityRole="button" accessibilityLabel={passwordVisible ? "Hide password" : "Show password"} onPress={() => setPasswordVisible(visible => !visible)} style={styles.passwordToggle}>
+        <Ionicons name={passwordVisible ? "eye-off-outline" : "eye-outline"} size={18} color={colors.muted} />
+      </Pressable>}
+    </View>
   </View>;
 }
 
@@ -257,16 +279,20 @@ function Login({ onLogin }) {
   const [confirm, setConfirm] = useState("");
   const [busy, setBusy] = useState(false);
 
-  function submit() {
+  async function submit() {
     const cleanEmail = email.trim().toLowerCase();
     if (resettingPassword) {
       if (!cleanEmail.includes("@")) return Alert.alert("Enter your email", "Enter the email address registered to your agent account.");
       setBusy(true);
-      setTimeout(() => {
+      try {
+        await authApi.requestPasswordReset(cleanEmail);
         setBusy(false);
         setResettingPassword(false);
         Alert.alert("Request received", "If the email belongs to an approved agent account, reset instructions will be sent by Jixels admin.");
-      }, 700);
+      } catch (error) {
+        setBusy(false);
+        Alert.alert("Reset unavailable", error instanceof ApiError || error instanceof Error ? error.message : "Check your connection and try again.");
+      }
       return;
     }
     if (mode === "register") {
@@ -275,20 +301,29 @@ function Login({ onLogin }) {
       if (password.length < 8) return Alert.alert("Password too short", "Use at least 8 characters.");
       if (password !== confirm) return Alert.alert("Check password", "Passwords do not match.");
       setBusy(true);
-      setTimeout(() => {
+      try {
+        await authApi.register({ name: name.trim(), email: cleanEmail, phone: phone.trim(), password });
         setBusy(false);
-        onLogin({ name: name.trim(), email: cleanEmail, phone: phone.trim(), role: "Field Agent", code: "Pending verification" });
-      }, 750);
+        setMode("login");
+        Alert.alert("Registration submitted", "Jixels admin will review the agent account before login is enabled.");
+      } catch (error) {
+        setBusy(false);
+        Alert.alert("Registration unavailable", error instanceof ApiError || error instanceof Error ? error.message : "Check your connection and try again.");
+      }
       return;
     }
     if (!cleanEmail || !password.trim()) return Alert.alert("Missing details", "Enter your agent email and password.");
     if (!cleanEmail.includes("@")) return Alert.alert("Check email", "Enter a valid agent email address.");
     if (password.length < 8) return Alert.alert("Password too short", "Use at least 8 characters.");
     setBusy(true);
-    setTimeout(() => {
+    try {
+      const session = await authApi.login(cleanEmail, password);
       setBusy(false);
-      onLogin({ name: displayNameFromEmail(cleanEmail), email: cleanEmail, phone: "", role: "Field Agent", code: "Signed in" });
-    }, 700);
+      onLogin(normalizeAgentSession(session, cleanEmail));
+    } catch (error) {
+      setBusy(false);
+      Alert.alert("Login failed", error instanceof ApiError || error instanceof Error ? error.message : "Check your connection and try again.");
+    }
   }
 
   if (busy && mode === "login" && !resettingPassword) {
@@ -494,7 +529,7 @@ function Customers({ customers, onDeposit, onRefresh, refreshing, darkMode = fal
 }
 
 function Onboarding({ addCustomer, navigate, onRefresh, refreshing, darkMode = false }) {
-  const [form, setForm] = useState({ name: "", phone: "", idNumber: "", location: "", bike: "", tracker: "" });
+  const [form, setForm] = useState({ name: "", phone: "", idNumber: "", location: "", bike: "", tracker: "", depositAmount: "" });
   const [passportPhoto, setPassportPhoto] = useState(null);
   const [idFrontPhoto, setIdFrontPhoto] = useState(null);
   const [idBackPhoto, setIdBackPhoto] = useState(null);
@@ -515,6 +550,8 @@ function Onboarding({ addCustomer, navigate, onRefresh, refreshing, darkMode = f
   function save() {
     if (!form.name.trim() || !form.phone.trim() || !form.bike.trim()) return Alert.alert("Missing details", "Enter customer name, phone and bike plate.");
     if (!idFrontPhoto || !idBackPhoto) return Alert.alert("Capture ID", "Capture and save both the front and back side of the customer ID.");
+    const depositAmount = Number(form.depositAmount);
+    if (!Number.isFinite(depositAmount) || depositAmount < 0) return Alert.alert("Check deposit", "Enter a valid deposit amount, or use 0 if no deposit was collected.");
     addCustomer({
       id: `CUS-${Math.floor(10000 + Math.random() * 89999)}`,
       name: form.name.trim(),
@@ -526,8 +563,8 @@ function Onboarding({ addCustomer, navigate, onRefresh, refreshing, darkMode = f
       kyc: passportPhoto && idFrontPhoto && idBackPhoto ? "Submitted" : "Pending",
       install: "Pending",
       payment: "Pending",
-      amount: 2500,
-      balance: 2500,
+      amount: depositAmount,
+      balance: depositAmount,
       commission: 0,
       receipt: "",
       date: new Date().toISOString().slice(0, 10)
@@ -546,6 +583,7 @@ function Onboarding({ addCustomer, navigate, onRefresh, refreshing, darkMode = f
       <Field label="Location" value={form.location} onChangeText={location => setForm({ ...form, location })} />
       <Field label="Bike plate" value={form.bike} onChangeText={bike => setForm({ ...form, bike })} />
       <Field label="Tracker ID" value={form.tracker} onChangeText={tracker => setForm({ ...form, tracker })} />
+      <Field label="Deposit amount" value={form.depositAmount} onChangeText={depositAmount => setForm({ ...form, depositAmount })} keyboardType="numeric" />
       <View style={styles.captureRow}>
         <Pressable onPress={() => captureImage(setPassportPhoto, "passport photo")} style={styles.secondaryButton}><Ionicons name="camera-outline" color={colors.blue} size={18} /><Text style={styles.secondaryText}>{passportPhoto ? "Passport saved" : "Passport photo"}</Text></Pressable>
         <Pressable onPress={captureId} style={styles.secondaryButton}><Ionicons name="id-card-outline" color={colors.blue} size={18} /><Text style={styles.secondaryText}>{idButtonText}</Text></Pressable>
@@ -787,7 +825,7 @@ function DepositPrompt({ customer, visible, onCancel, onSubmit }) {
   const [phone, setPhone] = useState("");
 
   useEffect(() => {
-    setAmount(customer ? String(customer.amount || 2500) : "");
+    setAmount(customer?.amount ? String(customer.amount) : "");
     setPhone(customer?.phone || "");
   }, [customer]);
 
@@ -1062,7 +1100,9 @@ const styles = StyleSheet.create({
   cardTitle: { color: colors.ink, fontSize: 25, fontWeight: "900" },
   fieldWrap: { gap: 7 },
   fieldLabel: { color: colors.muted, fontSize: 11, fontWeight: "800" },
-  input: { minHeight: 52, borderRadius: 14, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.surface, paddingHorizontal: 14, color: colors.ink, fontSize: 14, fontWeight: "700" },
+  inputShell: { minHeight: 52, borderRadius: 14, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.surface, flexDirection: "row", alignItems: "center", paddingHorizontal: 14 },
+  input: { flex: 1, minHeight: 50, color: colors.ink, fontSize: 14, fontWeight: "700", padding: 0 },
+  passwordToggle: { width: 34, height: 34, alignItems: "center", justifyContent: "center", marginRight: -8 },
   primaryButton: { minHeight: 52, borderRadius: 14, backgroundColor: colors.blue, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, marginTop: 4 },
   primaryText: { color: colors.white, fontSize: 13, fontWeight: "900" },
   demoText: { color: colors.muted, fontSize: 11, textAlign: "center" },

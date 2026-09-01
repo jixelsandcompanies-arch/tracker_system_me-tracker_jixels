@@ -9,7 +9,7 @@ export default {
     userInterfaceStyle: "automatic",
 
     web: {
-      output: "static",
+      output: "single",
       bundler: "metro",
     },
 

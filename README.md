@@ -10,8 +10,8 @@ New JavaScript React Native customer app for Jixels Technologies. It displays a 
 
 ## Deploy the web app to Vercel
 
-This project is an Expo mobile app with a static web export. Vercel serves the
-generated `dist` folder; it does not host the tracker API.
+This project is an Expo mobile app with a single-page web export. Vercel serves
+the generated `dist` folder; it does not host the tracker API.
 
 1. Import the repository in Vercel and set the project root directory to this
    folder (the one containing `package.json` and `vercel.json`).

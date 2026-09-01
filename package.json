@@ -15,6 +15,7 @@
     "export:android": "expo export --platform android --output-dir dist/android"
   },
   "dependencies": {
+    "@expo/metro-runtime": "~6.1.2",
     "@expo/vector-icons": "^15.0.3",
     "@react-native-async-storage/async-storage": "2.2.0",
     "expo": "~54.0.33",
@@ -28,15 +29,18 @@
     "expo-secure-store": "~15.0.8",
     "expo-sharing": "~14.0.8",
     "expo-status-bar": "~3.0.9",
-    "@expo/metro-runtime": "~6.1.2",
+    "leaflet": "^1.9.4",
     "react": "19.1.0",
     "react-dom": "19.1.0",
+    "react-leaflet": "^5.0.0",
     "react-native": "0.81.5",
     "react-native-maps": "1.20.1",
     "react-native-safe-area-context": "~5.6.0",
     "react-native-web": "^0.21.0",
-    "leaflet": "^1.9.4",
-    "react-leaflet": "^5.0.0",
     "socket.io-client": "^4.8.3"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.18",
+    "typescript": "^5.9.3"
   }
 }

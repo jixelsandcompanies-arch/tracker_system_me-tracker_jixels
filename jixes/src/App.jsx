@@ -87,6 +87,19 @@ const navigation = [
 ];
 
 const quickAddPages = new Set(["Support Cases"]);
+const ADMIN_NAVIGATION_KEY = "jixels.admin.navigation.v1";
+
+function loadNavigation(role) {
+  const fallback = canAccess(role, "Dashboard") ? "Dashboard" : "Payments";
+  try {
+    const saved = JSON.parse(localStorage.getItem(ADMIN_NAVIGATION_KEY) || "{}");
+    const page = navigation.some((item) => item.key === saved.active) && canAccess(role, saved.active) ? saved.active : fallback;
+    return { active: page, sidebarCollapsed: Boolean(saved.sidebarCollapsed) };
+  } catch (error) {
+    console.error("Could not restore admin navigation", error);
+    return { active: fallback, sidebarCollapsed: false };
+  }
+}
 
 function useHorizontalTableScroll() {
   useEffect(() => {
@@ -156,9 +169,10 @@ function AppContent() {
   useHorizontalTableScroll();
   const [session, setSession] = useState(getSession);
   const [workspaceLoading, setWorkspaceLoading] = useState(() => getSession() ? "animation" : null);
-  const [active, setActive] = useState(() => canAccess(getSession()?.role, "Dashboard") ? "Dashboard" : "Payments");
+  const [navigationState] = useState(() => loadNavigation(getSession()?.role));
+  const [active, setActive] = useState(() => navigationState.active);
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => navigationState.sidebarCollapsed);
   const [showAdd, setShowAdd] = useState(false);
   const [systemOnline, setSystemOnline] = useState(() => navigator.onLine);
   const [offlineAcknowledged, setOfflineAcknowledged] = useState(false);
@@ -183,6 +197,12 @@ function AppContent() {
       window.clearInterval(interval);
     };
   }, [session]);
+
+  useEffect(() => {
+    if (!session) return;
+    try { localStorage.setItem(ADMIN_NAVIGATION_KEY, JSON.stringify({ active, sidebarCollapsed })); }
+    catch (error) { console.error("Could not persist admin navigation", error); }
+  }, [active, sidebarCollapsed, session]);
 
   useEffect(() => {
     const updateConnection = () => setSystemOnline(navigator.onLine);

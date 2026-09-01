@@ -8,11 +8,6 @@ export default {
     orientation: "portrait",
     userInterfaceStyle: "automatic",
 
-    web: {
-      output: "single",
-      bundler: "metro",
-    },
-
     icon: "./assets/jixels-agent-icon.png",
 
     splash: {
@@ -51,7 +46,6 @@ export default {
     },
 
     plugins: [
-      "expo-secure-store",
       "expo-notifications",
 
       [
@@ -78,7 +72,7 @@ export default {
 
     extra: {
       eas: {
-        projectId: process.env.EXPO_PUBLIC_EAS_PROJECT_ID,
+        projectId: "d39d37aa-156b-4bfd-b74d-c2fb8aed6bb6",
       },
     },
   },

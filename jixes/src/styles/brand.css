@@ -1,0 +1,16 @@
+.brand, .login-brand { letter-spacing: 0; }
+.brand-dot { color: #8fc5ea; }
+.brand-logo { width: 118px; height: 42px; display: block; padding: 3px 7px; object-fit: contain; object-position: left center; background: #fff; border-radius: 5px; }
+.nav-item.active { background: #135d9a; color: #eef7ff; }
+.nav-item:hover { background: rgba(25, 119, 194, .2); }
+.nav-item i { background: #4b9bd0; box-shadow: 0 0 0 3px rgba(75,155,208,.16); }
+.secure-badge { color: #8fc5ea; background: rgba(44,126,183,.18); border-color: rgba(116,185,225,.2); }
+.secure-badge strong { color: #dceefa; }.secure-badge small { color: #a4c8df; }
+.user-avatar { color: #135d9a; background: #dcecf8; }
+.brand-mark { background: #8fc5ea; color: #0d3153; }
+.button.primary { background: #1673b9; box-shadow: 0 5px 12px rgba(22, 115, 185, .2); }
+.button.primary:hover { background: #0e5d9b; }
+.sync-status, .text-button, .demo-button { color: #1673b9; }
+.sync-status > span, .pulse { background: #4b9bd0; }
+.support-search { border-color: #8db9dc; color: #1673b9; }
+.online-pill, .support-note { color: #135d9a; background: #e1f0fb; }

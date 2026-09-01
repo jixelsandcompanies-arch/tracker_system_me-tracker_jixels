@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 610 332" role="img" aria-labelledby="title desc">
+  <title id="title">Jixels Form Ni Tenje</title>
+  <desc id="desc">Jixels logo with a phone, sunrise, and the words Form Ni Tenje.</desc>
+  <rect width="610" height="332" rx="18" fill="#fff"/>
+  <path d="M115 272V45c0-22 18-40 40-40h86c22 0 40 18 40 40v68h-25V64H140v208z" fill="#151515"/>
+  <rect x="172" y="35" width="43" height="11" rx="6" fill="#fff"/>
+  <path d="M20 209c21-37 60-63 105-73v15c-39 11-72 34-90 66-29 52 5 91 104 91v17C24 328-14 271 20 209z" fill="#47a9e3"/>
+  <path d="M136 130C192 89 303 81 367 109" fill="none" stroke="#f6a009" stroke-width="10"/>
+  <path d="M159 114l-5-22m28 10-3-21m27 13-2-21m29 15 2-23m29 25 5-23m27 31 8-21m22 33 11-19" stroke="#f6a009" stroke-width="7" stroke-linecap="round"/>
+  <text x="132" y="224" fill="#459fdb" font-family="Arial, Helvetica, sans-serif" font-size="126" font-style="italic" font-weight="900" letter-spacing="-9">Jixels</text>
+  <path d="M261 242h154" stroke="#f6a009" stroke-width="10"/>
+  <text x="234" y="293" fill="#111" font-family="Arial, Helvetica, sans-serif" font-size="48" font-weight="800">Form Ni Tenje</text>
+</svg>

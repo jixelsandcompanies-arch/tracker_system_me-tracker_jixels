@@ -48,13 +48,13 @@ Set these in Vercel for **Production**, **Preview**, and **Development**:
 
 ```
 EXPO_PUBLIC_JIXELS_API_URL=https://<your-project-ref>.supabase.co/functions/v1/api
-EXPO_PUBLIC_EAS_PROJECT_ID=d39d37aa-156b-4bfd-b74d-c2fb8aed6bb6
+EXPO_PUBLIC_EAS_PROJECT_ID=<your-expo-project-id>
 EXPO_PUBLIC_DEMO_MODE=false
 ```
 
-`EXPO_PUBLIC_EAS_PROJECT_ID` is the Expo/EAS project identifier already in
-`app.config.js`. You can also find it in the Expo project dashboard or by
-running `npx eas-cli@latest project:info` after signing in. All `EXPO_PUBLIC_`
+`EXPO_PUBLIC_EAS_PROJECT_ID` is a public Expo/EAS project identifier. Find it
+in the Expo project dashboard or by running `npx eas-cli@latest project:info`
+after signing in. All `EXPO_PUBLIC_`
 values are included in the browser/mobile app, so they must never contain
 passwords, service-role keys, M-Pesa secrets, or tracker-provider credentials.
 

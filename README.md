@@ -42,6 +42,13 @@ route history. Connect your tracker provider to insert validated locations into
 `tracker_locations`; implement the M-Pesa provider callback before accepting
 real payments.
 
+For six-digit OTPs lasting five minutes, open Supabase **Authentication →
+Providers → Email**, enable email OTP, set OTP expiry to `300` seconds and OTP
+length to `6`. Configure the SMS provider as well if you want phone-number OTPs.
+The app requests the code automatically when the verification screen opens,
+shows a five-minute countdown, disables expired codes, and lets the user
+request a new code.
+
 ## Tramigo Cloud
 
 Set `TRAMIGO_API_BASE_URL`, `TRAMIGO_USERNAME`, and `TRAMIGO_PASSWORD` as

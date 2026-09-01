@@ -92,6 +92,26 @@ Deno.serve(async (request) => {
     if (error) return fail(error.message, 400, "REGISTRATION_FAILED");
     return response({ user: data.user, message: "Check your email to confirm your account." }, 201);
   }
+  if (route === "/v1/auth/request-admin-otp" && request.method === "POST") {
+    const identifier = String(body.identifier ?? "").trim(); const purpose = String(body.purpose ?? "app-access");
+    const email = identifier.includes("@");
+    if (!identifier || (!email && !/^\+?\d{10,15}$/.test(identifier.replace(/\s/g, "")))) return fail("A valid email address or phone number is required.", 422, "INVALID_IDENTIFIER");
+    const { error } = email
+      ? await client.auth.signInWithOtp({ email: identifier.toLowerCase(), options: { shouldCreateUser: purpose === "account-approval" } })
+      : await client.auth.signInWithOtp({ phone: identifier.replace(/\s/g, ""), options: { shouldCreateUser: purpose === "account-approval" } });
+    if (error) return fail(error.message, 400, "OTP_SEND_FAILED");
+    return response({ accepted: true, expiresInSeconds: 300 });
+  }
+  if (route === "/v1/auth/verify-admin-otp" && request.method === "POST") {
+    const identifier = String(body.identifier ?? "").trim(); const code = String(body.code ?? "").trim();
+    if (!identifier || !/^\d{6}$/.test(code)) return fail("Enter the six-digit verification code.", 422, "INVALID_OTP");
+    const email = identifier.includes("@");
+    const { data, error } = email
+      ? await client.auth.verifyOtp({ email: identifier.toLowerCase(), token: code, type: "email" })
+      : await client.auth.verifyOtp({ phone: identifier.replace(/\s/g, ""), token: code, type: "sms" });
+    if (error || !data.session || !data.user) return fail(error?.message ?? "The code is invalid or expired.", 401, "OTP_INVALID_OR_EXPIRED");
+    return response({ verified: true, accessToken: data.session.access_token, expiresAt: new Date(data.session.expires_at! * 1000).toISOString(), user: { id: data.user.id, email: data.user.email, phone: data.user.phone } });
+  }
 
   if (route === "/v1/mpesa/c2b/register" && request.method === "POST") {
     try {

@@ -190,9 +190,12 @@ function OtpVerification({ applicant, onVerified, onBack, initialGate = false })
   const [contact, setContact] = useState(applicant?.email ?? "");
   const [busy, setBusy] = useState(false);
   const [resendIn, setResendIn] = useState(30);
+  const [expiresIn, setExpiresIn] = useState(300);
+  const [expired, setExpired] = useState(false);
   const entrance = useRef(new Animated.Value(0)).current;
   const pulse = useRef(new Animated.Value(0)).current;
   const inputRef = useRef(null);
+  const initialCodeRequested = useRef(false);
   useEffect(() => {
     Animated.spring(entrance, { toValue: 1, useNativeDriver: true, damping: 15, stiffness: 130 }).start();
     const animation = Animated.loop(Animated.sequence([Animated.timing(pulse, { toValue: 1, duration: 900, useNativeDriver: true }), Animated.timing(pulse, { toValue: 0, duration: 900, useNativeDriver: true })]));
@@ -200,7 +203,9 @@ function OtpVerification({ applicant, onVerified, onBack, initialGate = false })
     return () => animation.stop();
   }, [entrance, pulse]);
   useEffect(() => { if (resendIn <= 0) return undefined; const timer = setInterval(() => setResendIn(value => Math.max(0, value - 1)), 1000); return () => clearInterval(timer); }, [resendIn]);
+  useEffect(() => { if (expiresIn <= 0) { setExpired(true); setCode(""); return undefined; } const timer = setInterval(() => setExpiresIn(value => Math.max(0, value - 1)), 1000); return () => clearInterval(timer); }, [expiresIn]);
   const verify = async () => {
+    if (expired) return Alert.alert("Code expired", "This six-digit code lasted five minutes. Request a new code to continue.");
     if (!isValidOtp(code)) return Alert.alert("Enter the full code", "The Jixels verification code contains exactly six digits.");
     const identity = isValidEmail(contact) ? normalizeEmail(contact) : normalizeKenyanMpesaPhone(contact);
     if (initialGate && !identity) return Alert.alert("Enter your registered contact", "Enter the email address or Kenyan phone number that received this code.");
@@ -221,6 +226,8 @@ function OtpVerification({ applicant, onVerified, onBack, initialGate = false })
     try {
       if (!config.demoMode) await authApi.requestOtp({ identifier: identity ?? applicant?.email, purpose: initialGate ? "app-access" : "account-approval" });
       setCode("");
+      setExpired(false);
+      setExpiresIn(300);
       setResendIn(30);
       Alert.alert("New code requested", initialGate ? "A new security code is available for this login." : "A new approval code is available in your private customer portal notification.");
       setTimeout(() => inputRef.current?.focus(), 250);
@@ -228,6 +235,11 @@ function OtpVerification({ applicant, onVerified, onBack, initialGate = false })
       Alert.alert("Request failed", cause instanceof Error ? cause.message : "Please try again.");
     } finally { setBusy(false); }
   };
+  useEffect(() => {
+    if (config.demoMode || initialCodeRequested.current) return;
+    initialCodeRequested.current = true;
+    requestNewCode();
+  }, [initialGate]);
   return <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={styles.otpPage}>
     <StatusBar style="light" />
     <Animated.View style={[styles.otpGlow, { opacity: pulse.interpolate({ inputRange: [0, 1], outputRange: [.35, .75] }), transform: [{ scale: pulse.interpolate({ inputRange: [0, 1], outputRange: [.86, 1.18] }) }] }]} />
@@ -235,11 +247,11 @@ function OtpVerification({ applicant, onVerified, onBack, initialGate = false })
     <Animated.View style={[styles.otpCard, { opacity: entrance, transform: [{ translateY: entrance.interpolate({ inputRange: [0, 1], outputRange: [48, 0] }) }, { scale: entrance.interpolate({ inputRange: [0, 1], outputRange: [.94, 1] }) }] }]}> 
       <Animated.View style={[styles.otpIcon, { transform: [{ scale: pulse.interpolate({ inputRange: [0, 1], outputRange: [1, 1.12] }) }, { rotate: pulse.interpolate({ inputRange: [0, 1], outputRange: ["-2deg", "2deg"] }) }] }]}><Ionicons name="shield-checkmark" size={38} color={colors.white} /></Animated.View>
       <Text style={styles.otpTitle}>{initialGate ? "Jixels Security Check" : "Verify your approval"}</Text>
-      <Text style={styles.otpText}>{initialGate ? "Enter your six-digit Jixels security code." : "Enter the six-digit code shown in your private approval notification."}</Text>
+      <Text style={styles.otpText}>{initialGate ? "Enter your six-digit Jixels security code." : "Enter the six-digit code shown in your private approval notification."} {expired ? "This code has expired." : `Code expires in ${Math.floor(expiresIn / 60)}:${String(expiresIn % 60).padStart(2, "0")}.`}</Text>
       {initialGate && <View style={{ alignSelf: "stretch", marginTop: 14 }}><Field icon="person-circle-outline" label="Registered email or phone" placeholder="your.email@example.com or 07++++++++++" value={contact} onChangeText={setContact} /></View>}
       <View style={styles.otpInputArea}>
         <View pointerEvents="none" style={styles.otpBoxes}>{Array.from({ length: 6 }, (_, index) => <View key={index} style={[styles.otpBox, code.length === index && styles.otpBoxActive, code[index] && styles.otpBoxFilled]}><Text style={styles.otpDigit}>{code[index] ?? ""}</Text></View>)}</View>
-        <TextInput ref={inputRef} autoFocus value={code} onChangeText={value => setCode(value.replace(/\D/g, "").slice(0, 6))} keyboardType="number-pad" inputMode="numeric" maxLength={6} textContentType="oneTimeCode" autoComplete="sms-otp" caretHidden style={styles.otpHiddenInput} />
+        <TextInput ref={inputRef} editable={!expired} autoFocus value={code} onChangeText={value => setCode(value.replace(/\D/g, "").slice(0, 6))} keyboardType="number-pad" inputMode="numeric" maxLength={6} textContentType="oneTimeCode" autoComplete="sms-otp" caretHidden style={styles.otpHiddenInput} />
       </View>
       <Pressable disabled={busy} onPress={verify} style={styles.primaryButton}>{busy ? <ActivityIndicator color={colors.white} /> : <><Text style={styles.primaryButtonText}>Verify code</Text><Ionicons name="shield-checkmark-outline" size={18} color={colors.white} /></>}</Pressable>
       <Pressable disabled={resendIn > 0 || busy} onPress={requestNewCode} style={styles.otpResend}><Text style={styles.otpResendText}>{resendIn > 0 ? `Request new code in ${resendIn}s` : "Request new code"}</Text></Pressable>

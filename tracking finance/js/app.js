@@ -12,7 +12,7 @@
   let loadingMode = "launch";
   let launchSeconds = 7;
   let online = navigator.onLine;
-  let session = JSON.parse(sessionStorage.getItem("jixels-finance-session") || "null");
+  let session = null;
   let reconciliationMessage = "";
   let editingAccountId = null;
   let editingPaymentId = null;
@@ -322,7 +322,6 @@
         } else {
           session = await authenticateFinanceUser(email, password);
         }
-        sessionStorage.setItem("jixels-finance-session", JSON.stringify(session));
         startWorkspaceLoading();
       } catch (error) {
         root.innerHTML = loginView(error instanceof Error ? error.message : "Finance access could not be verified.");
@@ -444,7 +443,7 @@
       saveData(data);
       render();
     }));
-    document.querySelector("[data-logout]")?.addEventListener("click", () => { session = null; sessionStorage.removeItem("jixels-finance-session"); render(); });
+    document.querySelector("[data-logout]")?.addEventListener("click", () => { session = null; render(); });
     document.querySelector("[data-print-reconciliation]")?.addEventListener("click", printReconciliationPdf);
     document.querySelector("[data-export-report]")?.addEventListener("click", exportFinanceReport);
     document.querySelector(".commission-table")?.addEventListener("click", event => {
@@ -525,7 +524,6 @@
         notifyCommissions: form.has("notifyCommissions")
       };
       session = { ...session, name: form.get("displayName") || session?.name || "" };
-      sessionStorage.setItem("jixels-finance-session", JSON.stringify(session));
       data.auditLogs.unshift({ time: new Date().toLocaleString(), action: "Finance settings updated", details: `${data.settings.workspaceName} · ${data.settings.commissionRate}% commission` });
       data.notifications.unshift({ id: `N-${Date.now()}`, title: "Finance settings saved", detail: "Commission, reports, alerts, and security controls updated.", unread: true, time: "Just now" });
       saveData(data);

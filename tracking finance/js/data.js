@@ -1,7 +1,5 @@
-/* Data access is isolated here so a real API can replace local storage later. */
+/* Data access is isolated here so a real API can replace the in-memory store. */
 (function () {
-  const STORAGE_KEY = "jixels-finance-data-empty-20260826";
-  const USERS_KEY = "jixels-finance-users-v1";
   const emptyData = {
     accounts: [],
     payments: [],
@@ -23,29 +21,27 @@
     },
     agents: []
   };
+  let memoryData = { ...emptyData };
+  let memoryUsers = [];
+
+  function clone(value) {
+    return JSON.parse(JSON.stringify(value));
+  }
 
   function readData() {
-    try {
-      return { ...emptyData, ...JSON.parse(localStorage.getItem(STORAGE_KEY) || "null") };
-    } catch {
-      return { ...emptyData };
-    }
+    return { ...emptyData, ...clone(memoryData) };
   }
 
   function saveData(data) {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+    memoryData = { ...emptyData, ...clone(data) };
   }
 
   function readUsers() {
-    try {
-      return JSON.parse(localStorage.getItem(USERS_KEY) || "[]");
-    } catch {
-      return [];
-    }
+    return clone(memoryUsers);
   }
 
   function saveUsers(users) {
-    localStorage.setItem(USERS_KEY, JSON.stringify(users));
+    memoryUsers = clone(users);
   }
 
   function randomSalt() {

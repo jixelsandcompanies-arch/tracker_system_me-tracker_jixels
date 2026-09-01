@@ -5,10 +5,7 @@ import * as Location from "expo-location";
 import * as Notifications from "expo-notifications";
 import * as Network from "expo-network";
 import * as ImagePicker from "expo-image-picker";
-import * as FileSystem from "expo-file-system";
-import * as Sharing from "expo-sharing";
 import * as Haptics from "expo-haptics";
-import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import { SafeAreaProvider, useSafeAreaInsets } from "react-native-safe-area-context";
 import { StatusBar } from "expo-status-bar";
@@ -16,7 +13,7 @@ import { colors } from "./src/theme";
 import { useTracking } from "./src/hooks/useTracking";
 import { alerts as seedAlerts, bikes as allBikes, customer, money, payments as seedPayments } from "./src/customerData";
 import { config } from "./src/config";
-import { ApiError, apiRequest } from "./src/services/api";
+import { ApiError } from "./src/services/api";
 import { authApi } from "./src/services/auth";
 import { sessionStore } from "./src/services/session";
 import { newIdempotencyKey, paymentsApi } from "./src/services/payments";
@@ -53,13 +50,7 @@ async function enableNotifications() {
 }
 
 async function saveProfilePhoto(uri) {
-  const directory = `${FileSystem.documentDirectory}profile/`;
-  await FileSystem.makeDirectoryAsync(directory, { intermediates: true }).catch(() => {});
-  const extension = uri.split("?")[0].split(".").pop()?.toLowerCase();
-  const safeExtension = extension && extension.length <= 5 ? extension : "jpg";
-  const destination = `${directory}customer-photo.${safeExtension}`;
-  await FileSystem.copyAsync({ from: uri, to: destination });
-  return destination;
+  return uri;
 }
 
 function reportFileName(period, reportType = "payments") {
@@ -482,8 +473,7 @@ function ReportsScreen({ profile, selectedBike, vehicles, onSelectBike, onGenera
   };
   const openReport = async () => {
     if (!report?.uri) return;
-    if (await Sharing.isAvailableAsync()) await Sharing.shareAsync(report.uri, { mimeType: "application/pdf", UTI: "com.adobe.pdf" });
-    else await Linking.openURL(report.uri);
+    await Linking.openURL(report.uri);
   };
   return <><ScrollView style={styles.pageScroll} contentContainerStyle={styles.pageContent} refreshControl={<PullToRefresh onRefresh={onRefresh} />} keyboardShouldPersistTaps="handled">
     <View style={styles.reportHero}><View style={styles.reportHeroIcon}><Ionicons name="map" size={31} color={colors.white} /></View><Text style={styles.reportHeroTitle}>Route report</Text><Text style={styles.reportHeroText}>Download where the selected bike travelled for the selected period, including route points, distance, stops and the last recorded position.</Text></View>
@@ -501,7 +491,7 @@ function ReportsScreen({ profile, selectedBike, vehicles, onSelectBike, onGenera
       </View>
     </View>
     <View style={styles.settingsSection}><Text style={styles.settingsTitle}>Secure download</Text><Text style={styles.settingsCopy}>The route PDF is protected and available only to the signed-in owner.</Text><Pressable disabled={busy || !isOnline} onPress={generate} style={[styles.primaryButton, !isOnline && styles.disabledButton]}>{busy ? <ActivityIndicator color={colors.white} /> : <><Ionicons name="download-outline" size={18} color={colors.white} /><Text style={styles.primaryButtonText}>Download route report</Text></>}</Pressable></View>
-  </ScrollView><Modal visible={!!report} transparent animationType="fade" onRequestClose={() => setReport(null)}><View style={styles.successOverlay}><View style={styles.successCard}><View style={styles.successIcon}><Ionicons name="checkmark" size={44} color={colors.white} /></View><Text style={styles.successTitle}>Downloaded successfully</Text><Text style={styles.reportSuccessMessage}>Tap view to open or share the route report.</Text><View style={styles.receiptBox}><Text style={styles.receiptLabel}>DOCUMENT</Text><Text style={styles.reportSuccessEmail}>{report?.name}</Text></View><Pressable onPress={openReport} style={styles.primaryButton}><Ionicons name="open-outline" size={18} color={colors.white} /><Text style={styles.primaryButtonText}>View document</Text></Pressable><Pressable onPress={() => setReport(null)} style={styles.approvalSecondary}><Text style={styles.backToLoginText}>Close</Text></Pressable></View></View></Modal></>;
+  </ScrollView><Modal visible={!!report} transparent animationType="fade" onRequestClose={() => setReport(null)}><View style={styles.successOverlay}><View style={styles.successCard}><View style={styles.successIcon}><Ionicons name="checkmark" size={44} color={colors.white} /></View><Text style={styles.successTitle}>Report ready</Text><Text style={styles.reportSuccessMessage}>Tap view to open the protected backend report link.</Text><View style={styles.receiptBox}><Text style={styles.receiptLabel}>DOCUMENT</Text><Text style={styles.reportSuccessEmail}>{report?.name}</Text></View><Pressable onPress={openReport} style={styles.primaryButton}><Ionicons name="open-outline" size={18} color={colors.white} /><Text style={styles.primaryButtonText}>View document</Text></Pressable><Pressable onPress={() => setReport(null)} style={styles.approvalSecondary}><Text style={styles.backToLoginText}>Close</Text></Pressable></View></View></Modal></>;
 }
 
 function SettingsScreen({ profile, onSave, onRefresh }) {
@@ -660,12 +650,8 @@ function CustomerApp({ session, onLogout }) {
   const [profile, setProfile] = useState(() => ({ ...customer, ...(session?.user ?? {}) }));
   const { isOnline, checkConnectivity } = useConnectivity();
   const [offlineAcknowledged, setOfflineAcknowledged] = useState(false);
-  const [syncQueue, setSyncQueue] = useState([]);
-  const [profileHydrated, setProfileHydrated] = useState(false);
-  const [queueHydrated, setQueueHydrated] = useState(false);
   const paymentTimers = useRef(new Set());
   const notifiedTamperEvents = useRef(new Set());
-  const syncFlushActive = useRef(false);
   // Page navigation is immediate. Individual data screens own their real
   // request-loading state and show skeletons only while awaiting a response.
   const booting = false;
@@ -678,10 +664,6 @@ function CustomerApp({ session, onLogout }) {
       setPermissionAlertVisible(locationPermission.status !== "granted" || notificationPermission.status !== "granted");
     }).catch(() => setPermissionAlertVisible(true));
   }, []);
-  useEffect(() => { AsyncStorage.getItem("jixels:profile").then(value => { if (!value) return; const saved = JSON.parse(value); const legacyDemo = saved.name === "John Doe" || saved.email === "john.doe@example.com"; setProfile(current => legacyDemo ? { ...current, ...saved, name: customer.name, email: customer.email, phone: customer.phone } : { ...current, ...saved }); }).catch(() => {}).finally(() => setProfileHydrated(true)); }, []);
-  useEffect(() => { if (profileHydrated) AsyncStorage.setItem("jixels:profile", JSON.stringify(profile)).catch(() => {}); }, [profile, profileHydrated]);
-  useEffect(() => { AsyncStorage.getItem("jixels:sync-queue").then(value => value && setSyncQueue(dedupeById(JSON.parse(value)))).catch(() => {}).finally(() => setQueueHydrated(true)); }, []);
-  useEffect(() => { if (queueHydrated) AsyncStorage.setItem("jixels:sync-queue", JSON.stringify(syncQueue)).catch(() => {}); }, [queueHydrated, syncQueue]);
   useEffect(() => () => { paymentTimers.current.forEach(clearTimeout); paymentTimers.current.clear(); }, []);
   useEffect(() => {
     if (!isOnline || !session?.accessToken) return undefined;
@@ -725,22 +707,6 @@ function CustomerApp({ session, onLogout }) {
     return () => { active = false; clearInterval(timer); };
   }, [isOnline, session?.accessToken]);
   useEffect(() => { if (isOnline) setOfflineAcknowledged(false); }, [isOnline]);
-  useEffect(() => {
-    if (!isOnline || !session?.accessToken || syncQueue.length === 0 || syncFlushActive.current) return;
-    let cancelled = false;
-    syncFlushActive.current = true;
-    (async () => {
-      const remaining = [];
-      for (const action of syncQueue) {
-        if (!action?.id) { remaining.push(action); continue; }
-        try {
-          await apiRequest("/v1/customer/offline-actions", { method: "POST", token: session.accessToken, body: action, headers: { "Idempotency-Key": action.id } });
-        } catch { remaining.push(action); }
-      }
-      if (!cancelled && remaining.length !== syncQueue.length) setSyncQueue(remaining);
-    })().finally(() => { syncFlushActive.current = false; });
-    return () => { cancelled = true; };
-  }, [isOnline, session?.accessToken, syncQueue]);
   useEffect(() => {
     const received = Notifications.addNotificationReceivedListener(notification => {
       const content = notification.request.content;
@@ -810,7 +776,6 @@ function CustomerApp({ session, onLogout }) {
     const reportPeriod = options.periodName || period;
     const routeDate = options.routeDate || period;
     const fileName = reportFileName(reportType === "routes" ? `${reportPeriod}-${routeDate}` : reportPeriod, reportType);
-    const fileUri = `${FileSystem.documentDirectory}${fileName}`;
     const action = { period: reportPeriod, reportType: "payments", include: ["transactions", "mpesa-receipts", "instalment-progress", "finance-balances"], format: "pdf", documentProtection: "account-password" };
     if (reportType === "routes") Object.assign(action, { date: routeDate, vehicleId: reportBike.id, reportType: "routes", include: ["route-points", "distance", "stops", "last-position"] });
     if (!isOnline) {
@@ -821,8 +786,7 @@ function CustomerApp({ session, onLogout }) {
       const response = await customerApi.generateReport(session.accessToken, action);
       const reportUrl = response?.downloadUrl ?? response?.pdfUrl ?? response?.url ?? response?.documentUrl;
       if (!reportUrl) throw new ApiError("The report service did not return a PDF download link.", 502, "MISSING_REPORT_URL");
-      const download = await FileSystem.downloadAsync(reportUrl, fileUri, { headers: { Authorization: `Bearer ${session.accessToken}` } });
-      return { uri: download.uri, name: fileName };
+      return { uri: reportUrl, name: fileName };
     } catch (error) {
       Alert.alert("Could not download report", error instanceof ApiError ? error.message : "Check your connection and try again.");
       return false;
@@ -873,7 +837,7 @@ function CustomerApp({ session, onLogout }) {
     }
   };
   if (!isOnline && !offlineAcknowledged) return <OfflineGate onContinue={() => setOfflineAcknowledged(true)} onRetry={() => checkConnectivity().catch(() => {})} />;
-  return <View style={[styles.appShell, { paddingTop: insets.top, paddingBottom: Math.max(insets.bottom, 22) }]}><StatusBar style="light" /><View style={[styles.main, darkMode && styles.darkPage]}>{!isOnline && <View style={styles.offlineBanner}><Ionicons name="cloud-offline-outline" size={14} color={colors.white} /><Text style={styles.offlineBannerText}>Offline • {syncQueue.length} waiting to sync</Text></View>}<PageHeader dark={darkMode} title={title} subtitle={subtitles[screen]} expanded={drawerExpanded} onToggle={() => setDrawerExpanded(v => !v)} unread={unread} onAlerts={() => navigate("alerts")} profile={profile} /><Animated.View style={[styles.screen, { opacity: screenMotion, transform: [{ translateX: screenMotion.interpolate({ inputRange: [0, 1], outputRange: [12, 0] }) }] }]}>{booting ? <ActivitySkeleton screen={screen} /> : <>{screen === "dashboard" && <Dashboard darkMode={darkMode} selectedBike={selectedBike} onSelectBike={setSelectedBike} navigate={navigate} totalPaid={totalPaid} profile={profile} {...refreshable} />}{screen === "bikes" && <BikesScreen selectedBike={selectedBike} onSelectBike={setSelectedBike} navigate={navigate} {...refreshable} />}{screen === "tracking" && (selectedBike ? <TrackingScreen selectedBike={selectedBike} onSelectBike={setSelectedBike} accessToken={session?.accessToken} /> : <PhoneLocationTrackingScreen />)}{screen === "monitoring" && <MonitoringScreen selectedBike={selectedBike} vehicles={monitoringVehicles} onSelectBike={setSelectedBike} security={security} onMonitoringChange={updateMonitoring} onImmobilizerChange={updateImmobilizer} isOnline={isOnline} {...refreshable} />}{screen === "payments" && <PaymentScreen selectedBike={paymentSelectedBike} paymentVehicles={paymentVehicles} onSelectBike={setSelectedBike} onPaid={addPayment} registeredPhone={profile.phone} isOnline={isOnline} {...refreshable} />}{screen === "history" && <HistoryScreen darkMode={darkMode} payments={payments} deletePayments={ids => setPayments(current => current.filter(payment => !ids.includes(payment.id)))} {...refreshable} />}{screen === "reports" && <ReportsScreen profile={profile} selectedBike={selectedBike} vehicles={bikes} onSelectBike={setSelectedBike} onGenerate={generateReport} isOnline={isOnline} {...refreshable} />}{screen === "alerts" && <AlertsScreen darkMode={darkMode} alerts={alerts} markAllRead={() => setAlerts(current => current.map(a => ({ ...a, unread: false })))} markAlertRead={id => setAlerts(current => current.map(a => a.id === id ? { ...a, unread: false } : a))} deleteAlerts={ids => setAlerts(current => current.filter(alert => !ids.includes(alert.id)))} {...refreshable} />}{screen === "settings" && <SettingsScreen profile={profile} onSave={setProfile} {...refreshable} />}</>}</Animated.View></View>{permissionAlertVisible && <View pointerEvents="box-none" style={styles.dashboardPermissionWrap}><View style={styles.dashboardPermissionAlert}><View style={styles.dashboardPermissionIcon}><Ionicons name="shield-checkmark" size={25} color={colors.white} /></View><View style={styles.dashboardPermissionBody}><Text style={styles.dashboardPermissionTitle}>Allow Jixels access</Text><Text style={styles.dashboardPermissionText}>Enable device location for the live map and notifications for tracker and payment alerts.</Text></View><View style={styles.dashboardPermissionActions}><Pressable disabled={permissionBusy} onPress={() => setPermissionAlertVisible(false)} style={styles.permissionCancelButton}><Text style={styles.permissionCancelText}>Cancel</Text></Pressable><Pressable disabled={permissionBusy} onPress={acceptPermissions} style={styles.permissionAcceptButton}>{permissionBusy ? <ActivityIndicator color={colors.white} size="small" /> : <Text style={styles.permissionAcceptText}>Accept</Text>}</Pressable></View></View></View>}{drawerExpanded && <><Pressable accessibilityLabel="Close menu" onPress={() => setDrawerExpanded(false)} style={styles.drawerBackdrop} /><Drawer topInset={0} bottomInset={Math.max(insets.bottom, 28)} expanded active={screen} unread={unread} onToggle={() => setDrawerExpanded(false)} onSelect={navigate} onLogout={onLogout} /></>}<PaymentSuccess receipt={paymentReceipt} onClose={() => setPaymentReceipt(null)} /></View>;
+  return <View style={[styles.appShell, { paddingTop: insets.top, paddingBottom: Math.max(insets.bottom, 22) }]}><StatusBar style="light" /><View style={[styles.main, darkMode && styles.darkPage]}>{!isOnline && <View style={styles.offlineBanner}><Ionicons name="cloud-offline-outline" size={14} color={colors.white} /><Text style={styles.offlineBannerText}>Offline • backend connection required</Text></View>}<PageHeader dark={darkMode} title={title} subtitle={subtitles[screen]} expanded={drawerExpanded} onToggle={() => setDrawerExpanded(v => !v)} unread={unread} onAlerts={() => navigate("alerts")} profile={profile} /><Animated.View style={[styles.screen, { opacity: screenMotion, transform: [{ translateX: screenMotion.interpolate({ inputRange: [0, 1], outputRange: [12, 0] }) }] }]}>{booting ? <ActivitySkeleton screen={screen} /> : <>{screen === "dashboard" && <Dashboard darkMode={darkMode} selectedBike={selectedBike} onSelectBike={setSelectedBike} navigate={navigate} totalPaid={totalPaid} profile={profile} {...refreshable} />}{screen === "bikes" && <BikesScreen selectedBike={selectedBike} onSelectBike={setSelectedBike} navigate={navigate} {...refreshable} />}{screen === "tracking" && (selectedBike ? <TrackingScreen selectedBike={selectedBike} onSelectBike={setSelectedBike} accessToken={session?.accessToken} /> : <PhoneLocationTrackingScreen />)}{screen === "monitoring" && <MonitoringScreen selectedBike={selectedBike} vehicles={monitoringVehicles} onSelectBike={setSelectedBike} security={security} onMonitoringChange={updateMonitoring} onImmobilizerChange={updateImmobilizer} isOnline={isOnline} {...refreshable} />}{screen === "payments" && <PaymentScreen selectedBike={paymentSelectedBike} paymentVehicles={paymentVehicles} onSelectBike={setSelectedBike} onPaid={addPayment} registeredPhone={profile.phone} isOnline={isOnline} {...refreshable} />}{screen === "history" && <HistoryScreen darkMode={darkMode} payments={payments} deletePayments={ids => setPayments(current => current.filter(payment => !ids.includes(payment.id)))} {...refreshable} />}{screen === "reports" && <ReportsScreen profile={profile} selectedBike={selectedBike} vehicles={bikes} onSelectBike={setSelectedBike} onGenerate={generateReport} isOnline={isOnline} {...refreshable} />}{screen === "alerts" && <AlertsScreen darkMode={darkMode} alerts={alerts} markAllRead={() => setAlerts(current => current.map(a => ({ ...a, unread: false })))} markAlertRead={id => setAlerts(current => current.map(a => a.id === id ? { ...a, unread: false } : a))} deleteAlerts={ids => setAlerts(current => current.filter(alert => !ids.includes(alert.id)))} {...refreshable} />}{screen === "settings" && <SettingsScreen profile={profile} onSave={setProfile} {...refreshable} />}</>}</Animated.View></View>{permissionAlertVisible && <View pointerEvents="box-none" style={styles.dashboardPermissionWrap}><View style={styles.dashboardPermissionAlert}><View style={styles.dashboardPermissionIcon}><Ionicons name="shield-checkmark" size={25} color={colors.white} /></View><View style={styles.dashboardPermissionBody}><Text style={styles.dashboardPermissionTitle}>Allow Jixels access</Text><Text style={styles.dashboardPermissionText}>Enable device location for the live map and notifications for tracker and payment alerts.</Text></View><View style={styles.dashboardPermissionActions}><Pressable disabled={permissionBusy} onPress={() => setPermissionAlertVisible(false)} style={styles.permissionCancelButton}><Text style={styles.permissionCancelText}>Cancel</Text></Pressable><Pressable disabled={permissionBusy} onPress={acceptPermissions} style={styles.permissionAcceptButton}>{permissionBusy ? <ActivityIndicator color={colors.white} size="small" /> : <Text style={styles.permissionAcceptText}>Accept</Text>}</Pressable></View></View></View>}{drawerExpanded && <><Pressable accessibilityLabel="Close menu" onPress={() => setDrawerExpanded(false)} style={styles.drawerBackdrop} /><Drawer topInset={0} bottomInset={Math.max(insets.bottom, 28)} expanded active={screen} unread={unread} onToggle={() => setDrawerExpanded(false)} onSelect={navigate} onLogout={onLogout} /></>}<PaymentSuccess receipt={paymentReceipt} onClose={() => setPaymentReceipt(null)} /></View>;
 }
 
 export default function App() {

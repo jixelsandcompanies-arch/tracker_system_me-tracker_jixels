@@ -6,7 +6,6 @@ const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
 export const hasSupabaseConfig = Boolean(supabaseUrl && supabaseKey);
 export const supabase = hasSupabaseConfig ? createClient(supabaseUrl, supabaseKey, { auth: { persistSession: false, autoRefreshToken: false } }) : null;
 const allowedTables = new Set(["customers", "bikes", "trackers", "tracker_heartbeats", "payments", "finance_accounts", "screening_applications", "support_cases", "support_case_history", "alerts", "audit_logs", "chat_messages", "reports", "service_status", "workspace_settings", "profiles"]);
-const QUEUE_KEY = "jixels_pending_writes";
 export const DATA_BATCH_SIZE = 1000;
 const asError = (error, fallback) => error instanceof Error ? error : new Error(error?.message || fallback);
 function reportNetworkError(error) {
@@ -19,11 +18,6 @@ async function client() {
   if (session?.accessToken && session?.refreshToken) await supabase.auth.setSession({ access_token: session.accessToken, refresh_token: session.refreshToken });
   if (session?.accessToken) supabase.realtime.setAuth(session.accessToken);
   return supabase;
-}
-function queue(operation) { try { const queued = JSON.parse(localStorage.getItem(QUEUE_KEY) || "[]"); localStorage.setItem(QUEUE_KEY, JSON.stringify([...queued, operation].slice(-100))); } catch { /* cache is optional */ } }
-export function pendingWriteCount() { try { return JSON.parse(localStorage.getItem(QUEUE_KEY) || "[]").length; } catch { return 0; } }
-function canRetryLater(error) {
-  return !navigator.onLine || /network|fetch|load failed|timeout|timed out/i.test(error?.message || "");
 }
 
 export async function listRecords(table, { page = 0, pageSize = 25, order = "created_at", ascending = false, filters = {}, from = "", to = "", dateColumn = "created_at" } = {}) {
@@ -46,14 +40,14 @@ export async function listRecords(table, { page = 0, pageSize = 25, order = "cre
   }
 }
 
-export async function createRecord(table, record, { queueWhenOffline = true } = {}) {
+export async function createRecord(table, record) {
   if (!allowedTables.has(table)) return { data: null, error: new Error("Table is not allowed") };
   const db = await client();
-  if (!db || !navigator.onLine) { if (queueWhenOffline) queue({ table, record, createdAt: new Date().toISOString() }); return { data: null, error: new Error("Saved for retry when online"), queued: true }; }
+  if (!db || !navigator.onLine) return { data: null, error: new Error("Connect to Supabase to create records") };
   const payload = table === "audit_logs" && !record.actor_id ? { ...record, actor_id: getSession()?.userId } : record;
   const { data, error } = await db.from(table).insert(payload).select();
-  if (error && queueWhenOffline && canRetryLater(error)) queue({ table, record, createdAt: new Date().toISOString() });
-  return { data: data?.[0] || null, error, queued: Boolean(error && queueWhenOffline && canRetryLater(error)) };
+  reportNetworkError(error);
+  return { data: data?.[0] || null, error };
 }
 
 export async function updateRecord(table, id, changes) {
@@ -83,15 +77,6 @@ export async function invokeFunction(name, body) {
   return { data, error };
 }
 
-export async function flushPendingWrites() {
-  if (!navigator.onLine || !hasSupabaseConfig) return { flushed: 0, remaining: pendingWriteCount() };
-  let queued; try { queued = JSON.parse(localStorage.getItem(QUEUE_KEY) || "[]"); } catch { return { flushed: 0, remaining: 0 }; }
-  const remaining = [];
-  for (const item of queued) { const result = await createRecord(item.table, item.record, { queueWhenOffline: false }); if (result.error) remaining.push(item); }
-  localStorage.setItem(QUEUE_KEY, JSON.stringify(remaining));
-  return { flushed: queued.length - remaining.length, remaining: remaining.length };
-}
-
 export function subscribeToTable(table, callback) {
   if (!supabase || !allowedTables.has(table)) return () => {};
   const channel = supabase.channel(`${table}-changes`).on("postgres_changes", { event: "*", schema: "public", table }, callback).subscribe();
@@ -99,8 +84,8 @@ export function subscribeToTable(table, callback) {
 }
 export async function importRecords(table, records) {
   if (!records.length) return { data: [], error: null };
-  if (!navigator.onLine || !hasSupabaseConfig) { records.forEach((record) => queue({ table, record, createdAt: new Date().toISOString() })); return { data: [], error: new Error("Saved locally; will sync when online"), queued: true }; }
+  if (!navigator.onLine || !hasSupabaseConfig) return { data: [], error: new Error("Connect to Supabase to import records") };
   const db = await client(); const { data, error } = await db.from(table).insert(records).select();
-  if (error && canRetryLater(error)) records.forEach((record) => queue({ table, record, createdAt: new Date().toISOString() }));
-  return { data: data || [], error, queued: Boolean(error && canRetryLater(error)) };
+  reportNetworkError(error);
+  return { data: data || [], error };
 }

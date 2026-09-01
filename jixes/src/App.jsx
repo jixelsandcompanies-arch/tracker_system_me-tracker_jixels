@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { demoCredentials, getSession, signIn, signOut, touchSession } from "./lib/auth";
 import { canAccess, recordAudit } from "./lib/security";
-import { createRecord, flushPendingWrites, hasSupabaseConfig, listRecords, pendingWriteCount, subscribeToTable, updateRecord } from "./lib/data";
+import { createRecord, hasSupabaseConfig, listRecords, subscribeToTable, updateRecord } from "./lib/data";
 import EnhancedModuleView from "./components/EnhancedModuleView";
 import DashboardLiveView from "./components/DashboardLiveView";
 import {
@@ -164,7 +164,6 @@ function AppContent() {
   const [offlineAcknowledged, setOfflineAcknowledged] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [notifications, setNotifications] = useState([]);
-  const [pendingSync, setPendingSync] = useState(pendingWriteCount());
   const [confirmSignOut, setConfirmSignOut] = useState(false);
   const emptyRecord = { name: "", email: "", phone: "", nationalId: "", address: "", county: "", town: "", status: "active", trackerStatus: "online", trackerNumber: "", notes: "", productType: "bike", otherType: "", customerId: "", trackerId: "", agentId: "", bikeId: "" };
   const [newRecord, setNewRecord] = useState(emptyRecord);
@@ -193,12 +192,6 @@ function AppContent() {
   }, []);
   useEffect(() => { if (systemOnline) setOfflineAcknowledged(false); }, [systemOnline]);
 
-  useEffect(() => {
-    const sync = async () => { await flushPendingWrites(); setPendingSync(pendingWriteCount()); };
-    window.addEventListener("online", sync);
-    sync();
-    return () => window.removeEventListener("online", sync);
-  }, []);
   useEffect(() => {
     if (!session || !hasSupabaseConfig) return undefined;
     const watch = (table, title, matches = (event) => event.eventType === "INSERT") => subscribeToTable(table, (event) => {
@@ -272,7 +265,7 @@ function AppContent() {
     if (table === "bikes" && isOtherProduct && !newRecord.otherType.trim()) { setSaveState("Enter the product type."); return; }
     if (table === "bikes" && !newRecord.customerId) { setSaveState("Select the customer for this product."); return; }
     const result = await createRecord(table, record);
-    if (result.error && !result.queued) { setSaveState(`Could not save: ${result.error.message}`); return; }
+    if (result.error) { setSaveState(`Could not save: ${result.error.message}`); return; }
     if (table === "bikes" && newRecord.trackerId && result.data?.id) {
       const linkResult = await updateRecord("trackers", newRecord.trackerId, { bike_id: result.data.id });
       if (linkResult.error) { setSaveState(`Product saved, but tracker could not be linked: ${linkResult.error.message}`); return; }

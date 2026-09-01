@@ -1,6 +1,4 @@
-import * as SecureStore from "expo-secure-store";
-
-const SESSION_KEY = "jixels.customer.session.v1";
+let activeSession = null;
 
 function isUsableSession(session) {
   if (!session?.accessToken || !session?.user) return false;
@@ -11,23 +9,13 @@ function isUsableSession(session) {
 
 export const sessionStore = {
   async get() {
-    const value = await SecureStore.getItemAsync(SESSION_KEY);
-    if (!value) return null;
-    try {
-      const session = JSON.parse(value);
-      if (isUsableSession(session)) return session;
-      await SecureStore.deleteItemAsync(SESSION_KEY);
-      return null;
-    } catch {
-      await SecureStore.deleteItemAsync(SESSION_KEY);
-      return null;
-    }
+    return isUsableSession(activeSession) ? activeSession : null;
   },
-  set(session) {
-    if (!isUsableSession(session)) return Promise.reject(new Error("Refusing to store an invalid or expired session."));
-    return SecureStore.setItemAsync(SESSION_KEY, JSON.stringify(session), { keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY });
+  async set(session) {
+    if (!isUsableSession(session)) throw new Error("Refusing to keep an invalid or expired session.");
+    activeSession = session;
   },
-  clear() {
-    return SecureStore.deleteItemAsync(SESSION_KEY);
+  async clear() {
+    activeSession = null;
   },
 };

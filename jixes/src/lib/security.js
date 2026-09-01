@@ -1,5 +1,3 @@
-const AUDIT_KEY = "jixels_admin_audit";
-
 const rolePermissions = {
   "Super administrator": ["*"],
   "Operations manager": ["Dashboard", "Customers", "Products", "GPS Trackers", "Screening", "Support Cases", "Alerts", "Reports"],
@@ -29,13 +27,6 @@ export function recordAudit({ action, resource, detail = "" }) {
     detail,
     timestamp: new Date().toISOString()
   };
-  try {
-    const existing = JSON.parse(localStorage.getItem(AUDIT_KEY) || "[]");
-    localStorage.setItem(AUDIT_KEY, JSON.stringify([entry, ...existing].slice(0, 500)));
-  } catch {
-    // Audit persistence must not prevent the primary action from completing.
-  }
-  // The browser cache is a resilience fallback; the database is the source of truth.
   import("./data").then(({ createRecord, hasSupabaseConfig }) => {
     if (hasSupabaseConfig) createRecord("audit_logs", { action, resource, detail: typeof detail === "string" ? { message: detail } : detail });
   }).catch(() => {});
@@ -43,9 +34,5 @@ export function recordAudit({ action, resource, detail = "" }) {
 }
 
 export function getAuditEvents() {
-  try {
-    return JSON.parse(localStorage.getItem(AUDIT_KEY) || "[]");
-  } catch {
-    return [];
-  }
+  return [];
 }

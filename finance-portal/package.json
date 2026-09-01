@@ -1,0 +1,5 @@
+{
+  "name": "jixels-finance-portal",
+  "private": true,
+  "scripts": { "build": "node build.cjs" }
+}

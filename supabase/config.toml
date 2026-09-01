@@ -1,2 +1,10 @@
+[auth]
+enable_signup = true
+
+[auth.email]
+enable_signup = true
+otp_length = 6
+otp_expiry = 300
+
 [functions.api]
 verify_jwt = false

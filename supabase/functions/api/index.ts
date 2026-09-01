@@ -57,6 +57,40 @@ function tramigoLocation(report: any) {
   return { latitude, longitude, speedKph: Number(source?.Speed ?? source?.speed ?? 0), recordedAt: source?.DateTimeActual ?? report?.DateTimeActual ?? new Date().toISOString() };
 }
 
+const customerRoles = new Set(["customer"]);
+const agentRoles = new Set(["agent", "support_agent"]);
+
+async function portalSignIn(
+  client: ReturnType<typeof createClient>,
+  admin: ReturnType<typeof createClient>,
+  body: Record<string, unknown>,
+  allowedRoles: Set<string>,
+) {
+  const { data, error } = await client.auth.signInWithPassword({
+    email: String(body.email ?? "").trim().toLowerCase(),
+    password: String(body.password ?? ""),
+  });
+  if (error || !data.session || !data.user) return fail("Incorrect email or password.", 401, "INVALID_CREDENTIALS");
+
+  const { data: profile, error: profileError } = await admin
+    .from("profiles")
+    .select("full_name,email,phone,role,account_status")
+    .eq("id", data.user.id)
+    .maybeSingle();
+  if (profileError || !profile) {
+    console.error("Profile load failed after sign-in", profileError);
+    return fail("Your account profile could not be loaded. Please contact an administrator.", 503, "PROFILE_UNAVAILABLE");
+  }
+  if (!allowedRoles.has(profile.role) || !["active", "approved"].includes(profile.account_status)) {
+    return fail("You don't have permission to access this portal.", 403, "PORTAL_ACCESS_DENIED");
+  }
+  return response({
+    accessToken: data.session.access_token,
+    expiresAt: new Date(data.session.expires_at! * 1000).toISOString(),
+    user: { id: data.user.id, email: data.user.email, name: profile.full_name, phone: profile.phone, role: profile.role },
+  });
+}
+
 Deno.serve(async (request) => {
   if (request.method === "OPTIONS") return new Response(null, { headers: cors });
   const url = new URL(request.url);
@@ -95,9 +129,10 @@ Deno.serve(async (request) => {
   }
 
   if (route === "/v1/auth/login" && request.method === "POST") {
-    const { data, error } = await client.auth.signInWithPassword({ email: String(body.email ?? ""), password: String(body.password ?? "") });
-    if (error || !data.session || !data.user) return fail("Invalid email or password.", 401, "INVALID_CREDENTIALS");
-    return response({ accessToken: data.session.access_token, expiresAt: new Date(data.session.expires_at! * 1000).toISOString(), user: { id: data.user.id, email: data.user.email } });
+    return portalSignIn(client, admin, body, customerRoles);
+  }
+  if (route === "/v1/agent/auth/login" && request.method === "POST") {
+    return portalSignIn(client, admin, body, agentRoles);
   }
   if (route === "/v1/auth/register" && request.method === "POST") {
     const { data, error } = await client.auth.signUp({ email: String(body.email ?? ""), password: String(body.password ?? ""), options: { data: { full_name: body.fullName ?? body.name, phone: body.phone } } });

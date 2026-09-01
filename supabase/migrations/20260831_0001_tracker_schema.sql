@@ -87,6 +87,12 @@ alter table public.alerts enable row level security;
 alter table public.payment_requests enable row level security;
 alter table public.daraja_transactions enable row level security;
 
+drop policy if exists "users manage their profile" on public.profiles;
+drop policy if exists "users manage their vehicles" on public.vehicles;
+drop policy if exists "users read their vehicle locations" on public.tracker_locations;
+drop policy if exists "users manage their alerts" on public.alerts;
+drop policy if exists "users read their payments" on public.payment_requests;
+drop policy if exists "users read their daraja payments" on public.daraja_transactions;
 create policy "users manage their profile" on public.profiles for all using (id = auth.uid()) with check (id = auth.uid());
 create policy "users manage their vehicles" on public.vehicles for all using (owner_id = auth.uid()) with check (owner_id = auth.uid());
 create policy "users read their vehicle locations" on public.tracker_locations for select using (exists (select 1 from public.vehicles v where v.id = vehicle_id and v.owner_id = auth.uid()));

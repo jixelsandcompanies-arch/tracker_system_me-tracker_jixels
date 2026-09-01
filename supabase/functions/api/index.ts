@@ -30,7 +30,7 @@ function tramigoPath(template: string, deviceId: string) {
   return template.replace(/\{(?:deviceId|imei|tracker_imei)\}|:deviceId/g, encodeURIComponent(deviceId));
 }
 async function tramigoRequest(path: string, options: { method?: string; body?: unknown } = {}) {
-  const base = (Deno.env.get("TRAMIGO_API_BASE_URL") ?? "https://api.tracking.tramigocloud.com").replace(/\/$/, "");
+  const base = (Deno.env.get("TRAMIGO_API_BASE_URL") ?? Deno.env.get("TRAMIGO_API_URL") ?? "https://api.tracking.tramigocloud.com").replace(/\/$/, "");
   const username = Deno.env.get("TRAMIGO_USERNAME"); const password = Deno.env.get("TRAMIGO_PASSWORD");
   if (!username || !password) throw new Error("Tramigo credentials are not configured.");
   const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), 10_000);

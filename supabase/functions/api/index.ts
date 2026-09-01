@@ -30,10 +30,19 @@ async function tramigoRequest(path: string) {
   const base = (Deno.env.get("TRAMIGO_API_BASE_URL") ?? "https://api.tracking.tramigocloud.com").replace(/\/$/, "");
   const username = Deno.env.get("TRAMIGO_USERNAME"); const password = Deno.env.get("TRAMIGO_PASSWORD");
   if (!username || !password) throw new Error("Tramigo credentials are not configured.");
-  const login = await fetch(`${base}/api/login`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ username, password }) });
+  const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), 10_000);
+  let login: Response;
+  try {
+    login = await fetch(`${base}/api/login`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ username, password }), signal: controller.signal });
+  } finally { clearTimeout(timer); }
   const session = await login.json().catch(() => ({}));
-  if (!login.ok || !session.access_token) throw new Error("Tramigo authentication failed.");
-  const result = await fetch(`${base}${path}`, { headers: { Authorization: `Bearer ${session.access_token}`, Accept: "application/json" } });
+  const token = session.access_token ?? session.accessToken ?? session.token;
+  if (!login.ok || !token) throw new Error("Tramigo authentication failed.");
+  const resultController = new AbortController(); const resultTimer = setTimeout(() => resultController.abort(), 10_000);
+  let result: Response;
+  try {
+    result = await fetch(`${base}${path}`, { headers: { Authorization: `Bearer ${token}`, Accept: "application/json" }, signal: resultController.signal });
+  } finally { clearTimeout(resultTimer); }
   const data = await result.json().catch(() => ({}));
   if (!result.ok) throw new Error(data.message ?? "Tramigo request failed.");
   return data;
@@ -41,7 +50,7 @@ async function tramigoRequest(path: string) {
 function tramigoLocation(report: any) {
   const source = report?.main_reports?.[0] ?? report?.mainReports?.[0] ?? report;
   const latitude = Number(source?.Latitude ?? source?.latitude); const longitude = Number(source?.Longitude ?? source?.longitude);
-  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return null;
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude) || latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180) return null;
   return { latitude, longitude, speedKph: Number(source?.Speed ?? source?.speed ?? 0), recordedAt: source?.DateTimeActual ?? report?.DateTimeActual ?? new Date().toISOString() };
 }
 

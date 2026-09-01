@@ -26,7 +26,10 @@ function stkPassword(timestamp: string) {
   const shortcode = Deno.env.get("DARAJA_SHORTCODE") ?? "";
   return btoa(`${shortcode}${Deno.env.get("DARAJA_PASSKEY") ?? ""}${timestamp}`);
 }
-async function tramigoRequest(path: string) {
+function tramigoPath(template: string, deviceId: string) {
+  return template.replace(/\{(?:deviceId|imei|tracker_imei)\}|:deviceId/g, encodeURIComponent(deviceId));
+}
+async function tramigoRequest(path: string, options: { method?: string; body?: unknown } = {}) {
   const base = (Deno.env.get("TRAMIGO_API_BASE_URL") ?? "https://api.tracking.tramigocloud.com").replace(/\/$/, "");
   const username = Deno.env.get("TRAMIGO_USERNAME"); const password = Deno.env.get("TRAMIGO_PASSWORD");
   if (!username || !password) throw new Error("Tramigo credentials are not configured.");
@@ -41,7 +44,7 @@ async function tramigoRequest(path: string) {
   const resultController = new AbortController(); const resultTimer = setTimeout(() => resultController.abort(), 10_000);
   let result: Response;
   try {
-    result = await fetch(`${base}${path}`, { headers: { Authorization: `Bearer ${token}`, Accept: "application/json" }, signal: resultController.signal });
+    result = await fetch(`${base}${path}`, { method: options.method ?? "GET", headers: { Authorization: `Bearer ${token}`, Accept: "application/json", ...(options.body == null ? {} : { "Content-Type": "application/json" }) }, body: options.body == null ? undefined : JSON.stringify(options.body), signal: resultController.signal });
   } finally { clearTimeout(resultTimer); }
   const data = await result.json().catch(() => ({}));
   if (!result.ok) throw new Error(data.message ?? "Tramigo request failed.");
@@ -149,6 +152,39 @@ Deno.serve(async (request) => {
     const { data: payment, error } = await client.from("payment_requests").insert({ owner_id: user.id, vehicle_id: vehicle.id, idempotency_key: idempotencyKey, amount, phone, status: "processing" }).select("id,status").single(); if (error) return fail(error.message, 400);
     try { const timestamp = new Date().toISOString().replace(/[-:TZ.]/g, "").slice(0, 14); const result = await darajaPost("/mpesa/stkpush/v1/processrequest", { BusinessShortCode: Deno.env.get("DARAJA_SHORTCODE"), Password: stkPassword(timestamp), Timestamp: timestamp, TransactionType: "CustomerPayBillOnline", Amount: amount, PartyA: phone, PartyB: Deno.env.get("DARAJA_SHORTCODE"), PhoneNumber: phone, CallBackURL: Deno.env.get("DARAJA_STK_CALLBACK_URL"), AccountReference: idempotencyKey.slice(0, 12), TransactionDesc: "Tracker service payment" }); await client.from("daraja_transactions").insert({ direction: "C2B", checkout_request_id: result.CheckoutRequestID ?? null, account_reference: idempotencyKey, phone, amount, status: "submitted", payload: result }); return response({ ...payment, ...result }, 202); }
     catch (cause) { await client.from("payment_requests").update({ status: "failed", updated_at: new Date().toISOString() }).eq("id", payment.id); return fail(cause instanceof Error ? cause.message : "M-Pesa request failed.", 502, "MPESA_ERROR"); }
+  }
+  const statusMatch = route.match(/^\/v1\/customer\/motorcycles\/([^/]+)\/security-status$/);
+  if (statusMatch && request.method === "GET") {
+    const vehicleId = decodeURIComponent(statusMatch[1]);
+    const { data: vehicle } = await client.from("vehicles").select("id,tracker_imei,monitoring_armed,immobilized").eq("id", vehicleId).single();
+    if (!vehicle) return fail("Vehicle not found.", 404, "NOT_FOUND");
+    let provider = null;
+    const configuredPath = Deno.env.get("TRAMIGO_CLOUD_OUTBOUND_STATUS_PATH");
+    if (vehicle.tracker_imei && configuredPath) {
+      try { provider = await tramigoRequest(tramigoPath(configuredPath, vehicle.tracker_imei)); } catch (_) { /* return last trusted local state */ }
+    }
+    return response({ vehicleId, monitoringArmed: vehicle.monitoring_armed, immobilized: vehicle.immobilized, provider });
+  }
+  if (route === "/v1/customer/motorcycles/security-status" && request.method === "GET") {
+    const { data: vehicles } = await client.from("vehicles").select("id,registration,monitoring_armed,immobilized");
+    return response({ vehicles: vehicles ?? [] });
+  }
+  const securityMatch = route.match(/^\/v1\/customer\/motorcycles\/([^/]+)\/(monitoring|immobilizer)$/);
+  if (securityMatch && request.method === "POST") {
+    const vehicleId = decodeURIComponent(securityMatch[1]); const action = securityMatch[2];
+    const { data: vehicle } = await client.from("vehicles").select("id,tracker_imei").eq("id", vehicleId).single();
+    if (!vehicle) return fail("Vehicle not found.", 404, "NOT_FOUND");
+    if (!vehicle.tracker_imei) return fail("This vehicle has no Tramigo tracker assigned.", 409, "TRACKER_NOT_ASSIGNED");
+    const enabled = action === "monitoring" ? Boolean(body.armed) : Boolean(body.immobilized);
+    const configuredPath = action === "monitoring" ? Deno.env.get("TRAMIGO_CLOUD_CONTROL_STATUS_PATH") : Deno.env.get("TRAMIGO_CLOUD_IMMOBILIZER_PATH");
+    if (!configuredPath) return fail("Tramigo security control is not configured.", 503, "TRAMIGO_NOT_CONFIGURED");
+    try {
+      const provider = await tramigoRequest(tramigoPath(configuredPath, vehicle.tracker_imei), { method: "POST", body: { deviceId: vehicle.tracker_imei, imei: vehicle.tracker_imei, enabled, armed: action === "monitoring" ? enabled : undefined, immobilized: action === "immobilizer" ? enabled : undefined } });
+      const update = action === "monitoring" ? { monitoring_armed: enabled, updated_at: new Date().toISOString() } : { immobilized: enabled, updated_at: new Date().toISOString() };
+      const { error } = await admin.from("vehicles").update(update).eq("id", vehicleId);
+      if (error) return fail("Tramigo accepted the command, but local state could not be saved.", 502, "STATE_SYNC_FAILED");
+      return response({ vehicleId, action, enabled, provider });
+    } catch (error) { return fail(error instanceof Error ? error.message : "Tramigo command failed.", 502, "TRAMIGO_ERROR"); }
   }
   if (route === "/v1/customer/profile" && request.method === "PATCH") {
     const { data, error } = await client.from("profiles").update({ full_name: body.fullName, phone: body.phone, avatar_url: body.avatarUrl, updated_at: new Date().toISOString() }).eq("id", user.id).select().single();

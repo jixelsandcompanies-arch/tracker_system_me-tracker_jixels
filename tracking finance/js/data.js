@@ -1,76 +1,17 @@
-/* Finance data is persisted in Supabase; memory is only the render cache. */
 (function () {
   const SUPABASE_URL = "https://tpzebfvhvjsezynqgdns.supabase.co";
   const SUPABASE_KEY = "sb_publishable_IeSvEQI25WeymzwM-3j4VQ_a6a84vRO";
-  const emptyData = {
-    accounts: [],
-    payments: [],
-    auditLogs: [],
-    alerts: [],
-    notifications: [],
-    settings: {
-      workspaceName: "Jixels Finance",
-      timezone: "Africa/Nairobi",
-      currency: "KES",
-      commissionRate: "5",
-      dailyCollectionTarget: "18500",
-      overdueGraceDays: "3",
-      exportRetentionDays: "90",
-      sessionTimeoutMinutes: "30",
-      notifyPayments: true,
-      notifyReconciliation: true,
-      notifyCommissions: true
-    },
-    agents: []
-  };
-  let memoryData = { ...emptyData };
-  let accessToken = null;
-
-  function clone(value) {
-    return JSON.parse(JSON.stringify(value));
+  const emptyData = { accounts: [], payments: [], agents: [], alerts: [], auditLogs: [], notifications: [], settings: { workspaceName: "Jixels Finance", timezone: "Africa/Nairobi", currency: "KES", commissionRate: "5", dailyCollectionTarget: "18500", overdueGraceDays: "3", exportRetentionDays: "90", sessionTimeoutMinutes: "30", notifyPayments: true, notifyReconciliation: true, notifyCommissions: true } };
+  let memoryData = JSON.parse(JSON.stringify(emptyData)); let accessToken = null;
+  const tables = { accounts: "finance_accounts", payments: "finance_payments", agents: "finance_agents", alerts: "finance_alerts", auditLogs: "finance_audit_logs" };
+  const clone = value => JSON.parse(JSON.stringify(value));
+  function readData() { return { ...emptyData, ...clone(memoryData) }; }
+  async function request(path, options = {}) { const response = await fetch(`${SUPABASE_URL}${path}`, { ...options, headers: { apikey: SUPABASE_KEY, ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}), ...(options.body ? { "Content-Type": "application/json" } : {}), ...(options.headers || {}) } }); if (!response.ok) throw new Error(await response.text() || "Finance data request failed."); return response.status === 204 ? null : response.json(); }
+  function saveData(data) { memoryData = { ...emptyData, ...clone(data) }; if (!accessToken) return; const jobs = Object.entries(tables).flatMap(([key, table]) => (memoryData[key] || []).map(item => request(`/rest/v1/${table}?on_conflict=external_id`, { method: "POST", headers: { Prefer: "resolution=merge-duplicates" }, body: JSON.stringify({ external_id: String(item.id || `${key}-${Date.now()}`), data: item, updated_at: new Date().toISOString() }) }))); jobs.push(request("/rest/v1/finance_settings?on_conflict=id", { method: "POST", headers: { Prefer: "resolution=merge-duplicates" }, body: JSON.stringify({ id: "default", data: memoryData.settings, updated_at: new Date().toISOString() }) })); Promise.all(jobs).catch(error => window.dispatchEvent(new CustomEvent("finance-sync-error", { detail: error.message })));
   }
-
-  function readData() {
-    return { ...emptyData, ...clone(memoryData) };
-  }
-
-  function saveData(data) {
-    memoryData = { ...emptyData, ...clone(data) };
-    if (accessToken) fetch(`${SUPABASE_URL}/rest/v1/finance_workspace_state?on_conflict=owner_id`, { method: "POST", headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json", Prefer: "resolution=merge-duplicates" }, body: JSON.stringify({ owner_id: JSON.parse(atob(accessToken.split('.')[1])).sub, state: memoryData, updated_at: new Date().toISOString() }) }).catch(() => {});
-  }
-  async function hydrate(token) {
-    accessToken = token;
-    const response = await fetch(`${SUPABASE_URL}/rest/v1/finance_workspace_state?select=state&limit=1`, { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${token}` } });
-    if (!response.ok) throw new Error("Finance data could not be loaded.");
-    const rows = await response.json();
-    if (rows[0]?.state) memoryData = { ...emptyData, ...rows[0].state };
-    return clone(memoryData);
-  }
-
-  async function registerFinanceUser({ name, email, phone, password }) {
-    const response = await fetch(`${SUPABASE_URL}/auth/v1/signup`, { method: "POST", headers: { apikey: SUPABASE_KEY, "Content-Type": "application/json" }, body: JSON.stringify({ email, password, data: { full_name: name, phone, role: "finance_officer" } }) });
-    const result = await response.json().catch(() => ({}));
-    if (!response.ok || !result.user) throw new Error(result.msg || result.error_description || "Finance registration failed.");
-    if (!result.access_token) throw new Error("Check your email to confirm the finance account before signing in.");
-    await hydrate(result.access_token);
-    return { id: result.user.id, name, email: result.user.email, phone, role: "Finance" };
-  }
-
-  async function authenticateFinanceUser(email, password) {
-    const response = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=password`, { method: "POST", headers: { apikey: SUPABASE_KEY, "Content-Type": "application/json" }, body: JSON.stringify({ email, password }) });
-    const result = await response.json().catch(() => ({}));
-    if (!response.ok || !result.access_token) throw new Error("The email or password is incorrect.");
-    await hydrate(result.access_token);
-    return { id: result.user.id, name: result.user.user_metadata?.full_name || result.user.email.split("@")[0], email: result.user.email, phone: result.user.user_metadata?.phone || "", role: result.user.user_metadata?.role || "Finance", accessToken: result.access_token };
-  }
-
-  function money(value) {
-    return new Intl.NumberFormat("en-KE", {
-      style: "currency",
-      currency: "KES",
-      maximumFractionDigits: 0
-    }).format(Number(value || 0));
-  }
-
+  async function hydrate(token) { accessToken = token; const rows = await Promise.all(Object.entries(tables).map(async ([key, table]) => [key, await request(`/rest/v1/${table}?select=external_id,data&order=updated_at.desc`)])); const settings = await request("/rest/v1/finance_settings?select=data&id=eq.default"); memoryData = { ...emptyData }; rows.forEach(([key, values]) => { memoryData[key] = (values || []).map(row => ({ ...(row.data || {}), id: row.data?.id || row.external_id })); }); if (settings?.[0]?.data) memoryData.settings = { ...emptyData.settings, ...settings[0].data }; return clone(memoryData); }
+  async function registerFinanceUser({ name, email, phone, password }) { const result = await request("/auth/v1/signup", { method: "POST", body: JSON.stringify({ email, password, data: { full_name: name, phone } }) }); if (!result?.user) throw new Error("Finance registration failed."); if (!result.access_token) throw new Error("Check your email to confirm the account before signing in."); await hydrate(result.access_token); return { id: result.user.id, name, email: result.user.email, phone, role: "Finance", accessToken: result.access_token }; }
+  async function authenticateFinanceUser(email, password) { const result = await request("/auth/v1/token?grant_type=password", { method: "POST", body: JSON.stringify({ email, password }) }); if (!result?.access_token) throw new Error("The email or password is incorrect."); await hydrate(result.access_token); return { id: result.user.id, name: result.user.user_metadata?.full_name || result.user.email.split("@")[0], email: result.user.email, phone: result.user.user_metadata?.phone || "", role: result.user.user_metadata?.role || "Finance", accessToken: result.access_token }; }
+  const money = value => new Intl.NumberFormat("en-KE", { style: "currency", currency: "KES", maximumFractionDigits: 0 }).format(Number(value || 0));
   window.FinanceStore = { emptyData, readData, saveData, registerFinanceUser, authenticateFinanceUser, hydrate, money };
 })();

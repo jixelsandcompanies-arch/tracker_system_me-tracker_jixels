@@ -3,7 +3,11 @@ import { Bike, Radio, Search, Trash2, UserRound, X } from "lucide-react";
 import { createRecord, deleteRecord, hasSupabaseConfig, listRecords, subscribeToTable, updateRecord } from "../lib/data";
 import { recordAudit } from "../lib/security";
 
-const empty = { product_type: "bike", tracker_number: "", assigned_agent_id: "" };
+const empty = { product_type: "bike", tracker_number: "", assigned_agent_id: "", payable_amount: "" };
+
+function money(value) {
+  return `KES ${Number(value || 0).toLocaleString("en-KE")}`;
+}
 
 export default function ProductInventoryView() {
   const [data, setData] = useState({ bikes: [], trackers: [], customers: [], profiles: [], screening_applications: [] });
@@ -38,6 +42,7 @@ export default function ProductInventoryView() {
       product_type: product.product_type,
       assigned_agent_id: product.assigned_agent_id || "",
       tracker_number: data.trackers.find((tracker) => tracker.bike_id === product.id)?.identifier || "",
+      payable_amount: product.payable_amount == null ? "" : String(product.payable_amount),
     } : empty);
   };
   const inventoryStatus = (product) => {
@@ -48,17 +53,23 @@ export default function ProductInventoryView() {
   const visibleProducts = data.bikes.filter((product) => {
     const tracker = data.trackers.find((item) => item.bike_id === product.id)?.identifier || "";
     const agent = data.profiles.find((profile) => profile.id === product.assigned_agent_id)?.full_name || "";
-    return `${product.product_type} ${product.identifier} ${tracker} ${agent}`.toLowerCase().includes(query.trim().toLowerCase());
+    return `${product.product_type} ${product.identifier} ${tracker} ${agent} ${product.payable_amount || ""}`.toLowerCase().includes(query.trim().toLowerCase());
   });
 
   async function save(event) {
     event.preventDefault();
     setSaving(true);
     const trackerNumber = form.tracker_number.trim();
+    const payableAmount = Number(form.payable_amount || 0);
+    if (!Number.isFinite(payableAmount) || payableAmount < 0) {
+      setSaving(false);
+      return setMessage("Payable amount must be zero or a positive number.");
+    }
     const identifier = trackerNumber || `${form.product_type.toUpperCase()}-${Date.now().toString(36).toUpperCase()}`;
     const payload = {
       ...(editing ? {} : { identifier, model: form.product_type }),
       product_type: form.product_type,
+      payable_amount: payableAmount,
       assigned_agent_id: form.assigned_agent_id || null,
     };
     const result = editing ? await updateRecord("bikes", editing.id, payload) : await createRecord("bikes", payload);
@@ -97,10 +108,11 @@ export default function ProductInventoryView() {
       <div className="directory-filters inventory-filters"><label className="table-search"><Search size={15}/><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search products, trackers, or agents"/></label><button className="button secondary" onClick={() => remove(selectedIds)}>Delete selected</button><button className="button danger" onClick={() => remove(visibleProducts.map((product) => product.id))}>Delete all</button></div>
       {message && <div className="import-message">{message}</div>}
       <div className="table-wrap"><table>
-        <thead><tr><th><input type="checkbox" checked={visibleProducts.length > 0 && visibleProducts.every((product) => selectedIds.includes(product.id))} onChange={(event) => setSelectedIds(event.target.checked ? visibleProducts.map((product) => product.id) : [])}/></th><th>Product</th><th>Assigned customer</th><th>Tracker</th><th>Assigned agent</th><th>Status</th><th>Actions</th></tr></thead>
+        <thead><tr><th><input type="checkbox" checked={visibleProducts.length > 0 && visibleProducts.every((product) => selectedIds.includes(product.id))} onChange={(event) => setSelectedIds(event.target.checked ? visibleProducts.map((product) => product.id) : [])}/></th><th>Product</th><th>Payable amount</th><th>Assigned customer</th><th>Tracker</th><th>Assigned agent</th><th>Status</th><th>Actions</th></tr></thead>
         <tbody>{visibleProducts.map((product) => <tr key={product.id}>
           <td><input type="checkbox" checked={selectedIds.includes(product.id)} onChange={() => toggle(product.id)}/></td>
           <td><strong>{product.product_type}</strong><small>{product.identifier}</small></td>
+          <td>{money(product.payable_amount)}</td>
           <td>{data.customers.find((customer) => customer.id === product.customer_id)?.full_name || "—"}</td>
           <td>{data.trackers.find((tracker) => tracker.bike_id === product.id)?.identifier || "Unlinked"}</td>
           <td>{data.profiles.find((profile) => profile.id === product.assigned_agent_id)?.full_name || "Unassigned"}</td>
@@ -120,6 +132,7 @@ export default function ProductInventoryView() {
           <div className="customer-form-grid">
             <label>Product type<select value={form.product_type} onChange={(event) => set("product_type", event.target.value)}><option>bike</option><option>car</option><option>tuktuk</option><option>device</option><option>other</option></select></label>
             <label><Radio size={14}/> Tracker number<input value={form.tracker_number} onChange={(event) => set("tracker_number", event.target.value)} placeholder="Type tracker number"/></label>
+            <label>Payable amount<input value={form.payable_amount} onChange={(event) => set("payable_amount", event.target.value)} inputMode="numeric" placeholder="Total customer payable"/></label>
             <label className="wide"><UserRound size={14}/> Assigned agent<select value={form.assigned_agent_id} onChange={(event) => set("assigned_agent_id", event.target.value)}><option value="">No agent</option>{agents.map((agent) => <option key={agent.id} value={agent.id}>{agent.full_name}</option>)}</select></label>
           </div>
           <div className="detail-actions"><button className="button secondary" type="button" onClick={() => setEditing(undefined)}>Cancel</button><button className="button primary" disabled={saving}><Bike size={15}/>{saving ? "Saving…" : editing ? "Update product" : "Add to inventory"}</button></div>

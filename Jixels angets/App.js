@@ -6,6 +6,7 @@ import {
   BackHandler,
   Image,
   KeyboardAvoidingView,
+  Linking,
   Modal,
   Platform,
   Pressable,
@@ -55,12 +56,13 @@ const colors = {
 
 const initialCustomers = [];
 const trackerStock = [];
+const COMMISSION_RATE = 0.2;
 
 const screens = [
   { key: "dashboard", label: "Home", icon: "grid-outline" },
   { key: "customers", label: "Customers", icon: "people-outline" },
   { key: "onboard", label: "New customer", icon: "person-add-outline" },
-  { key: "payments", label: "Payments", icon: "wallet-outline" },
+  { key: "payments", label: "Commissions", icon: "cash-outline" },
   { key: "alerts", label: "Alerts", icon: "notifications-outline" }
 ];
 
@@ -83,6 +85,51 @@ const reportPeriods = [
 
 function money(value) {
   return `KES ${Number(value || 0).toLocaleString()}`;
+}
+
+function normalizeAssignedVehicle(record = {}) {
+  const id = record.id || record.productId || record.vehicleId || record.identifier || record.registration || record.plate;
+  if (!id) return null;
+  const registration = String(record.registration || record.plate || record.identifier || record.tracker_number || id).toUpperCase();
+  const tracker = String(record.tracker || record.trackerNumber || record.tracker_number || record.trackerId || "Pending").toUpperCase();
+  const payableAmount = Number(record.payableAmount ?? record.payable_amount ?? record.totalPayable ?? record.total ?? record.price ?? 0);
+  return {
+    id: String(id),
+    registration,
+    model: record.model || record.product_type || record.productType || "Assigned bike",
+    tracker,
+    payableAmount: Number.isFinite(payableAmount) ? payableAmount : 0,
+    status: record.status || record.assignmentStatus || "assigned",
+    assignedAgentId: record.assigned_agent_id || record.assignedAgentId || record.agentId || null
+  };
+}
+
+function normalizeAssignedVehicles(agent = {}) {
+  const source = agent.assignedVehicles || agent.assignedBikes || agent.vehicles || agent.bikes || agent.session?.user?.assignedVehicles || [];
+  if (!Array.isArray(source)) return [];
+  const agentIds = new Set([agent.id, agent.code, agent.agentCode, agent.session?.user?.id, agent.session?.user?.agentCode].filter(Boolean).map(String));
+  return source
+    .map(normalizeAssignedVehicle)
+    .filter(Boolean)
+    .filter(vehicle => {
+      const status = String(vehicle.status || "").toLowerCase();
+      if (["available", "stock", "unassigned"].includes(status)) return false;
+      if (!vehicle.assignedAgentId) return true;
+      return agentIds.has(String(vehicle.assignedAgentId));
+    });
+}
+
+function customerBalance(customer) {
+  if (customer.balance != null) return Number(customer.balance) || 0;
+  return Math.max(0, Number(customer.payableAmount || 0) - Number(customer.amount || 0));
+}
+
+function customerPaymentComplete(customer) {
+  return ["Paid", "Deposit Paid"].includes(customer.payment);
+}
+
+function customerSaleStatus(customer) {
+  return customer.install === "Complete" && customerPaymentComplete(customer) ? "Complete" : "Pending";
 }
 
 function displayNameFromEmail(email) {
@@ -113,7 +160,7 @@ function pullRefresh(onRefresh, refreshing = false) {
 
 function statusColors(value = "") {
   const lower = value.toLowerCase();
-  if (["paid", "approved", "complete", "online", "ready", "available"].includes(lower)) return [colors.green, colors.greenPale];
+  if (["paid", "deposit paid", "approved", "complete", "online", "ready", "available", "earned"].includes(lower)) return [colors.green, colors.greenPale];
   if (["pending", "assigned", "submitted", "processing"].includes(lower)) return [colors.orange, colors.orangePale];
   return [colors.red, colors.redPale];
 }
@@ -319,7 +366,7 @@ function Login({ onLogin }) {
     try {
       const session = await authApi.login(cleanEmail, password);
       setBusy(false);
-      onLogin(normalizeAgentSession(session, cleanEmail));
+      onLogin({ ...normalizeAgentSession(session, cleanEmail), loginPassword: password });
     } catch (error) {
       setBusy(false);
       Alert.alert("Login failed", error instanceof ApiError || error instanceof Error ? error.message : "Check your connection and try again.");
@@ -517,22 +564,27 @@ function Customers({ customers, onDeposit, onRefresh, refreshing, darkMode = fal
       <View style={styles.listBody}>
         <Text numberOfLines={1} style={[styles.listTitle, darkMode && styles.darkText]}>{customer.name}</Text>
         <Text style={styles.listSub}>{customer.phone} • {customer.bike}</Text>
-        <Text style={styles.listMeta}>{customer.location} • Balance {money(customer.balance ?? (customer.payment === "Paid" ? 0 : customer.amount))}</Text>
+        <Text style={styles.listMeta}>{customer.location} • Balance {money(customerBalance(customer))} • Sale {customerSaleStatus(customer)}</Text>
       </View>
       <View style={styles.listStatus}>
         <Pill value={customer.payment} />
-        {customer.payment !== "Paid" && <Pressable onPress={() => onDeposit(customer.id)} style={styles.depositButton}><Text style={styles.depositButtonText}>Pay deposit</Text></Pressable>}
+        {!customerPaymentComplete(customer) && <Pressable onPress={() => onDeposit(customer.id)} style={styles.depositButton}><Text style={styles.depositButtonText}>Prompt deposit</Text></Pressable>}
         <Text style={styles.smallMeta}>{customer.id}</Text>
       </View>
     </View>)}
   </ScrollView>;
 }
 
-function Onboarding({ addCustomer, navigate, onRefresh, refreshing, darkMode = false }) {
-  const [form, setForm] = useState({ name: "", phone: "", idNumber: "", location: "", bike: "", tracker: "", depositAmount: "" });
+function Onboarding({ addCustomer, navigate, assignedVehicles, onRefresh, refreshing, darkMode = false }) {
+  const [form, setForm] = useState({ name: "", phone: "", idNumber: "", location: "", depositAmount: "" });
+  const [selectedVehicleId, setSelectedVehicleId] = useState(assignedVehicles[0]?.id || "");
+  const [vehiclePickerOpen, setVehiclePickerOpen] = useState(false);
+  const [vehicleSearch, setVehicleSearch] = useState("");
   const [passportPhoto, setPassportPhoto] = useState(null);
   const [idFrontPhoto, setIdFrontPhoto] = useState(null);
   const [idBackPhoto, setIdBackPhoto] = useState(null);
+  const selectedVehicle = assignedVehicles.find(vehicle => vehicle.id === selectedVehicleId) || assignedVehicles[0];
+  const matchingVehicles = assignedVehicles.filter(vehicle => `${vehicle.registration} ${vehicle.model} ${vehicle.tracker}`.toLowerCase().includes(vehicleSearch.trim().toLowerCase()));
 
   async function captureImage(setImage, label) {
     const permission = await ImagePicker.requestCameraPermissionsAsync();
@@ -548,23 +600,28 @@ function Onboarding({ addCustomer, navigate, onRefresh, refreshing, darkMode = f
   }
 
   function save() {
-    if (!form.name.trim() || !form.phone.trim() || !form.bike.trim()) return Alert.alert("Missing details", "Enter customer name, phone and bike plate.");
+    if (!form.name.trim() || !form.phone.trim()) return Alert.alert("Missing details", "Enter customer name and phone.");
+    if (!selectedVehicle) return Alert.alert("No assigned bike", "Only bikes assigned to this agent can be sold. Ask admin to assign inventory first.");
     if (!idFrontPhoto || !idBackPhoto) return Alert.alert("Capture ID", "Capture and save both the front and back side of the customer ID.");
     const depositAmount = Number(form.depositAmount);
     if (!Number.isFinite(depositAmount) || depositAmount < 0) return Alert.alert("Check deposit", "Enter a valid deposit amount, or use 0 if no deposit was collected.");
+    if (selectedVehicle.payableAmount > 0 && depositAmount > selectedVehicle.payableAmount) return Alert.alert("Check deposit", "The deposit cannot be higher than the total payable amount.");
     addCustomer({
       id: `CUS-${Math.floor(10000 + Math.random() * 89999)}`,
+      vehicleId: selectedVehicle.id,
       name: form.name.trim(),
       phone: form.phone.trim(),
       idNumber: form.idNumber.trim(),
       location: form.location.trim() || "Field location",
-      bike: form.bike.trim().toUpperCase(),
-      tracker: form.tracker.trim().toUpperCase() || "Pending",
+      bike: selectedVehicle.registration,
+      vehicleModel: selectedVehicle.model,
+      tracker: selectedVehicle.tracker,
       kyc: passportPhoto && idFrontPhoto && idBackPhoto ? "Submitted" : "Pending",
       install: "Pending",
       payment: "Pending",
+      payableAmount: selectedVehicle.payableAmount,
       amount: depositAmount,
-      balance: depositAmount,
+      balance: selectedVehicle.payableAmount,
       commission: 0,
       receipt: "",
       date: new Date().toISOString().slice(0, 10)
@@ -581,9 +638,20 @@ function Onboarding({ addCustomer, navigate, onRefresh, refreshing, darkMode = f
       <Field label="Phone number" value={form.phone} onChangeText={phone => setForm({ ...form, phone })} keyboardType="phone-pad" />
       <Field label="National ID or passport" value={form.idNumber} onChangeText={idNumber => setForm({ ...form, idNumber })} />
       <Field label="Location" value={form.location} onChangeText={location => setForm({ ...form, location })} />
-      <Field label="Bike plate" value={form.bike} onChangeText={bike => setForm({ ...form, bike })} />
-      <Field label="Tracker ID" value={form.tracker} onChangeText={tracker => setForm({ ...form, tracker })} />
-      <Field label="Deposit amount" value={form.depositAmount} onChangeText={depositAmount => setForm({ ...form, depositAmount })} keyboardType="numeric" />
+      <Text style={styles.fieldLabel}>Assigned bike to sell</Text>
+      <View style={styles.reportBikePicker}>
+        <Pressable onPress={() => setVehiclePickerOpen(open => !open)} style={[styles.reportBikePickerButton, darkMode && styles.darkInput]}>
+          <View style={styles.vehicleDropdownIcon}><MaterialCommunityIcons name="motorbike" size={20} color={colors.blue} /></View>
+          <View style={styles.listBody}><Text style={[styles.vehicleDropdownPlate, darkMode && styles.darkText]}>{selectedVehicle?.registration || "No bike assigned"}</Text><Text style={styles.vehicleDropdownModel}>{selectedVehicle ? `${selectedVehicle.model} • Tracker ${selectedVehicle.tracker}` : "Admin must assign a bike to this agent"}</Text></View>
+          <Ionicons name={vehiclePickerOpen ? "chevron-up" : "chevron-down"} size={18} color={colors.muted} />
+        </Pressable>
+        {vehiclePickerOpen && <View style={[styles.reportBikeDropdown, darkMode && styles.darkCard]}>
+          <View style={[styles.reportBikeSearch, darkMode && styles.darkInput]}><Ionicons name="search" size={18} color={colors.muted} /><TextInput value={vehicleSearch} onChangeText={setVehicleSearch} placeholder="Search assigned bike or tracker" placeholderTextColor="#94A3B8" autoCapitalize="characters" style={[styles.reportBikeSearchInput, darkMode && styles.darkText]} /></View>
+          <ScrollView nestedScrollEnabled keyboardShouldPersistTaps="handled" style={styles.reportBikeList} showsVerticalScrollIndicator>{matchingVehicles.map(vehicle => <Pressable key={vehicle.id} onPress={() => { setSelectedVehicleId(vehicle.id); setVehiclePickerOpen(false); setVehicleSearch(""); }} style={[styles.reportBikeOption, selectedVehicle?.id === vehicle.id && styles.reportBikeOptionActive]}><View style={styles.vehicleDropdownIcon}><MaterialCommunityIcons name="motorbike" size={19} color={colors.blue} /></View><View style={styles.listBody}><Text style={[styles.vehicleDropdownPlate, darkMode && styles.darkText]}>{vehicle.registration}</Text><Text style={styles.vehicleDropdownModel}>{vehicle.model} • Payable {money(vehicle.payableAmount)}</Text></View>{selectedVehicle?.id === vehicle.id && <Ionicons name="checkmark-circle" size={20} color={colors.blue} />}</Pressable>)}{matchingVehicles.length === 0 && <Text style={styles.noVehicleText}>No assigned bike matches your search.</Text>}</ScrollView>
+        </View>}
+      </View>
+      {selectedVehicle && <View style={styles.agreedPaymentNote}><Text style={styles.microLabel}>TOTAL PAYABLE</Text><Text style={styles.agreedPaymentValue}>{money(selectedVehicle.payableAmount)}</Text></View>}
+      <Field label="Deposit amount to prompt" value={form.depositAmount} onChangeText={depositAmount => setForm({ ...form, depositAmount })} keyboardType="numeric" />
       <View style={styles.captureRow}>
         <Pressable onPress={() => captureImage(setPassportPhoto, "passport photo")} style={styles.secondaryButton}><Ionicons name="camera-outline" color={colors.blue} size={18} /><Text style={styles.secondaryText}>{passportPhoto ? "Passport saved" : "Passport photo"}</Text></Pressable>
         <Pressable onPress={captureId} style={styles.secondaryButton}><Ionicons name="id-card-outline" color={colors.blue} size={18} /><Text style={styles.secondaryText}>{idButtonText}</Text></Pressable>
@@ -598,7 +666,8 @@ function Onboarding({ addCustomer, navigate, onRefresh, refreshing, darkMode = f
   </ScrollView>;
 }
 
-function Trackers({ customers, onRefresh, refreshing, darkMode = false }) {
+function Trackers({ customers, onInstallComplete, onRefresh, refreshing, darkMode = false }) {
+  const installCustomers = customers.filter(customer => customer.install !== "Complete");
   return <ScrollView style={darkMode && styles.darkPage} contentContainerStyle={styles.page} refreshControl={pullRefresh(onRefresh, refreshing)}>
     <Text style={[styles.sectionTitle, darkMode && styles.darkText]}>Tracker installation</Text>
     {trackerStock.length === 0 && <View style={[styles.empty, darkMode && styles.darkCard]}><Ionicons name="radio-outline" color={colors.blue} size={42} /><Text style={[styles.emptyText, darkMode && styles.darkText]}>No tracker stock loaded</Text><Text style={styles.emptySub}>Add a customer with a tracker ID to start installation records.</Text></View>}
@@ -612,46 +681,50 @@ function Trackers({ customers, onRefresh, refreshing, darkMode = false }) {
       <View style={styles.listStatus}><Pill value={tracker.signal} /><Pill value={tracker.status} /></View>
     </View>)}
     <Text style={[styles.sectionTitle, darkMode && styles.darkText]}>Customer installs</Text>
+    {installCustomers.length === 0 && <View style={[styles.empty, darkMode && styles.darkCard]}><Ionicons name="checkmark-circle-outline" color={colors.green} size={42} /><Text style={[styles.emptyText, darkMode && styles.darkText]}>No assigned installs pending</Text><Text style={styles.emptySub}>Sold bikes assigned to this agent will appear here until installation is complete.</Text></View>}
     {customers.map(customer => <View key={`${customer.id}-install`} style={[styles.installRow, darkMode && styles.darkCard]}>
       <Text style={[styles.installName, darkMode && styles.darkText]}>{customer.bike}</Text>
-      <Text style={styles.installSub}>{customer.name} • {customer.tracker}</Text>
-      <Pill value={customer.install} />
+      <Text style={styles.installSub}>{customer.name} • {customer.tracker} • Sale {customerSaleStatus(customer)}</Text>
+      <View style={styles.installActions}>
+        <Pill value={customer.install} />
+        {customer.install !== "Complete" && <Pressable onPress={() => onInstallComplete(customer.id)} style={styles.miniButton}><Text style={styles.miniButtonText}>Mark installed</Text></Pressable>}
+      </View>
     </View>)}
   </ScrollView>;
 }
 
-function Payments({ customers, onRefresh, refreshing, darkMode = false }) {
-  const totalBalance = customers.reduce((sum, customer) => sum + (customer.balance ?? (customer.payment === "Paid" ? 0 : customer.amount)), 0);
-  const totalPaid = customers.reduce((sum, customer) => sum + (customer.payment === "Paid" ? customer.amount : 0), 0);
+function Commissions({ customers, onRefresh, refreshing, darkMode = false }) {
+  const totalCommission = customers.reduce((sum, customer) => sum + Number(customer.commission || 0), 0);
+  const confirmedSales = customers.filter(customerPaymentComplete);
   return <ScrollView style={darkMode && styles.darkPage} contentContainerStyle={styles.page} refreshControl={pullRefresh(onRefresh, refreshing)}>
     <View style={[styles.summaryCard, darkMode && styles.darkCard]}>
       <View>
-        <Text style={styles.reportLabelDark}>CUSTOMER BALANCES</Text>
-        <Text style={[styles.summaryValue, darkMode && styles.darkText]}>{money(totalBalance)}</Text>
-        <Text style={styles.summaryMeta}>{money(totalPaid)} deposits confirmed</Text>
+        <Text style={styles.reportLabelDark}>TOTAL COMMISSION</Text>
+        <Text style={[styles.summaryValue, darkMode && styles.darkText]}>{money(totalCommission)}</Text>
+        <Text style={styles.summaryMeta}>{confirmedSales.length} customer sale{confirmedSales.length === 1 ? "" : "s"} with confirmed deposits</Text>
       </View>
-      <View style={styles.summaryIcon}><Ionicons name="wallet" color={colors.white} size={24} /></View>
+      <View style={styles.summaryIcon}><Ionicons name="cash" color={colors.white} size={24} /></View>
     </View>
-    <Text style={[styles.sectionTitle, darkMode && styles.darkText]}>Customer balances</Text>
-    {customers.length === 0 && <View style={[styles.empty, darkMode && styles.darkCard]}><Ionicons name="wallet-outline" color={colors.blue} size={42} /><Text style={[styles.emptyText, darkMode && styles.darkText]}>No balances yet</Text><Text style={styles.emptySub}>Customer payment records will appear after onboarding.</Text></View>}
+    <Text style={[styles.sectionTitle, darkMode && styles.darkText]}>Customer commission awards</Text>
+    {customers.length === 0 && <View style={[styles.empty, darkMode && styles.darkCard]}><Ionicons name="cash-outline" color={colors.blue} size={42} /><Text style={[styles.emptyText, darkMode && styles.darkText]}>No commissions yet</Text><Text style={styles.emptySub}>Commission records appear after an assigned bike sale receives a confirmed deposit.</Text></View>}
     {customers.map(customer => {
-      const balance = customer.balance ?? (customer.payment === "Paid" ? 0 : customer.amount);
+      const balance = customerBalance(customer);
       return <View key={`${customer.id}-pay`} style={[styles.listCard, darkMode && styles.darkCard]}>
-      <View style={styles.listIcon}><Ionicons name="wallet" color={colors.green} size={20} /></View>
+      <View style={styles.listIcon}><Ionicons name="cash" color={colors.green} size={20} /></View>
       <View style={styles.listBody}>
         <Text style={[styles.listTitle, darkMode && styles.darkText]}>{customer.name}</Text>
-        <Text style={styles.listSub}>{customer.bike} • Deposit {money(customer.amount)}</Text>
-        <Text style={styles.listMeta}>Balance {money(balance)} • {customer.receipt || "Waiting for M-Pesa callback"}</Text>
+        <Text style={styles.listSub}>{customer.bike} • Payable {money(customer.payableAmount)} • Deposit {money(customer.amount)}</Text>
+        <Text style={styles.listMeta}>Commission {money(customer.commission)} • Balance {money(balance)} • {customer.receipt || "Waiting for M-Pesa callback"}</Text>
       </View>
       <View style={styles.listStatus}>
-        <Pill value={customer.payment} />
+        <Pill value={customer.commission > 0 ? "Earned" : "Pending"} />
       </View>
     </View>;
     })}
   </ScrollView>;
 }
 
-function Reports({ customers, onRefresh, refreshing, darkMode = false }) {
+function Reports({ customers, profile, onRefresh, refreshing, darkMode = false }) {
   const [routeDate, setRouteDate] = useState(new Date().toISOString().slice(0, 10));
   const [reportPeriod, setReportPeriod] = useState("daily");
   const [customerPickerOpen, setCustomerPickerOpen] = useState(false);
@@ -659,6 +732,10 @@ function Reports({ customers, onRefresh, refreshing, darkMode = false }) {
   const [selectedCustomerId, setSelectedCustomerId] = useState(customers[0]?.id || "");
   const [busy, setBusy] = useState(false);
   const [report, setReport] = useState(null);
+  const [password, setPassword] = useState("");
+  const [passwordAttempts, setPasswordAttempts] = useState(0);
+  const [reportAccessBlocked, setReportAccessBlocked] = useState(false);
+  const [passwordPromptVisible, setPasswordPromptVisible] = useState(false);
   const selectedCustomer = customers.find(customer => customer.id === selectedCustomerId) || customers[0];
   const matchingCustomers = customers.filter(customer => `${customer.name} ${customer.bike} ${customer.tracker}`.toLowerCase().includes(customerSearch.trim().toLowerCase()));
   function downloadReport() {
@@ -669,6 +746,31 @@ function Reports({ customers, onRefresh, refreshing, darkMode = false }) {
       setBusy(false);
       setReport({ name: `jixels-agent-${reportPeriod}-route-report-${selectedCustomer.bike.toLowerCase().replace(/[^a-z0-9]+/g, "-")}-${routeDate}.pdf` });
     }, 700);
+  }
+  async function openReport() {
+    if (reportAccessBlocked) return Alert.alert("Account blocked", "Report access is blocked after too many wrong password attempts. Contact admin.");
+    setPassword("");
+    setPasswordPromptVisible(true);
+  }
+  async function verifyReportPassword() {
+    if (!profile?.loginPassword) return Alert.alert("Password check unavailable", "Sign in again before opening protected reports.");
+    if (password === profile.loginPassword) {
+      setPasswordAttempts(0);
+      setPasswordPromptVisible(false);
+      if (report?.uri) await Linking.openURL(report.uri);
+      else Alert.alert("Report opened", report?.name || "Agent route report");
+      return;
+    }
+    const nextAttempts = passwordAttempts + 1;
+    setPasswordAttempts(nextAttempts);
+    setPassword("");
+    if (nextAttempts >= 4) {
+      setReportAccessBlocked(true);
+      setPasswordPromptVisible(false);
+      Alert.alert("Account blocked", "Report access is blocked after the fourth wrong password attempt.");
+      return;
+    }
+    Alert.alert("Wrong password", `${Math.max(0, 4 - nextAttempts)} report access attempt${4 - nextAttempts === 1 ? "" : "s"} remaining.`);
   }
   return <>
   <ScrollView style={[styles.pageScroll, darkMode && styles.darkPage]} contentContainerStyle={styles.pageContent} refreshControl={pullRefresh(onRefresh, refreshing)} keyboardShouldPersistTaps="handled">
@@ -706,7 +808,8 @@ function Reports({ customers, onRefresh, refreshing, darkMode = false }) {
       <Pressable disabled={busy} onPress={downloadReport} style={styles.primaryButton}>{busy ? <ActivityIndicator color={colors.white} /> : <><Ionicons name="download-outline" color={colors.white} size={18} /><Text style={styles.primaryText}>Download route report</Text></>}</Pressable>
     </View>
   </ScrollView>
-  <Modal visible={!!report} transparent animationType="fade" onRequestClose={() => setReport(null)}><View style={styles.successOverlay}><View style={styles.successCard}><View style={styles.successIcon}><Ionicons name="checkmark" size={44} color={colors.white} /></View><Text style={styles.successTitle}>Downloaded successfully</Text><Text style={styles.reportSuccessMessage}>Tap view to open or share the route report.</Text><View style={styles.receiptBox}><Text style={styles.receiptLabel}>DOCUMENT</Text><Text style={styles.reportSuccessEmail}>{report?.name}</Text></View><Pressable onPress={() => Alert.alert("Report", report?.name || "Agent route report")} style={styles.primaryButton}><Ionicons name="open-outline" size={18} color={colors.white} /><Text style={styles.primaryButtonText}>View document</Text></Pressable><Pressable onPress={() => setReport(null)} style={styles.approvalSecondary}><Text style={styles.backToLoginText}>Close</Text></Pressable></View></View></Modal>
+  <Modal visible={!!report} transparent animationType="fade" onRequestClose={() => setReport(null)}><View style={styles.successOverlay}><View style={styles.successCard}><View style={styles.successIcon}><Ionicons name="checkmark" size={44} color={colors.white} /></View><Text style={styles.successTitle}>Downloaded successfully</Text><Text style={styles.reportSuccessMessage}>Tap view and enter your login password to open the report.</Text><View style={styles.receiptBox}><Text style={styles.receiptLabel}>DOCUMENT</Text><Text style={styles.reportSuccessEmail}>{report?.name}</Text></View><Pressable onPress={openReport} style={styles.primaryButton}><Ionicons name="open-outline" size={18} color={colors.white} /><Text style={styles.primaryButtonText}>View document</Text></Pressable><Pressable onPress={() => setReport(null)} style={styles.approvalSecondary}><Text style={styles.backToLoginText}>Close</Text></Pressable></View></View></Modal>
+  <Modal visible={passwordPromptVisible} transparent animationType="fade" onRequestClose={() => setPasswordPromptVisible(false)}><View style={styles.modalOverlay}><View style={styles.depositModal}><View style={styles.depositModalIcon}><Ionicons name="lock-closed-outline" size={26} color={colors.white} /></View><Text style={styles.depositModalTitle}>Confirm report access</Text><Text style={styles.depositModalText}>Enter the password you used to sign in. Three wrong tries are allowed; the fourth blocks report access.</Text><Field label="Login password" value={password} onChangeText={setPassword} secureTextEntry /><Pressable onPress={verifyReportPassword} style={styles.primaryButton}><Ionicons name="shield-checkmark-outline" size={18} color={colors.white} /><Text style={styles.primaryText}>Open protected report</Text></Pressable><Pressable onPress={() => setPasswordPromptVisible(false)} style={styles.modalCancel}><Text style={styles.modalCancelText}>Cancel</Text></Pressable></View></View></Modal>
   </>;
 }
 
@@ -833,6 +936,7 @@ function DepositPrompt({ customer, visible, onCancel, onSubmit }) {
     const depositAmount = Number(amount);
     if (!customer) return;
     if (!Number.isFinite(depositAmount) || depositAmount <= 0) return Alert.alert("Deposit amount", "Enter a valid customer deposit amount.");
+    if (customer.payableAmount > 0 && depositAmount > customer.payableAmount) return Alert.alert("Deposit amount", "The deposit cannot be higher than the total payable amount.");
     if (!phone.trim()) return Alert.alert("Phone number", "Enter the phone number to receive the STK push.");
     onSubmit(customer.id, depositAmount, phone.trim());
   }
@@ -842,7 +946,7 @@ function DepositPrompt({ customer, visible, onCancel, onSubmit }) {
       <View style={styles.depositModal}>
         <View style={styles.depositModalIcon}><Ionicons name="phone-portrait-outline" size={26} color={colors.white} /></View>
         <Text style={styles.depositModalTitle}>Customer deposit</Text>
-        <Text style={styles.depositModalText}>{customer ? `Send STK push to ${customer.name}.` : "Send STK push to customer."}</Text>
+        <Text style={styles.depositModalText}>{customer ? `Send STK push to ${customer.name}. Deposit is deducted from ${money(customer.payableAmount)} total payable.` : "Send STK push to customer."}</Text>
         <Field label="Deposit amount" value={amount} onChangeText={setAmount} keyboardType="numeric" />
         <Field label="Customer phone number" value={phone} onChangeText={setPhone} keyboardType="phone-pad" />
         <Pressable onPress={submit} style={styles.primaryButton}><Ionicons name="paper-plane-outline" size={18} color={colors.white} /><Text style={styles.primaryText}>Send STK push</Text></Pressable>
@@ -868,6 +972,7 @@ function AgentApp({ agent, onLogout }) {
   const [screen, setScreen] = useState("dashboard");
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [customers, setCustomers] = useState(initialCustomers);
+  const [assignedVehicles] = useState(() => normalizeAssignedVehicles(agent));
   const [refreshing, setRefreshing] = useState(false);
   const [isOnline, setIsOnline] = useState(true);
   const [depositCustomerId, setDepositCustomerId] = useState(null);
@@ -888,6 +993,8 @@ function AgentApp({ agent, onLogout }) {
   ]).filter(alert => !deletedAlertIds.has(alert.id)).map(alert => ({ ...alert, unread: !readAlertIds.has(alert.id) })), [customers, deletedAlertIds, readAlertIds]);
   const unread = agentAlerts.filter(alert => alert.unread).length;
   const depositCustomer = customers.find(customer => customer.id === depositCustomerId);
+  const soldVehicleIds = useMemo(() => new Set(customers.map(customer => customer.vehicleId).filter(Boolean)), [customers]);
+  const availableAssignedVehicles = useMemo(() => assignedVehicles.filter(vehicle => !soldVehicleIds.has(vehicle.id)), [assignedVehicles, soldVehicleIds]);
 
   function navigate(nextScreen) {
     if (nextScreen === screen) {
@@ -960,9 +1067,10 @@ function AgentApp({ agent, onLogout }) {
     setCustomers(current => current.map(customer => customer.id === id ? {
       ...customer,
       amount: paidAmount ?? customer.amount,
-      payment: "Paid",
-      balance: 0,
-      commission: Math.max(customer.commission || 0, Math.round(((paidAmount ?? customer.amount) || 0) * 0.2)),
+      payment: Math.max(0, Number(customer.payableAmount || 0) - Number((paidAmount ?? customer.amount) || 0)) === 0 ? "Paid" : "Deposit Paid",
+      balance: Math.max(0, Number(customer.payableAmount || 0) - Number((paidAmount ?? customer.amount) || 0)),
+      saleStatus: customer.install === "Complete" ? "Complete" : "Pending",
+      commission: Math.max(customer.commission || 0, Math.round(((paidAmount ?? customer.amount) || 0) * COMMISSION_RATE)),
       receipt: customer.receipt || `AG${Math.floor(100000 + Math.random() * 899999)}`
     } : customer));
     Notifications.scheduleNotificationAsync({
@@ -973,7 +1081,7 @@ function AgentApp({ agent, onLogout }) {
 
   function requestDeposit(id) {
     const customer = customers.find(item => item.id === id);
-    if (!customer || customer.payment === "Paid") return;
+    if (!customer || customerPaymentComplete(customer)) return;
     setDepositCustomerId(id);
   }
 
@@ -982,7 +1090,7 @@ function AgentApp({ agent, onLogout }) {
     if (!customer) return;
     const receipt = `STK${Math.floor(100000 + Math.random() * 899999)}`;
     setDepositCustomerId(null);
-    setCustomers(current => current.map(item => item.id === id ? { ...item, amount: depositAmount, payment: "Processing", balance: depositAmount, payerPhone, receipt } : item));
+    setCustomers(current => current.map(item => item.id === id ? { ...item, amount: depositAmount, payment: "Processing", balance: Number(item.payableAmount || 0), payerPhone, receipt } : item));
     Notifications.scheduleNotificationAsync({
       content: { title: "STK push sent", body: `${customer.name} has been prompted on ${payerPhone} to pay ${money(depositAmount)}.`, sound: "default" },
       trigger: null
@@ -990,13 +1098,25 @@ function AgentApp({ agent, onLogout }) {
     setTimeout(() => markPaid(id, depositAmount), 1800);
   }
 
+  function markInstallComplete(id) {
+    setCustomers(current => current.map(customer => customer.id === id ? {
+      ...customer,
+      install: "Complete",
+      saleStatus: customerPaymentComplete(customer) ? "Complete" : "Pending"
+    } : customer));
+    Notifications.scheduleNotificationAsync({
+      content: { title: "Tracker installed", body: "Tracker installation record completed.", sound: "default" },
+      trigger: null
+    }).catch(() => {});
+  }
+
   const body = screen === "dashboard" ? <Dashboard compact={compact} customers={customers} navigate={navigate} isOnline={isOnline} onRefresh={refresh} refreshing={refreshing} darkMode={darkMode} />
     : screen === "customers" ? <Customers customers={customers} onDeposit={requestDeposit} onRefresh={refresh} refreshing={refreshing} darkMode={darkMode} />
-    : screen === "onboard" ? <Onboarding addCustomer={addCustomer} navigate={navigate} onRefresh={refresh} refreshing={refreshing} darkMode={darkMode} />
-    : screen === "payments" ? <Payments customers={customers} onRefresh={refresh} refreshing={refreshing} darkMode={darkMode} />
+    : screen === "onboard" ? <Onboarding addCustomer={addCustomer} navigate={navigate} assignedVehicles={availableAssignedVehicles} onRefresh={refresh} refreshing={refreshing} darkMode={darkMode} />
+    : screen === "payments" ? <Commissions customers={customers} onRefresh={refresh} refreshing={refreshing} darkMode={darkMode} />
     : screen === "alerts" ? <Alerts alerts={agentAlerts} markAllRead={() => setDeletedAlertIds(new Set(agentAlerts.map(alert => alert.id)))} markAlertRead={id => setReadAlertIds(current => new Set(current).add(id))} deleteAlerts={ids => setDeletedAlertIds(current => new Set([...current, ...ids]))} onRefresh={refresh} refreshing={refreshing} darkMode={darkMode} />
-    : screen === "trackers" ? <Trackers customers={customers} onRefresh={refresh} refreshing={refreshing} darkMode={darkMode} />
-    : screen === "reports" ? <Reports customers={customers} onRefresh={refresh} refreshing={refreshing} darkMode={darkMode} />
+    : screen === "trackers" ? <Trackers customers={customers} onInstallComplete={markInstallComplete} onRefresh={refresh} refreshing={refreshing} darkMode={darkMode} />
+    : screen === "reports" ? <Reports customers={customers} profile={agentProfile} onRefresh={refresh} refreshing={refreshing} darkMode={darkMode} />
     : screen === "settings" ? <Settings agent={agentProfile} onSave={setAgentProfile} onRefresh={refresh} refreshing={refreshing} darkMode={darkMode} />
     : <Profile agent={agentProfile} onLogout={onLogout} onRefresh={refresh} refreshing={refreshing} darkMode={darkMode} />;
 
@@ -1014,7 +1134,6 @@ function AgentApp({ agent, onLogout }) {
           onAlerts={() => navigate("alerts")}
         />
         <View style={styles.screen}>{body}</View>
-        <BottomNav active={screen} navigate={navigate} />
       </View>
       {drawerOpen && <Pressable accessibilityLabel="Close menu overlay" onPress={() => setDrawerOpen(false)} style={styles.drawerScrim} />}
       {drawerOpen && <Drawer active={screen} unread={unread} onSelect={navigate} onLogout={onLogout} onClose={() => setDrawerOpen(false)} />}
@@ -1155,7 +1274,7 @@ const styles = StyleSheet.create({
   screenInner: { flexGrow: 1 },
   pageScroll: { flex: 1 },
   pageContent: { padding: 14, paddingBottom: 36, gap: 14 },
-  page: { padding: 14, paddingBottom: 96, gap: 13 },
+  page: { padding: 14, paddingBottom: 36, gap: 13 },
   hero: { minHeight: 156, borderRadius: 22, backgroundColor: colors.blueDark, padding: 18, flexDirection: "row", gap: 14, alignItems: "center" },
   heroIcon: { width: 58, height: 58, borderRadius: 19, backgroundColor: colors.blue, alignItems: "center", justifyContent: "center" },
   heroSmall: { color: "#8FC7FF", fontSize: 9, fontWeight: "900", letterSpacing: 1.1 },
@@ -1209,8 +1328,11 @@ const styles = StyleSheet.create({
   installRow: { minHeight: 76, borderRadius: 16, backgroundColor: colors.white, borderWidth: 1, borderColor: colors.line, padding: 13, justifyContent: "center", gap: 4 },
   installName: { color: colors.ink, fontSize: 14, fontWeight: "900" },
   installSub: { color: colors.muted, fontSize: 10 },
+  installActions: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 8, marginTop: 6 },
   miniButton: { minHeight: 30, borderRadius: 15, backgroundColor: colors.blue, paddingHorizontal: 10, alignItems: "center", justifyContent: "center" },
   miniButtonText: { color: colors.white, fontSize: 9, fontWeight: "900" },
+  agreedPaymentNote: { borderRadius: 12, backgroundColor: colors.bluePale, padding: 12, marginBottom: 4, flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
+  agreedPaymentValue: { color: colors.blueDark, fontSize: 14, fontWeight: "900" },
   summaryCard: { minHeight: 118, borderRadius: 20, backgroundColor: colors.bluePale, padding: 17, flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
   summaryValue: { color: colors.ink, fontSize: 24, fontWeight: "900", marginTop: 5 },
   summaryMeta: { color: colors.muted, fontSize: 10, marginTop: 4, fontWeight: "700" },
@@ -1278,7 +1400,7 @@ const styles = StyleSheet.create({
   emptyText: { color: colors.ink, fontSize: 14, fontWeight: "900" },
   emptySub: { color: colors.muted, fontSize: 10, lineHeight: 15, textAlign: "center", paddingHorizontal: 20 },
   profileHero: { minHeight: 190, borderRadius: 22, backgroundColor: colors.blueDark, alignItems: "center", justifyContent: "center", padding: 18 },
-  profileHeroLight: { alignItems: "center", paddingVertical: 15 },
+  profileHeroLight: { alignItems: "center", paddingTop: 24, paddingBottom: 18, marginTop: 8 },
   profileAvatar: { width: 76, height: 76, borderRadius: 25, backgroundColor: colors.blue, alignItems: "center", justifyContent: "center" },
   profilePhoto: { width: 76, height: 76, borderRadius: 25 },
   profileAvatarText: { color: colors.white, fontSize: 24, fontWeight: "900" },

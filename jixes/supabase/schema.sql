@@ -36,6 +36,7 @@ create table if not exists public.bikes (
   model text not null,
   product_type text not null default 'bike' check (product_type in ('bike', 'car', 'tuktuk', 'device', 'other')),
   custom_product_type text,
+  payable_amount numeric(12, 2) not null default 0 check (payable_amount >= 0),
   customer_id uuid references public.customers(id) on delete set null,
   assigned_agent_id uuid references public.profiles(id) on delete set null,
   location text,

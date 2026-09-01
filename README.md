@@ -42,6 +42,33 @@ route history. Connect your tracker provider to insert validated locations into
 `tracker_locations`; implement the M-Pesa provider callback before accepting
 real payments.
 
+## Safaricom Daraja B2C and C2B
+
+Create a Daraja app in the [Safaricom Developer Portal](https://developer.safaricom.co.ke/), choose Sandbox first, and set these as **Supabase Edge Function secrets** (not Vercel variables):
+
+```bash
+supabase secrets set \
+  DARAJA_ENV=sandbox \
+  DARAJA_CONSUMER_KEY=... \
+  DARAJA_CONSUMER_SECRET=... \
+  DARAJA_SHORTCODE=... \
+  DARAJA_INITIATOR_NAME=... \
+  DARAJA_SECURITY_CREDENTIAL=... \
+  DARAJA_B2C_RESULT_URL=https://YOUR_PROJECT_REF.supabase.co/functions/v1/api/v1/mpesa/b2c/result \
+  DARAJA_B2C_TIMEOUT_URL=https://YOUR_PROJECT_REF.supabase.co/functions/v1/api/v1/mpesa/b2c/timeout \
+  DARAJA_C2B_CONFIRMATION_URL=https://YOUR_PROJECT_REF.supabase.co/functions/v1/api/v1/mpesa/c2b/confirmation \
+  DARAJA_C2B_VALIDATION_URL=https://YOUR_PROJECT_REF.supabase.co/functions/v1/api/v1/mpesa/c2b/validation
+```
+
+Deploy the function again after setting secrets. The app’s existing
+`POST /v1/customer/payments/mpesa` now submits a B2C request. B2C sends money
+from your shortcode to a Kenyan phone number; it must only be enabled for an
+authorized business use case. To register C2B callbacks after deployment, an
+authenticated administrator calls `POST /v1/mpesa/c2b/register` once. Customers
+then pay your registered PayBill/Till and Safaricom calls the validation and
+confirmation URLs. Use `DARAJA_ENV=production` only after Safaricom approves
+your production shortcode and credentials.
+
 ## Environment values
 
 Set these in Vercel for **Production**, **Preview**, and **Development**:

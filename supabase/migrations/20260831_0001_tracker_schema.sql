@@ -62,17 +62,39 @@ create table if not exists public.payment_requests (
   updated_at timestamptz not null default now()
 );
 
+create table if not exists public.daraja_transactions (
+  id uuid primary key default gen_random_uuid(),
+  direction text not null check (direction in ('B2C', 'C2B')),
+  transaction_id text unique,
+  conversation_id text,
+  originator_conversation_id text,
+  checkout_request_id text,
+  account_reference text,
+  phone text,
+  amount numeric(12,2),
+  status text not null default 'received',
+  payload jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create index if not exists daraja_transactions_reference_idx on public.daraja_transactions(account_reference);
+create index if not exists daraja_transactions_created_idx on public.daraja_transactions(created_at desc);
+
 alter table public.profiles enable row level security;
 alter table public.vehicles enable row level security;
 alter table public.tracker_locations enable row level security;
 alter table public.alerts enable row level security;
 alter table public.payment_requests enable row level security;
+alter table public.daraja_transactions enable row level security;
 
 create policy "users manage their profile" on public.profiles for all using (id = auth.uid()) with check (id = auth.uid());
 create policy "users manage their vehicles" on public.vehicles for all using (owner_id = auth.uid()) with check (owner_id = auth.uid());
 create policy "users read their vehicle locations" on public.tracker_locations for select using (exists (select 1 from public.vehicles v where v.id = vehicle_id and v.owner_id = auth.uid()));
 create policy "users manage their alerts" on public.alerts for all using (owner_id = auth.uid()) with check (owner_id = auth.uid());
 create policy "users read their payments" on public.payment_requests for select using (owner_id = auth.uid());
+create policy "users read their daraja payments" on public.daraja_transactions for select using (
+  exists (select 1 from public.payment_requests p where p.idempotency_key = daraja_transactions.account_reference and p.owner_id = auth.uid())
+);
 
 create or replace function public.handle_new_user()
 returns trigger language plpgsql security definer set search_path = public as $$

@@ -52,6 +52,15 @@
   const passwordInput = (name, autocomplete, placeholder) => `<span class="password-field"><input name="${name}" type="password" placeholder="${placeholder}" autocomplete="${autocomplete}" required><button type="button" class="password-toggle" data-toggle-password aria-label="Show password">${icons.eye}</button></span>`;
   const isValidEmail = value => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
   const isStrongPassword = value => /[a-z]/.test(value) && /[A-Z]/.test(value) && /\d/.test(value) && /[^A-Za-z0-9]/.test(value) && !/\s/.test(value) && value.length >= 8;
+  const safeLoginMessage = error => {
+    const message = String(error?.message || "");
+    console.error("Finance authentication failed", error);
+    if (/invalid[_ ]credentials|invalid login|incorrect email|password/i.test(message)) return "Incorrect email or password. Please check your details and try again.";
+    if (/account[_ ]locked|temporarily locked/i.test(message)) return "Your account has been temporarily locked because of too many failed login attempts. Please contact an administrator or use account recovery.";
+    if (/permission|not approved|not authorized/i.test(message)) return "Your account is not approved for the Finance portal. Please contact an administrator.";
+    if (/network|fetch|offline|connect/i.test(message)) return "Unable to connect to the server. Check your internet connection and try again.";
+    return "Authentication temporarily unavailable. Please try again in a few moments.";
+  };
   const commissionRate = () => Math.max(0, Number(data.settings.commissionRate || 5)) / 100;
   const sameDay = (left, right) => left && right && left.toDateString() === right.toDateString();
   const parseDate = value => {
@@ -324,7 +333,7 @@
         }
         startWorkspaceLoading();
       } catch (error) {
-        root.innerHTML = loginView(error instanceof Error ? error.message : "Finance access could not be verified.");
+        root.innerHTML = loginView(safeLoginMessage(error));
         bindLoginEvents();
       }
     });

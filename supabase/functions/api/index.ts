@@ -57,6 +57,19 @@ function tramigoLocation(report: any) {
   return { latitude, longitude, speedKph: Number(source?.Speed ?? source?.speed ?? 0), recordedAt: source?.DateTimeActual ?? report?.DateTimeActual ?? new Date().toISOString() };
 }
 
+async function registerPortalUser(client: ReturnType<typeof createClient>, admin: ReturnType<typeof createClient>, body: Record<string, unknown>, role: "agent" | "finance") {
+  const email = String(body.email ?? "").trim().toLowerCase();
+  const password = String(body.password ?? "");
+  const fullName = String(body.name ?? body.fullName ?? "").trim();
+  const phone = String(body.phone ?? "").trim();
+  if (!email || !password || !fullName) return fail("Complete your name, email, and password.", 422, "INVALID_REGISTRATION");
+  const { data, error } = await client.auth.signUp({ email, password, options: { data: { full_name: fullName, phone } } });
+  if (error || !data.user) { console.error("Portal registration failed", error); return fail("Registration could not be completed. Please try again.", 400, "REGISTRATION_FAILED"); }
+  const { error: profileError } = await admin.from("profiles").upsert({ id: data.user.id, full_name: fullName, email, phone, role, account_status: "pending", updated_at: new Date().toISOString() }, { onConflict: "id" });
+  if (profileError) { console.error("Portal profile provisioning failed", profileError); return fail("Your registration was received but the profile is still being prepared. Please contact an administrator.", 503, "PROFILE_PROVISIONING_FAILED"); }
+  return response({ status: "pending", message: "Registration submitted for administrator approval." }, 201);
+}
+
 const customerRoles = new Set(["customer"]);
 const agentRoles = new Set(["agent", "support_agent"]);
 
@@ -139,6 +152,8 @@ Deno.serve(async (request) => {
     if (error) return fail(error.message, 400, "REGISTRATION_FAILED");
     return response({ user: data.user, message: "Check your email to confirm your account." }, 201);
   }
+  if (route === "/v1/agent/auth/register" && request.method === "POST") return registerPortalUser(client, admin, body, "agent");
+  if (route === "/v1/finance/auth/register" && request.method === "POST") return registerPortalUser(client, admin, body, "finance");
   if (route === "/v1/auth/request-admin-otp" && request.method === "POST") {
     const identifier = String(body.identifier ?? "").trim(); const purpose = String(body.purpose ?? "app-access");
     const email = identifier.includes("@");

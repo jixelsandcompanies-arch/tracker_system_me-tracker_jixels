@@ -14,7 +14,7 @@ export default function AgentAccountsView() {
     if (!hasSupabaseConfig) return setMessage("Connect Supabase to view agent registrations.");
     const result = await listRecords("profiles", { pageSize: 1000 });
     if (result.error) return setMessage(result.error.message);
-    setAccounts(result.data.filter((account) => ["support_agent", "agent", "Support agent"].includes(account.role)));
+    setAccounts(result.data.filter((account) => ["support_agent", "agent", "finance", "finance_officer", "Support agent"].includes(account.role)));
     setMessage("");
   };
   useEffect(() => { load(); return subscribeToTable("profiles", load); }, []);

@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { demoCredentials, getSession, signIn, signOut, touchSession } from "./lib/auth";
+import { getSession, signIn, signOut, touchSession } from "./lib/auth";
 import { canAccess, recordAudit } from "./lib/security";
 import { createRecord, hasSupabaseConfig, listRecords, subscribeToTable, updateRecord } from "./lib/data";
 import EnhancedModuleView from "./components/EnhancedModuleView";
@@ -358,9 +358,7 @@ function LoginScreen({ onSignIn }) {
   }
 
   function useDemoAccount() {
-    setEmail(demoCredentials.email);
-    setPassword(demoCredentials.password);
-    setError("");
+    setError("Demo credentials are disabled. Configure Supabase Auth to sign in.");
   }
 
   return <main className="login-screen"><section className="login-shell"><div className="login-story"><div className="login-brand"><img className="login-logo" src="https://www.jixels.com/assets/jixels-logo-form-ni-tenje-cropped.jpeg" alt="Jixels Form Ni Tenje" /></div><div className="login-story-copy"><span className="login-kicker"><span/> FLEET OPERATIONS PLATFORM</span><h1>Every tracker.<br/>One clear view.</h1><p>Manage customers, connected products, tracker health, payments, and support from one secure operations workspace.</p><div className="login-feature-grid"><div><span className="login-feature-icon"><Radio size={19}/></span><strong>Live operations</strong><small>Tracker health and last-seen status</small></div><div><span className="login-feature-icon"><ShieldCheck size={19}/></span><strong>Controlled access</strong><small>Role-based staff permissions</small></div></div></div><div className="login-system-status"><span><i/> Systems operational</span><small>Secure Jixels workspace</small></div></div><div className="login-form-panel"><form className="login-card" onSubmit={submit}><div className="login-form-mark"><ShieldCheck size={20}/></div><div className="eyebrow">ADMIN WORKSPACE</div><h2>Welcome back</h2><p>Enter your details to continue to Jixels Admin.</p><label>Email address<input value={email} onChange={(event) => setEmail(event.target.value)} type="email" placeholder="you@jixels.com" autoComplete="email" required /></label><label>Password<input value={password} onChange={(event) => setPassword(event.target.value)} type="password" placeholder="Enter your password" autoComplete="current-password" required /></label>{error && <div className="login-error"><AlertTriangle size={15} />{error}</div>}<button className="button primary login-button" disabled={loading}>{loading ? "Signing in..." : "Sign in securely"}<ArrowUpRight size={16}/></button>{!hasSupabaseConfig && <button className="demo-button" type="button" onClick={useDemoAccount}>Fill demo credentials</button>}<small className="login-security-note"><ShieldCheck size={13}/> Protected administrative access</small></form><footer className="login-panel-footer">© 2026 Jixels Technologies</footer></div></section></main>;

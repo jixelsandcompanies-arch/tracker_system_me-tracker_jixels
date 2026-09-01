@@ -7,13 +7,6 @@ let activeSession = null;
 const failedAttempts = new Map();
 const blockedAccounts = new Set();
 
-const demoAccount = {
-  email: "admin@jixels.co.za",
-  name: "Demo administrator",
-  role: "Super administrator"
-};
-
-
 export function getSession() {
   if (!activeSession || Date.now() > activeSession.expiresAt || Date.now() - activeSession.lastActivity > INACTIVITY_LIMIT) {
     signOut();
@@ -64,11 +57,7 @@ export async function signIn(email, password) {
     }
   }
 
-  if (normalizedLogin(email) !== demoAccount.email || password !== "jixels-admin") return { error: registerFailedAttempt(email) };
-  const session = { ...demoAccount, expiresAt: Date.now() + SESSION_TTL, lastActivity: Date.now() };
-  activeSession = session;
-  clearFailedAttempts(email);
-  return { data: session };
+  return { error: "Admin authentication is not configured. Set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY." };
 }
 
 export function signOut() {
@@ -83,5 +72,4 @@ export function touchSession() {
   return refreshed;
 }
 
-export const demoCredentials = { email: demoAccount.email, password: "jixels-admin" };
 

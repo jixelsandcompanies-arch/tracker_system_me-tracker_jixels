@@ -1,5 +1,6 @@
 const apiUrl = process.env.EXPO_PUBLIC_JIXELS_AGENT_API_URL?.trim().replace(/\/$/, "")
-  || process.env.EXPO_PUBLIC_JIXELS_API_URL?.trim().replace(/\/$/, "");
+  || process.env.EXPO_PUBLIC_JIXELS_API_URL?.trim().replace(/\/$/, "")
+  || "https://tpzebfvhvjsezynqgdns.supabase.co/functions/v1/api";
 
 export const config = Object.freeze({
   apiUrl: apiUrl || null,

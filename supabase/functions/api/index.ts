@@ -22,6 +22,10 @@ async function darajaPost(path: string, payload: unknown) {
   if (!result.ok) throw new Error(data.errorMessage ?? data.errorDescription ?? "Daraja request failed.");
   return data;
 }
+function stkPassword(timestamp: string) {
+  const shortcode = Deno.env.get("DARAJA_SHORTCODE") ?? "";
+  return btoa(`${shortcode}${Deno.env.get("DARAJA_PASSKEY") ?? ""}${timestamp}`);
+}
 
 Deno.serve(async (request) => {
   if (request.method === "OPTIONS") return new Response(null, { headers: cors });
@@ -52,6 +56,11 @@ Deno.serve(async (request) => {
   }
   if (route === "/v1/mpesa/b2c/timeout" && request.method === "POST") {
     const result = body.Result ?? body; await admin.from("daraja_transactions").insert({ direction: "B2C", conversation_id: result.ConversationID ?? null, originator_conversation_id: result.OriginatorConversationID ?? null, status: "timeout", payload: body });
+    return response({ ResultCode: 0, ResultDesc: "Accepted" });
+  }
+  if (route === "/v1/mpesa/stk/callback" && request.method === "POST") {
+    const callback = body.Body?.stkCallback ?? {}; const items = Object.fromEntries((callback.CallbackMetadata?.Item ?? []).map((item: { Name: string; Value?: unknown }) => [item.Name, item.Value]));
+    await admin.from("daraja_transactions").upsert({ direction: "C2B", checkout_request_id: callback.CheckoutRequestID ?? null, transaction_id: items.MpesaReceiptNumber ?? null, phone: items.PhoneNumber ?? null, amount: Number(items.Amount ?? 0), status: Number(callback.ResultCode) === 0 ? "completed" : "failed", payload: body, updated_at: new Date().toISOString() }, { onConflict: "transaction_id" });
     return response({ ResultCode: 0, ResultDesc: "Accepted" });
   }
 
@@ -91,7 +100,7 @@ Deno.serve(async (request) => {
     const { data: existing } = await client.from("payment_requests").select("id,status").eq("idempotency_key", idempotencyKey).maybeSingle(); if (existing) return response(existing);
     const { data: vehicle } = await client.from("vehicles").select("id").eq("id", body.vehicleId).single(); if (!vehicle) return fail("Vehicle not found.", 404, "NOT_FOUND");
     const { data: payment, error } = await client.from("payment_requests").insert({ owner_id: user.id, vehicle_id: vehicle.id, idempotency_key: idempotencyKey, amount, phone, status: "processing" }).select("id,status").single(); if (error) return fail(error.message, 400);
-    try { const result = await darajaPost("/mpesa/b2c/v3/paymentrequest", { InitiatorName: Deno.env.get("DARAJA_INITIATOR_NAME"), SecurityCredential: Deno.env.get("DARAJA_SECURITY_CREDENTIAL"), CommandID: "BusinessPayment", Amount: amount, PartyA: Deno.env.get("DARAJA_SHORTCODE"), PartyB: phone, Remarks: `Tracker payment ${idempotencyKey}`, QueueTimeOutURL: Deno.env.get("DARAJA_B2C_TIMEOUT_URL"), ResultURL: Deno.env.get("DARAJA_B2C_RESULT_URL"), Occasion: "Tracker service" }); await client.from("daraja_transactions").insert({ direction: "B2C", conversation_id: result.ConversationID ?? null, originator_conversation_id: result.OriginatorConversationID ?? null, account_reference: idempotencyKey, phone, amount, status: "submitted", payload: result }); return response({ ...payment, ...result }, 202); }
+    try { const timestamp = new Date().toISOString().replace(/[-:TZ.]/g, "").slice(0, 14); const result = await darajaPost("/mpesa/stkpush/v1/processrequest", { BusinessShortCode: Deno.env.get("DARAJA_SHORTCODE"), Password: stkPassword(timestamp), Timestamp: timestamp, TransactionType: "CustomerPayBillOnline", Amount: amount, PartyA: phone, PartyB: Deno.env.get("DARAJA_SHORTCODE"), PhoneNumber: phone, CallBackURL: Deno.env.get("DARAJA_STK_CALLBACK_URL"), AccountReference: idempotencyKey.slice(0, 12), TransactionDesc: "Tracker service payment" }); await client.from("daraja_transactions").insert({ direction: "C2B", checkout_request_id: result.CheckoutRequestID ?? null, account_reference: idempotencyKey, phone, amount, status: "submitted", payload: result }); return response({ ...payment, ...result }, 202); }
     catch (cause) { await client.from("payment_requests").update({ status: "failed", updated_at: new Date().toISOString() }).eq("id", payment.id); return fail(cause instanceof Error ? cause.message : "M-Pesa request failed.", 502, "MPESA_ERROR"); }
   }
   if (route === "/v1/customer/profile" && request.method === "PATCH") {

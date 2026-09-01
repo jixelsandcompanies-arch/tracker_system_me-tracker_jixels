@@ -54,6 +54,8 @@ supabase secrets set \
   DARAJA_SHORTCODE=... \
   DARAJA_INITIATOR_NAME=... \
   DARAJA_SECURITY_CREDENTIAL=... \
+  DARAJA_PASSKEY=... \
+  DARAJA_STK_CALLBACK_URL=https://YOUR_PROJECT_REF.supabase.co/functions/v1/api/v1/mpesa/stk/callback \
   DARAJA_B2C_RESULT_URL=https://YOUR_PROJECT_REF.supabase.co/functions/v1/api/v1/mpesa/b2c/result \
   DARAJA_B2C_TIMEOUT_URL=https://YOUR_PROJECT_REF.supabase.co/functions/v1/api/v1/mpesa/b2c/timeout \
   DARAJA_C2B_CONFIRMATION_URL=https://YOUR_PROJECT_REF.supabase.co/functions/v1/api/v1/mpesa/c2b/confirmation \
@@ -61,9 +63,9 @@ supabase secrets set \
 ```
 
 Deploy the function again after setting secrets. The app’s existing
-`POST /v1/customer/payments/mpesa` now submits a B2C request. B2C sends money
-from your shortcode to a Kenyan phone number; it must only be enabled for an
-authorized business use case. To register C2B callbacks after deployment, an
+`POST /v1/customer/payments/mpesa` uses Daraja STK Push to collect a C2B payment
+from the customer. B2C sends money from your shortcode to a Kenyan phone number
+and must only be exposed to an authorized server-side admin workflow. To register C2B callbacks after deployment, an
 authenticated administrator calls `POST /v1/mpesa/c2b/register` once. Customers
 then pay your registered PayBill/Till and Safaricom calls the validation and
 confirmation URLs. Use `DARAJA_ENV=production` only after Safaricom approves

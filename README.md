@@ -42,6 +42,17 @@ route history. Connect your tracker provider to insert validated locations into
 `tracker_locations`; implement the M-Pesa provider callback before accepting
 real payments.
 
+## Tramigo Cloud
+
+Set `TRAMIGO_API_BASE_URL`, `TRAMIGO_USERNAME`, and `TRAMIGO_PASSWORD` as
+Supabase Edge Function secrets. Vehicles must have their Tramigo numeric device
+ID in `vehicles.tracker_imei` (the existing column name is retained for app
+compatibility). The API adapter authenticates against `/api/login`, then reads
+the latest report from `/api/reports/last_location/{deviceId}` and stores it in
+`tracker_locations`. This follows Tramigo Cloud API v1.7 conventions described
+in the supplied API reference. Do not expose these credentials in Vercel or
+the mobile app.
+
 ## Safaricom Daraja B2C and C2B
 
 Create a Daraja app in the [Safaricom Developer Portal](https://developer.safaricom.co.ke/), choose Sandbox first, and set these as **Supabase Edge Function secrets** (not Vercel variables):

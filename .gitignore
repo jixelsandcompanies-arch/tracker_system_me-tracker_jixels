@@ -11,6 +11,7 @@ dist/
 **/dist/
 .tmp-*/
 **/.tmp-*/
+supabase/.temp/
 .env
 **/.env
 *.jks

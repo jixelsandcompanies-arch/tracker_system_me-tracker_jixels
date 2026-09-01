@@ -26,6 +26,24 @@ function stkPassword(timestamp: string) {
   const shortcode = Deno.env.get("DARAJA_SHORTCODE") ?? "";
   return btoa(`${shortcode}${Deno.env.get("DARAJA_PASSKEY") ?? ""}${timestamp}`);
 }
+async function tramigoRequest(path: string) {
+  const base = (Deno.env.get("TRAMIGO_API_BASE_URL") ?? "https://api.tracking.tramigocloud.com").replace(/\/$/, "");
+  const username = Deno.env.get("TRAMIGO_USERNAME"); const password = Deno.env.get("TRAMIGO_PASSWORD");
+  if (!username || !password) throw new Error("Tramigo credentials are not configured.");
+  const login = await fetch(`${base}/api/login`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ username, password }) });
+  const session = await login.json().catch(() => ({}));
+  if (!login.ok || !session.access_token) throw new Error("Tramigo authentication failed.");
+  const result = await fetch(`${base}${path}`, { headers: { Authorization: `Bearer ${session.access_token}`, Accept: "application/json" } });
+  const data = await result.json().catch(() => ({}));
+  if (!result.ok) throw new Error(data.message ?? "Tramigo request failed.");
+  return data;
+}
+function tramigoLocation(report: any) {
+  const source = report?.main_reports?.[0] ?? report?.mainReports?.[0] ?? report;
+  const latitude = Number(source?.Latitude ?? source?.latitude); const longitude = Number(source?.Longitude ?? source?.longitude);
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return null;
+  return { latitude, longitude, speedKph: Number(source?.Speed ?? source?.speed ?? 0), recordedAt: source?.DateTimeActual ?? report?.DateTimeActual ?? new Date().toISOString() };
+}
 
 Deno.serve(async (request) => {
   if (request.method === "OPTIONS") return new Response(null, { headers: cors });
@@ -110,10 +128,17 @@ Deno.serve(async (request) => {
   const locationMatch = route.match(/^\/v1\/customer\/motorcycles\/([^/]+)\/location$/);
   if (locationMatch && request.method === "GET") {
     const vehicleId = decodeURIComponent(locationMatch[1]);
-    const { data: vehicle } = await client.from("vehicles").select("id,registration,model,vehicle_type").eq("id", vehicleId).single();
+    const { data: vehicle } = await client.from("vehicles").select("id,registration,model,vehicle_type,tracker_imei").eq("id", vehicleId).single();
     if (!vehicle) return fail("Vehicle not found.", 404, "NOT_FOUND");
-    const { data: location } = await client.from("tracker_locations").select("latitude,longitude,speed_kph,heading,accuracy_meters,recorded_at").eq("vehicle_id", vehicleId).order("recorded_at", { ascending: false }).limit(1).maybeSingle();
-    return response({ ...vehicle, location: location && { latitude: location.latitude, longitude: location.longitude, speedKph: location.speed_kph, heading: location.heading, accuracyMeters: location.accuracy_meters, recordedAt: location.recorded_at } });
+    let location = null;
+    if (vehicle.tracker_imei && Deno.env.get("TRAMIGO_USERNAME")) {
+      try {
+        const tramigo = tramigoLocation(await tramigoRequest(`/api/reports/last_location/${encodeURIComponent(vehicle.tracker_imei)}`));
+        if (tramigo) { await admin.from("tracker_locations").insert({ vehicle_id: vehicleId, latitude: tramigo.latitude, longitude: tramigo.longitude, speed_kph: tramigo.speedKph, recorded_at: tramigo.recordedAt }); location = { latitude: tramigo.latitude, longitude: tramigo.longitude, speedKph: tramigo.speedKph, recordedAt: tramigo.recordedAt }; }
+      } catch (_) { /* fall back to the last synced location */ }
+    }
+    if (!location) { const { data: saved } = await client.from("tracker_locations").select("latitude,longitude,speed_kph,heading,accuracy_meters,recorded_at").eq("vehicle_id", vehicleId).order("recorded_at", { ascending: false }).limit(1).maybeSingle(); location = saved && { latitude: saved.latitude, longitude: saved.longitude, speedKph: saved.speed_kph, heading: saved.heading, accuracyMeters: saved.accuracy_meters, recordedAt: saved.recorded_at }; }
+    return response({ ...vehicle, location });
   }
   const routeMatch = route.match(/^\/v1\/customer\/motorcycles\/([^/]+)\/route$/);
   if (routeMatch && request.method === "GET") {

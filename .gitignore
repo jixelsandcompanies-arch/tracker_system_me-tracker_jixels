@@ -23,3 +23,6 @@ customer-emulator-current.png
 finance-*.png
 .git-backup-*/
 **/.git-backup-*/
+
+.vercel
+.env*

@@ -318,7 +318,8 @@
           if (!name || !phone) throw new Error("Complete your full name and phone number.");
           if (password !== confirm) throw new Error("Passwords do not match.");
           if (!isStrongPassword(password)) throw new Error("Use 8+ characters with uppercase, lowercase, number, and special character.");
-          session = await registerFinanceUser({ name, email, phone, password });
+          const registration = await registerFinanceUser({ name, email, phone, password });
+          root.innerHTML = loginView(registration.message || "Finance registration submitted for administrator approval."); bindLoginEvents(); return;
         } else {
           session = await authenticateFinanceUser(email, password);
         }

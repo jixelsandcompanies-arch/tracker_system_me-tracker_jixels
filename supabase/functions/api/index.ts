@@ -57,7 +57,7 @@ function tramigoLocation(report: any) {
   return { latitude, longitude, speedKph: Number(source?.Speed ?? source?.speed ?? 0), recordedAt: source?.DateTimeActual ?? report?.DateTimeActual ?? new Date().toISOString() };
 }
 
-async function registerPortalUser(client: ReturnType<typeof createClient>, admin: ReturnType<typeof createClient>, body: Record<string, unknown>, role: "agent" | "finance") {
+async function registerPortalUser(client: ReturnType<typeof createClient>, admin: ReturnType<typeof createClient>, body: Record<string, unknown>, role: "customer" | "agent" | "finance") {
   const email = String(body.email ?? "").trim().toLowerCase();
   const password = String(body.password ?? "");
   const fullName = String(body.name ?? body.fullName ?? "").trim();
@@ -147,11 +147,7 @@ Deno.serve(async (request) => {
   if (route === "/v1/agent/auth/login" && request.method === "POST") {
     return portalSignIn(client, admin, body, agentRoles);
   }
-  if (route === "/v1/auth/register" && request.method === "POST") {
-    const { data, error } = await client.auth.signUp({ email: String(body.email ?? ""), password: String(body.password ?? ""), options: { data: { full_name: body.fullName ?? body.name, phone: body.phone } } });
-    if (error) return fail(error.message, 400, "REGISTRATION_FAILED");
-    return response({ user: data.user, message: "Check your email to confirm your account." }, 201);
-  }
+  if (route === "/v1/auth/register" && request.method === "POST") return registerPortalUser(client, admin, body, "customer");
   if (route === "/v1/agent/auth/register" && request.method === "POST") return registerPortalUser(client, admin, body, "agent");
   if (route === "/v1/finance/auth/register" && request.method === "POST") return registerPortalUser(client, admin, body, "finance");
   if (route === "/v1/auth/request-admin-otp" && request.method === "POST") {

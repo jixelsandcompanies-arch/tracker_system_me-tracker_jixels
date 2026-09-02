@@ -27,7 +27,19 @@ Deno.serve(async (request) => {
   await admin.from("approval_otps").update({ consumed_at: new Date().toISOString() }).eq("application_id", application.id).is("consumed_at", null);
   const { error: otpError } = await admin.from("approval_otps").insert({ application_id: application.id, identifier, code_hash: codeHash, expires_at: new Date(Date.now() + 10 * 60_000).toISOString() });
   if (otpError) return json({ message: otpError.message }, 500);
-  await admin.from("screening_applications").update({ status: "approved", reviewed_by: user.id, reviewed_at: new Date().toISOString(), approved_at: new Date().toISOString() }).eq("id", application.id);
+  const now = new Date().toISOString();
+  const { error: applicationError } = await admin.from("screening_applications")
+    .update({ status: "approved", reviewed_by: user.id, reviewed_at: now, approved_at: now })
+    .eq("id", application.id);
+  if (applicationError) return json({ message: applicationError.message }, 500);
+  // Customer sign-in is authorized from the shared profile table.  Approving a
+  // screening application without this update made an approved customer remain
+  // blocked in the customer portal.
+  const profileQuery = application.email
+    ? admin.from("profiles").update({ account_status: "approved", updated_at: now }).ilike("email", application.email)
+    : admin.from("profiles").update({ account_status: "approved", updated_at: now }).eq("phone", application.phone);
+  const { error: profileError } = await profileQuery;
+  if (profileError) return json({ message: profileError.message }, 500);
   await admin.from("customer_notifications").insert({ customer_id: application.customer_id, recipient_email: application.email, recipient_phone: application.phone, kind: "account_approved", title: "Your Jixels account is approved", message: `Your one-time login code is ${code}. It expires in 10 minutes.` });
   return json({ approved: true, notificationCreated: true });
 });

@@ -1,5 +1,14 @@
 /* Finance portal shell: no React, Babel, or CDN dependency required. */
 (function () {
+  const showFatalError = error => {
+    console.error("Finance portal runtime error", error);
+    const target = document.getElementById("root");
+    if (!target) return;
+    target.innerHTML = '<main class="login-screen"><section class="login-shell"><div class="login-form-panel"><div class="login-card"><div class="login-form-mark">!</div><div class="eyebrow">FINANCE WORKSPACE</div><h2>Something went wrong</h2><p>We could not open the Finance portal. Please refresh and try again.</p><button class="button button-primary login-button" type="button" onclick="window.location.reload()">Try again</button></div></div></section></main>';
+  };
+  window.addEventListener("error", event => showFatalError(event.error || event.message));
+  window.addEventListener("unhandledrejection", event => showFatalError(event.reason));
+  try {
   const { readData, saveData, registerFinanceUser, authenticateFinanceUser, money } = window.FinanceStore;
   const root = document.getElementById("root");
   let data = readData();
@@ -616,4 +625,7 @@
   window.addEventListener("offline", () => { online = false; render(); });
   if (session) startWorkspaceLoading();
   else render();
+  } catch (error) {
+    showFatalError(error);
+  }
 })();

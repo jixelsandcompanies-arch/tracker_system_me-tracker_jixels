@@ -119,9 +119,15 @@ The existing Live Tracking interface is intentionally stable. `src/demoData.js` 
 - `POST /v1/auth/register`
 - `POST /v1/auth/login` → `{ accessToken, expiresAt?, user }` or `{ session: { accessToken, expiresAt?, user } }`
 - `POST /v1/auth/request-password-reset`
+- `GET /v1/auth/account-status?email=...`
+- `POST /v1/agent/auth/register`
+- `POST /v1/agent/auth/login`
+- `POST /v1/agent/auth/request-password-reset`
+- `POST /v1/finance/auth/register`
+- `POST /v1/finance/auth/login`
+- `POST /v1/finance/auth/request-password-reset`
 - `POST /v1/auth/verify-admin-otp`
 - `POST /v1/auth/request-admin-otp`
-- `GET /v1/auth/account-status?email=...`
 - `GET /v1/customer/overview`
 - `PATCH /v1/customer/profile`
 - `GET /v1/customer/payments`

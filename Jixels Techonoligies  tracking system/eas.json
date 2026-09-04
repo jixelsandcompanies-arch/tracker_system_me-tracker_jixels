@@ -11,11 +11,19 @@
     "preview": {
       "distribution": "internal",
       "android": { "buildType": "apk" },
-      "env": { "EXPO_PUBLIC_DEMO_MODE": "false" }
+      "env": {
+        "EXPO_PUBLIC_DEMO_MODE": "false",
+        "EXPO_PUBLIC_JIXELS_API_URL": "https://tpzebfvhvjsezynqgdns.supabase.co/functions/v1/api",
+        "EXPO_PUBLIC_EAS_PROJECT_ID": "d39d37aa-156b-4bfd-b74d-c2fb8aed6bb6"
+      }
     },
     "production": {
       "autoIncrement": true,
-      "env": { "EXPO_PUBLIC_DEMO_MODE": "false" }
+      "env": {
+        "EXPO_PUBLIC_DEMO_MODE": "false",
+        "EXPO_PUBLIC_JIXELS_API_URL": "https://tpzebfvhvjsezynqgdns.supabase.co/functions/v1/api",
+        "EXPO_PUBLIC_EAS_PROJECT_ID": "d39d37aa-156b-4bfd-b74d-c2fb8aed6bb6"
+      }
     }
   },
   "submit": {

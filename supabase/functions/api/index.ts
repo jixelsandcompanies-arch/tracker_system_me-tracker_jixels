@@ -72,6 +72,8 @@ async function registerPortalUser(client: ReturnType<typeof createClient>, admin
 
 const customerRoles = new Set(["customer"]);
 const agentRoles = new Set(["agent", "support_agent"]);
+const financeRoles = new Set(["finance", "finance_officer", "admin", "super_admin"]);
+const approvedStatuses = new Set(["active", "approved"]);
 
 async function portalSignIn(
   client: ReturnType<typeof createClient>,
@@ -94,13 +96,60 @@ async function portalSignIn(
     console.error("Profile load failed after sign-in", profileError);
     return fail("Your account profile could not be loaded. Please contact an administrator.", 503, "PROFILE_UNAVAILABLE");
   }
-  if (!allowedRoles.has(profile.role) || !["active", "approved"].includes(profile.account_status)) {
+  if (!allowedRoles.has(profile.role) || !approvedStatuses.has(profile.account_status)) {
     return fail("You don't have permission to access this portal.", 403, "PORTAL_ACCESS_DENIED");
   }
   return response({
     accessToken: data.session.access_token,
     expiresAt: new Date(data.session.expires_at! * 1000).toISOString(),
     user: { id: data.user.id, email: data.user.email, name: profile.full_name, phone: profile.phone, role: profile.role },
+  });
+}
+
+async function requestPortalPasswordReset(
+  client: ReturnType<typeof createClient>,
+  admin: ReturnType<typeof createClient>,
+  body: Record<string, unknown>,
+  allowedRoles: Set<string>,
+) {
+  const email = String(body.email ?? "").trim().toLowerCase();
+  if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return fail("A valid email address is required.", 422, "INVALID_EMAIL");
+
+  const { data: profile, error: profileError } = await admin
+    .from("profiles")
+    .select("role,account_status")
+    .eq("email", email)
+    .maybeSingle();
+
+  if (!profileError && profile && allowedRoles.has(profile.role) && approvedStatuses.has(profile.account_status)) {
+    const redirectTo = Deno.env.get("PASSWORD_RESET_REDIRECT_URL") ?? Deno.env.get("SITE_URL") ?? undefined;
+    const { error } = await client.auth.resetPasswordForEmail(email, redirectTo ? { redirectTo } : undefined);
+    if (error) console.error("Password reset request failed", error);
+  }
+
+  return response({ accepted: true, message: "If an approved account exists, reset instructions will be sent." });
+}
+
+async function accountStatus(admin: ReturnType<typeof createClient>, url: URL) {
+  const email = String(url.searchParams.get("email") ?? "").trim().toLowerCase();
+  if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return fail("A valid email address is required.", 422, "INVALID_EMAIL");
+
+  const { data: profile, error } = await admin
+    .from("profiles")
+    .select("role,account_status")
+    .eq("email", email)
+    .maybeSingle();
+  if (error) {
+    console.error("Account status lookup failed", error);
+    return fail("Account status is temporarily unavailable.", 503, "ACCOUNT_STATUS_UNAVAILABLE");
+  }
+
+  const status = profile?.account_status === "active" ? "approved" : profile?.account_status ?? "pending";
+  return response({
+    status,
+    role: profile?.role ?? null,
+    approved: approvedStatuses.has(profile?.account_status ?? ""),
+    message: approvedStatuses.has(profile?.account_status ?? "") ? "Your account has been approved." : "Your registration is waiting for administrator approval.",
   });
 }
 
@@ -147,9 +196,22 @@ Deno.serve(async (request) => {
   if (route === "/v1/agent/auth/login" && request.method === "POST") {
     return portalSignIn(client, admin, body, agentRoles);
   }
+  if (route === "/v1/finance/auth/login" && request.method === "POST") {
+    return portalSignIn(client, admin, body, financeRoles);
+  }
   if (route === "/v1/auth/register" && request.method === "POST") return registerPortalUser(client, admin, body, "customer");
   if (route === "/v1/agent/auth/register" && request.method === "POST") return registerPortalUser(client, admin, body, "agent");
   if (route === "/v1/finance/auth/register" && request.method === "POST") return registerPortalUser(client, admin, body, "finance");
+  if (route === "/v1/auth/request-password-reset" && request.method === "POST") {
+    return requestPortalPasswordReset(client, admin, body, customerRoles);
+  }
+  if (route === "/v1/agent/auth/request-password-reset" && request.method === "POST") {
+    return requestPortalPasswordReset(client, admin, body, agentRoles);
+  }
+  if (route === "/v1/finance/auth/request-password-reset" && request.method === "POST") {
+    return requestPortalPasswordReset(client, admin, body, financeRoles);
+  }
+  if (route === "/v1/auth/account-status" && request.method === "GET") return accountStatus(admin, url);
   if (route === "/v1/auth/request-admin-otp" && request.method === "POST") {
     const identifier = String(body.identifier ?? "").trim(); const purpose = String(body.purpose ?? "app-access");
     const email = identifier.includes("@");

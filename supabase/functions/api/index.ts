@@ -91,6 +91,7 @@ async function registerPortalUser(client: ReturnType<typeof createClient>, admin
 const customerRoles = new Set(["customer"]);
 const agentRoles = new Set(["agent", "support_agent"]);
 const financeRoles = new Set(["finance", "finance_officer", "admin", "super_admin"]);
+const adminRoles = new Set(["admin", "super_admin", "operations_manager"]);
 const approvedStatuses = new Set(["active", "approved"]);
 
 async function portalSignIn(
@@ -216,6 +217,9 @@ Deno.serve(async (request) => {
   }
   if (route === "/v1/finance/auth/login" && request.method === "POST") {
     return portalSignIn(client, admin, body, financeRoles);
+  }
+  if (route === "/v1/admin/auth/login" && request.method === "POST") {
+    return portalSignIn(client, admin, body, adminRoles);
   }
   if (route === "/v1/auth/register" && request.method === "POST") return registerPortalUser(client, admin, body, "customer");
   if (route === "/v1/agent/auth/register" && request.method === "POST") return registerPortalUser(client, admin, body, "agent");

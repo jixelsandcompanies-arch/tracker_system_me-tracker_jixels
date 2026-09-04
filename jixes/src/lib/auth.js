@@ -62,7 +62,7 @@ export async function signIn(email, password) {
   if (blockedAccounts.has(normalizedLogin(email))) return { error: "Your account has been temporarily locked because of too many failed login attempts. Please contact an administrator or use the account recovery option." };
   if (supabaseUrl && supabaseKey) {
     try {
-      const response = await fetch(`${supabaseUrl}/auth/v1/token?grant_type=password`, {
+      const response = await fetch(`${supabaseUrl}/functions/v1/api/v1/admin/auth/login`, {
         method: "POST",
         headers: { apikey: supabaseKey, "Content-Type": "application/json" },
         body: JSON.stringify({ email: email.trim(), password })
@@ -75,14 +75,9 @@ export async function signIn(email, password) {
         return { error: safeMessage(response.status) };
       }
       const result = await response.json();
-      const profileResponse = await fetch(`${supabaseUrl}/rest/v1/profiles?id=eq.${encodeURIComponent(result.user?.id)}&select=full_name,role,account_status`, { headers: { apikey: supabaseKey, Authorization: `Bearer ${result.access_token}` } });
-      if (!profileResponse.ok) {
-        console.error("Admin profile lookup failed", profileResponse.status, await profileResponse.text().catch(() => ""));
-        return { error: "Your account profile could not be loaded. Please contact an administrator." };
-      }
-      const profile = (await profileResponse.json())[0];
-      if (!profile?.role || profile.account_status !== "approved") return { error: "Your account is not approved for the Admin portal. Please contact an administrator." };
-      const session = { userId: result.user?.id, email: result.user?.email || email, name: profile.full_name || "Administrator", role: profile.role, accessToken: result.access_token, refreshToken: result.refresh_token, expiresAt: Date.now() + Math.min((result.expires_in || 3600) * 1000, SESSION_TTL), lastActivity: Date.now() };
+      if (!result?.accessToken || !result?.user) return { error: "Authentication temporarily unavailable. Please try again in a few moments." };
+      const expiresAt = Date.parse(result.expiresAt || "") || Date.now() + SESSION_TTL;
+      const session = { userId: result.user.id, email: result.user.email || email, name: result.user.name || "Administrator", role: result.user.role, accessToken: result.accessToken, refreshToken: null, expiresAt, lastActivity: Date.now() };
       persistSession(session);
       clearFailedAttempts(email);
       return { data: session };

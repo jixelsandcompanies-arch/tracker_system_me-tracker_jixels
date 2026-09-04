@@ -33,7 +33,17 @@
     } finally { accessToken = previous; }
   }
   async function registerFinanceUser({ name, email, phone, password }) { const response = await fetch(`${SUPABASE_URL}/functions/v1/api/v1/finance/auth/register`, { method: "POST", headers: { apikey: SUPABASE_KEY, "Content-Type": "application/json" }, body: JSON.stringify({ name, email, phone, password }) }); const result = await response.json().catch(() => ({})); if (!response.ok) throw new Error(result.message || "Finance registration could not be completed. Please try again."); return { pending: true, message: result.message || "Finance registration submitted for administrator approval." }; }
-  async function authenticateFinanceUser(email, password) { const result = await request("/auth/v1/token?grant_type=password", { method: "POST", body: JSON.stringify({ email, password }) }); if (!result?.access_token || !result?.user) throw new Error("Incorrect email or password. Please check your details and try again."); const profile = await financeProfile(result.user.id, result.access_token); await hydrate(result.access_token); return { id: result.user.id, name: profile.full_name || result.user.email.split("@")[0], email: result.user.email, phone: profile.phone || "", role: profile.role, accessToken: result.access_token }; }
+  async function authenticateFinanceUser(email, password) {
+    const response = await fetch(`${SUPABASE_URL}/functions/v1/api/v1/finance/auth/login`, {
+      method: "POST",
+      headers: { apikey: SUPABASE_KEY, "Content-Type": "application/json" },
+      body: JSON.stringify({ email, password })
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok || !result.accessToken || !result.user) throw new Error(result.message || "Incorrect email or password. Please check your details and try again.");
+    await hydrate(result.accessToken);
+    return { id: result.user.id, name: result.user.name || result.user.email.split("@")[0], email: result.user.email, phone: result.user.phone || "", role: result.user.role, accessToken: result.accessToken };
+  }
   const money = value => new Intl.NumberFormat("en-KE", { style: "currency", currency: "KES", maximumFractionDigits: 0 }).format(Number(value || 0));
   window.FinanceStore = { emptyData, readData, saveData, registerFinanceUser, authenticateFinanceUser, hydrate, money };
 })();

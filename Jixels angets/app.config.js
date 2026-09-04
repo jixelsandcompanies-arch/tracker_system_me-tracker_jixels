@@ -6,6 +6,7 @@ export default {
     version: "1.0.0",
     scheme: "jixelsagenttrackings",
     orientation: "portrait",
+    platforms: ["android", "ios"],
     userInterfaceStyle: "automatic",
     icon: "./assets/jixels-agent-icon.png",
     splash: {

@@ -7,9 +7,6 @@
     "start": "expo start",
     "android": "expo start --android",
     "ios": "expo start --ios",
-    "web": "expo start --web",
-    "build": "expo export --platform web --output-dir dist",
-    "export:web": "expo export --platform web --output-dir dist",
     "test": "node scripts/run-tests.mjs",
     "check": "node scripts/check-production.js",
     "export:android": "expo export --platform android --output-dir dist/android"
@@ -29,14 +26,10 @@
     "expo-secure-store": "~15.0.8",
     "expo-sharing": "~14.0.8",
     "expo-status-bar": "~3.0.9",
-    "leaflet": "^1.9.4",
     "react": "19.1.0",
-    "react-dom": "19.1.0",
-    "react-leaflet": "^5.0.0",
     "react-native": "0.81.5",
     "react-native-maps": "1.20.1",
     "react-native-safe-area-context": "~5.6.0",
-    "react-native-web": "^0.21.0",
     "socket.io-client": "^4.8.3"
   },
   "devDependencies": {

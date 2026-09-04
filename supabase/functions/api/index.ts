@@ -64,7 +64,18 @@ async function registerPortalUser(client: ReturnType<typeof createClient>, admin
   const phone = String(body.phone ?? "").trim();
   if (!email || !password || !fullName) return fail("Complete your name, email, and password.", 422, "INVALID_REGISTRATION");
   const { data, error } = await client.auth.signUp({ email, password, options: { data: { full_name: fullName, phone } } });
-  if (error || !data.user) { console.error("Portal registration failed", error); return fail("Registration could not be completed. Please try again.", 400, "REGISTRATION_FAILED"); }
+  // Supabase can return an obfuscated user with no identities for an existing email.
+  // Do not overwrite that account's profile or allow it to be registered under another role.
+  if (data.user && data.user.identities?.length === 0) {
+    return fail("An account with this email already exists. Sign in or reset its password.", 409, "ACCOUNT_ALREADY_EXISTS");
+  }
+  if (error || !data.user) {
+    console.error("Portal registration failed", error);
+    const providerMessage = String(error?.message ?? "").toLowerCase();
+    if (providerMessage.includes("password")) return fail("Use a stronger password that meets the account requirements.", 422, "INVALID_PASSWORD");
+    if (providerMessage.includes("signup") && providerMessage.includes("disabled")) return fail("Registration is temporarily unavailable. Contact Jixels support.", 503, "SIGNUP_DISABLED");
+    return fail("Registration could not be completed. Please try again.", 400, "REGISTRATION_FAILED");
+  }
   const { error: profileError } = await admin.from("profiles").upsert({ id: data.user.id, full_name: fullName, email, phone, role, account_status: "pending", updated_at: new Date().toISOString() }, { onConflict: "id" });
   if (profileError) { console.error("Portal profile provisioning failed", profileError); return fail("Your registration was received but the profile is still being prepared. Please contact an administrator.", 503, "PROFILE_PROVISIONING_FAILED"); }
   if (role === "customer") {

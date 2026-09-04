@@ -385,7 +385,11 @@ function Login({ onLogin }) {
     </View>;
   }
 
-  return <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} style={styles.auth}>
+  return <KeyboardAvoidingView
+    behavior={Platform.OS === "ios" ? "padding" : "height"}
+    keyboardVerticalOffset={Platform.OS === "ios" ? 0 : 24}
+    style={styles.auth}
+  >
     <StatusBar style="light" />
     <View style={styles.authHero}>
       <Image source={require("./assets/jixels-logo.png")} resizeMode="contain" style={styles.authLogo} />
@@ -399,7 +403,7 @@ function Login({ onLogin }) {
         <Pressable onPress={() => setMode("login")} style={[styles.authTab, mode === "login" && styles.authTabActive]}><Text style={[styles.authTabText, mode === "login" && styles.authTabTextActive]}>Login</Text></Pressable>
         <Pressable onPress={() => setMode("register")} style={[styles.authTab, mode === "register" && styles.authTabActive]}><Text style={[styles.authTabText, mode === "register" && styles.authTabTextActive]}>Register</Text></Pressable>
       </View>}
-      <ScrollView keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false} contentContainerStyle={styles.authForm}>
+      <ScrollView keyboardDismissMode="on-drag" keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false} contentContainerStyle={styles.authForm}>
         {resettingPassword ? <>
           <View style={styles.resetIcon}><Ionicons name="key-outline" color={colors.blue} size={26} /></View>
           <Text style={styles.resetCopy}>Recovery is handled through approved Jixels admin records.</Text>
@@ -1005,9 +1009,6 @@ function AgentApp({ agent, onLogout }) {
     navigationHistory.current.push(screen);
     setScreen(nextScreen);
     setDrawerOpen(false);
-    if (Platform.OS === "web" && typeof window !== "undefined") {
-      window.history.pushState({ jixelsAgentScreen: nextScreen }, "", `#${nextScreen}`);
-    }
   }
 
   function goBack() {
@@ -1045,16 +1046,6 @@ function AgentApp({ agent, onLogout }) {
     if (Platform.OS === "android") {
       const subscription = BackHandler.addEventListener("hardwareBackPress", goBack);
       return () => subscription.remove();
-    }
-    if (Platform.OS === "web" && typeof window !== "undefined") {
-      const onPopState = () => {
-        const previous = navigationHistory.current.pop();
-        setDrawerOpen(false);
-        setScreen(previous || "dashboard");
-      };
-      window.history.replaceState({ jixelsAgentScreen: screen }, "", window.location.href);
-      window.addEventListener("popstate", onPopState);
-      return () => window.removeEventListener("popstate", onPopState);
     }
     return undefined;
   }, [drawerOpen, screen]);
@@ -1209,7 +1200,7 @@ const styles = StyleSheet.create({
   authTabActive: { backgroundColor: colors.blue },
   authTabText: { color: colors.muted, fontSize: 12, fontWeight: "900" },
   authTabTextActive: { color: colors.white },
-  authForm: { gap: 13, paddingBottom: 10 },
+  authForm: { flexGrow: 1, gap: 13, paddingBottom: 28 },
   resetIcon: { width: 54, height: 54, borderRadius: 18, backgroundColor: colors.bluePale, alignItems: "center", justifyContent: "center", alignSelf: "center" },
   resetCopy: { color: colors.muted, fontSize: 12, lineHeight: 18, textAlign: "center", fontWeight: "700" },
   forgotText: { color: colors.blue, fontSize: 12, fontWeight: "900", textAlign: "right" },

@@ -1,32 +1,28 @@
 export default {
   expo: {
-    name: "Jixels Agent Trackings",
-    slug: "jixels-agent-trackings",
+    name: "Jixels Customer Trackings",
+    slug: "jixels-customer-trackings",
     version: "1.0.0",
-    scheme: "jixelsagenttrackings",
+    scheme: "jixelscustomertrackings",
 
     orientation: "portrait",
+    platforms: ["android", "ios"],
     userInterfaceStyle: "automatic",
 
-    web: {
-      output: "single",
-      bundler: "metro",
-    },
-
-    icon: "./assets/jixels-agent-icon.png",
+    icon: "./assets/jixels-app-icon.png",
 
     splash: {
-      image: "./assets/jixels-agent-icon.png",
+      image: "./assets/jixels-app-icon.png",
       resizeMode: "contain",
       backgroundColor: "#0D467D",
     },
 
     android: {
-      package: "com.jixelstechnologies.agent",
+      package: "com.jixelstechnologies.customer",
       versionCode: 1,
 
       adaptiveIcon: {
-        foregroundImage: "./assets/jixels-agent-icon.png",
+        foregroundImage: "./assets/jixels-app-icon.png",
         backgroundColor: "#FFFFFF",
       },
 
@@ -37,7 +33,7 @@ export default {
     },
 
     ios: {
-      bundleIdentifier: "com.jixelstechnologies.agent",
+      bundleIdentifier: "com.jixelstechnologies.customer",
       buildNumber: "1",
       supportsTablet: true,
 
@@ -58,10 +54,10 @@ export default {
         "expo-image-picker",
         {
           photosPermission:
-            "Allow Jixels Agent Trackings to attach customer KYC and installation photos.",
+            "Allow Jixels Customer Trackings to attach account and vehicle photos.",
 
           cameraPermission:
-            "Allow Jixels Agent Trackings to capture customer KYC and installation photos.",
+            "Allow Jixels Customer Trackings to capture account and vehicle photos.",
 
           microphonePermission: false,
         },
@@ -71,7 +67,7 @@ export default {
         "expo-location",
         {
           locationWhenInUsePermission:
-            "Allow Jixels Agent Trackings to capture installation location for tracker setup.",
+            "Allow Jixels Customer Trackings to access your location for vehicle tracking.",
         },
       ],
     ],

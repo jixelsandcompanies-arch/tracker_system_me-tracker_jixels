@@ -4,9 +4,9 @@ const explicitDemoMode = process.env.EXPO_PUBLIC_DEMO_MODE;
 
 export const config = Object.freeze({
   apiUrl: apiUrl || null,
-  // Preserve the map preview in Expo development until the backend is
-  // connected. Release builds only use demo data when explicitly enabled.
-  demoMode: explicitDemoMode === "true" || (__DEV__ && explicitDemoMode !== "false"),
+  // Database-backed behavior is the default in every environment. Demo data is
+  // available only through an explicit local-development opt-in.
+  demoMode: explicitDemoMode === "true",
   requestTimeoutMs: 15_000,
 });
 

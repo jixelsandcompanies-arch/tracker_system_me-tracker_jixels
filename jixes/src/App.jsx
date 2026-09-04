@@ -101,6 +101,33 @@ function loadNavigation(role) {
   }
 }
 
+// A fault in one database-backed module must not take down the entire admin
+// workspace. Keeping this boundary at page scope means staff can continue to
+// use the other menu items and retry the affected module.
+class ModuleErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { error: null };
+  }
+
+  static getDerivedStateFromError(error) {
+    return { error };
+  }
+
+  componentDidCatch(error) {
+    recordAudit({ action: "module error", resource: this.props.module, detail: error.message });
+  }
+
+  componentDidUpdate(previousProps) {
+    if (previousProps.module !== this.props.module && this.state.error) this.setState({ error: null });
+  }
+
+  render() {
+    if (!this.state.error) return this.props.children;
+    return <section className="panel module-table"><div className="panel-heading"><div><h2>{this.props.module} is unavailable</h2><p>This module could not be displayed. Your other admin modules are still available.</p></div></div><div className="import-message">{this.state.error.message || "The database response could not be displayed."}</div><button className="button primary" onClick={() => this.setState({ error: null })}>Retry {this.props.module}</button></section>;
+  }
+}
+
 function useHorizontalTableScroll() {
   useEffect(() => {
     let drag = null;
@@ -311,7 +338,7 @@ function AppContent() {
       <main className="main-content" onPointerDown={() => { if (window.innerWidth > 760 && !sidebarCollapsed) setSidebarCollapsed(true); }}>
         <header className="topbar"><button className="menu-button icon-btn" onClick={() => setSidebarOpen(true)} aria-label="Open navigation"><Menu size={20} /></button><div className="topbar-actions"><button className="icon-btn notification" onClick={() => setNotificationsOpen((open) => !open)} aria-label="Open notifications"><Bell size={18}/>{notifications.some((item) => item.unread) && <span/>}</button><div className="top-profile"><span className="user-avatar">{session.name?.slice(0, 2).toUpperCase()}</span><span><strong>{session.name}</strong><small>{session.role}</small></span></div></div>{notificationsOpen && <NotificationPanel notifications={notifications} onClose={() => setNotificationsOpen(false)} onRead={() => setNotifications((items) => items.map((item) => ({ ...item, unread: false })))} />}</header>
         <div className="page-content">
-          {workspaceLoading ? <WorkspaceSkeleton/> : <>{active !== "Support Cases" && <section className="page-heading"><div><div className="eyebrow"><span className="pulse" />OPERATIONS</div><h1>{active === "Dashboard" ? "Dashboard Overview" : active === "Products" ? "Product Inventory" : active}</h1><p>{active === "Dashboard" ? "Fleet-wide numbers and system health, at a glance." : active === "Products" ? "Register products, link trackers, and allocate agents." : `${active} workspace.`}</p></div><div className="heading-actions">{hasSupabaseConfig && <span className="sync-status"><span />Live data</span>}</div></section>}{active === "Dashboard" ? <DashboardLiveView /> : <EnhancedModuleView title={active} setShowAdd={setShowAdd} />}</>}
+          {workspaceLoading ? <WorkspaceSkeleton/> : <>{active !== "Support Cases" && <section className="page-heading"><div><div className="eyebrow"><span className="pulse" />OPERATIONS</div><h1>{active === "Dashboard" ? "Dashboard Overview" : active === "Products" ? "Product Inventory" : active}</h1><p>{active === "Dashboard" ? "Fleet-wide numbers and system health, at a glance." : active === "Products" ? "Register products, link trackers, and allocate agents." : `${active} workspace.`}</p></div><div className="heading-actions">{hasSupabaseConfig && <span className="sync-status"><span />Live data</span>}</div></section>}<ModuleErrorBoundary module={active}>{active === "Dashboard" ? <DashboardLiveView /> : <EnhancedModuleView title={active} setShowAdd={setShowAdd} />}</ModuleErrorBoundary></>}
           <footer className="system-footer"><span><strong>JIXELS ADMIN</strong> · Form Ni Tenje · Operations workspace</span><span>© 2026 Jixels Technologies</span></footer>
         </div>
       </main>
@@ -377,11 +404,7 @@ function LoginScreen({ onSignIn }) {
     setLoading(false);
   }
 
-  function useDemoAccount() {
-    setError("Demo credentials are disabled. Configure Supabase Auth to sign in.");
-  }
-
-  return <main className="login-screen"><section className="login-shell"><div className="login-story"><div className="login-brand"><img className="login-logo" src="https://www.jixels.com/assets/jixels-logo-form-ni-tenje-cropped.jpeg" alt="Jixels Form Ni Tenje" /></div><div className="login-story-copy"><span className="login-kicker"><span/> FLEET OPERATIONS PLATFORM</span><h1>Every tracker.<br/>One clear view.</h1><p>Manage customers, connected products, tracker health, payments, and support from one secure operations workspace.</p><div className="login-feature-grid"><div><span className="login-feature-icon"><Radio size={19}/></span><strong>Live operations</strong><small>Tracker health and last-seen status</small></div><div><span className="login-feature-icon"><ShieldCheck size={19}/></span><strong>Controlled access</strong><small>Role-based staff permissions</small></div></div></div><div className="login-system-status"><span><i/> Systems operational</span><small>Secure Jixels workspace</small></div></div><div className="login-form-panel"><form className="login-card" onSubmit={submit}><div className="login-form-mark"><ShieldCheck size={20}/></div><div className="eyebrow">ADMIN WORKSPACE</div><h2>Welcome back</h2><p>Enter your details to continue to Jixels Admin.</p><label>Email address<input value={email} onChange={(event) => setEmail(event.target.value)} type="email" placeholder="you@jixels.com" autoComplete="email" required /></label><label>Password<input value={password} onChange={(event) => setPassword(event.target.value)} type="password" placeholder="Enter your password" autoComplete="current-password" required /></label>{error && <div className="login-error"><AlertTriangle size={15} />{error}</div>}<button className="button primary login-button" disabled={loading}>{loading ? "Signing in..." : "Sign in securely"}<ArrowUpRight size={16}/></button>{!hasSupabaseConfig && <button className="demo-button" type="button" onClick={useDemoAccount}>Fill demo credentials</button>}<small className="login-security-note"><ShieldCheck size={13}/> Protected administrative access</small></form><footer className="login-panel-footer">© 2026 Jixels Technologies</footer></div></section></main>;
+  return <main className="login-screen"><section className="login-shell"><div className="login-story"><div className="login-brand"><img className="login-logo" src="https://www.jixels.com/assets/jixels-logo-form-ni-tenje-cropped.jpeg" alt="Jixels Form Ni Tenje" /></div><div className="login-story-copy"><span className="login-kicker"><span/> FLEET OPERATIONS PLATFORM</span><h1>Every tracker.<br/>One clear view.</h1><p>Manage customers, connected products, tracker health, payments, and support from one secure operations workspace.</p><div className="login-feature-grid"><div><span className="login-feature-icon"><Radio size={19}/></span><strong>Live operations</strong><small>Tracker health and last-seen status</small></div><div><span className="login-feature-icon"><ShieldCheck size={19}/></span><strong>Controlled access</strong><small>Role-based staff permissions</small></div></div></div><div className="login-system-status"><span><i/> Systems operational</span><small>Secure Jixels workspace</small></div></div><div className="login-form-panel"><form className="login-card" onSubmit={submit}><div className="login-form-mark"><ShieldCheck size={20}/></div><div className="eyebrow">ADMIN WORKSPACE</div><h2>Welcome back</h2><p>Enter your details to continue to Jixels Admin.</p><label>Email address<input value={email} onChange={(event) => setEmail(event.target.value)} type="email" placeholder="you@jixels.com" autoComplete="email" required /></label><label>Password<input value={password} onChange={(event) => setPassword(event.target.value)} type="password" placeholder="Enter your password" autoComplete="current-password" required /></label>{error && <div className="login-error"><AlertTriangle size={15} />{error}</div>}<button className="button primary login-button" disabled={loading}>{loading ? "Signing in..." : "Sign in securely"}<ArrowUpRight size={16}/></button><small className="login-security-note"><ShieldCheck size={13}/> Protected administrative access</small></form><footer className="login-panel-footer">© 2026 Jixels Technologies</footer></div></section></main>;
 }
 
 export default App;

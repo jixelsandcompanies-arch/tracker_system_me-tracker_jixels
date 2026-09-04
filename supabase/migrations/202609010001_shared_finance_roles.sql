@@ -16,6 +16,23 @@ language sql stable security definer set search_path = public as $$
   select public.current_role() = any(roles)
 $$;
 
+-- The first finance deployment exposed this name as a compatibility view over
+-- finance_workspace_state. Preserve it before creating the writable relation
+-- used by the current finance portal.
+do $$
+begin
+  if exists (
+    select 1
+      from pg_class c
+      join pg_namespace n on n.oid = c.relnamespace
+     where n.nspname = 'public'
+       and c.relname = 'finance_accounts'
+       and c.relkind = 'v'
+  ) then
+    alter view public.finance_accounts rename to finance_accounts_legacy;
+  end if;
+end $$;
+
 create table if not exists public.finance_accounts (
   id uuid primary key default gen_random_uuid(), external_id text not null unique,
   data jsonb not null default '{}'::jsonb, created_at timestamptz not null default now(), updated_at timestamptz not null default now()
@@ -42,11 +59,20 @@ create table if not exists public.finance_settings (
 
 do $$ declare t text; begin
   foreach t in array array['finance_accounts','finance_payments','finance_agents','finance_alerts','finance_audit_logs','finance_settings'] loop
-    execute format('alter table public.%I enable row level security', t);
-    execute format('drop policy if exists "finance staff read" on public.%I', t);
-    execute format('drop policy if exists "finance staff write" on public.%I', t);
-    execute format('create policy "finance staff read" on public.%I for select using (public.has_role(array[''finance'',''finance_officer'',''admin'',''super_admin'']::public.app_role[]))', t);
-    execute format('create policy "finance staff write" on public.%I for all using (public.has_role(array[''finance'',''finance_officer'',''admin'',''super_admin'']::public.app_role[])) with check (public.has_role(array[''finance'',''finance_officer'',''admin'',''super_admin'']::public.app_role[]))', t);
+    if exists (
+      select 1
+        from pg_class c
+        join pg_namespace n on n.oid = c.relnamespace
+       where n.nspname = 'public'
+         and c.relname = t
+         and c.relkind in ('r', 'p')
+    ) then
+      execute format('alter table public.%I enable row level security', t);
+      execute format('drop policy if exists "finance staff read" on public.%I', t);
+      execute format('drop policy if exists "finance staff write" on public.%I', t);
+      execute format('create policy "finance staff read" on public.%I for select using (public.has_role(array[''finance'',''finance_officer'',''admin'',''super_admin'']::public.app_role[]))', t);
+      execute format('create policy "finance staff write" on public.%I for all using (public.has_role(array[''finance'',''finance_officer'',''admin'',''super_admin'']::public.app_role[])) with check (public.has_role(array[''finance'',''finance_officer'',''admin'',''super_admin'']::public.app_role[]))', t);
+    end if;
   end loop;
 end $$;
 

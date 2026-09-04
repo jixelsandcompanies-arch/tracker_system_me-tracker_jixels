@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Search, ShieldCheck, UserRound, X } from "lucide-react";
-import { hasSupabaseConfig, invokeFunction, listRecords, subscribeToTable, updateRecord } from "../lib/data";
+import { hasSupabaseConfig, invokeApi, listRecords, subscribeToTable, updateRecord } from "../lib/data";
 import { recordAudit } from "../lib/security";
 
 const statusLabel = (status) => status === "approved" ? "Approved" : status === "suspended" || status === "declined" ? "Suspended" : "Pending";
@@ -16,11 +16,11 @@ function ReviewDrawer({ application, agents, onClose, onChanged }) {
   const agent = agents.find((item) => item.id === application.installer_agent_id)?.full_name || "Unassigned";
   const approve = async () => {
     setBusy(true); setMessage("");
-    const result = await invokeFunction("approve-screening", { applicationId: application.id });
+    const result = await invokeApi("/v1/admin/screening/approve", { applicationId: application.id });
     setBusy(false);
     if (result.error) return setMessage(result.error.message);
     recordAudit({ action: "approved customer and issued OTP", resource: "Screening", detail: application.full_name });
-    setMessage("Approved. The customer notification and one-time login code were issued securely.");
+    setMessage(result.data?.message || "Approved. The one-time code was sent to the customer's registered contact.");
     onChanged();
   };
   const suspend = async () => {

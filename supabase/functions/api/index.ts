@@ -67,6 +67,13 @@ async function registerPortalUser(client: ReturnType<typeof createClient>, admin
   if (error || !data.user) { console.error("Portal registration failed", error); return fail("Registration could not be completed. Please try again.", 400, "REGISTRATION_FAILED"); }
   const { error: profileError } = await admin.from("profiles").upsert({ id: data.user.id, full_name: fullName, email, phone, role, account_status: "pending", updated_at: new Date().toISOString() }, { onConflict: "id" });
   if (profileError) { console.error("Portal profile provisioning failed", profileError); return fail("Your registration was received but the profile is still being prepared. Please contact an administrator.", 503, "PROFILE_PROVISIONING_FAILED"); }
+  if (role === "customer") {
+    const now = new Date().toISOString();
+    const { error: customerError } = await admin.from("customers").upsert({ id: data.user.id, full_name: fullName, email, phone, status: "pending", created_at: now, updated_at: now }, { onConflict: "id" });
+    if (customerError) { console.error("Customer account provisioning failed", customerError); return fail("Your registration was received but the customer account is still being prepared. Please contact an administrator.", 503, "CUSTOMER_PROVISIONING_FAILED"); }
+    const { error: screeningError } = await admin.from("screening_applications").insert({ customer_id: data.user.id, full_name: fullName, email, phone, status: "pending", updated_at: now });
+    if (screeningError) console.error("Customer screening provisioning failed", screeningError);
+  }
   return response({ status: "pending", message: "Registration submitted for administrator approval." }, 201);
 }
 
@@ -244,6 +251,32 @@ Deno.serve(async (request) => {
   const { data: identity } = await client.auth.getUser();
   const user = identity.user;
   if (!user) return fail("Authentication is required.", 401, "UNAUTHORIZED");
+
+  if (route === "/v1/admin/screening/approve" && request.method === "POST") {
+    const { data: manager, error: managerError } = await admin.from("profiles").select("role").eq("id", user.id).maybeSingle();
+    if (managerError || !manager || !["admin", "super_admin", "operations_manager"].includes(manager.role)) return fail("Administrator approval is required.", 403, "FORBIDDEN");
+    const applicationId = String(body.applicationId ?? "").trim();
+    if (!applicationId) return fail("A screening application is required.", 422, "INVALID_APPLICATION");
+    const { data: application, error: applicationError } = await admin.from("screening_applications").select("id,customer_id,email,phone").eq("id", applicationId).maybeSingle();
+    if (applicationError || !application) return fail("Screening application not found.", 404, "NOT_FOUND");
+    const now = new Date().toISOString();
+    const { error: approvalError } = await admin.from("screening_applications").update({ status: "approved", reviewed_by: user.id, reviewed_at: now, approved_at: now, updated_at: now }).eq("id", application.id);
+    if (approvalError) return fail("The screening application could not be approved.", 400, "APPROVAL_FAILED");
+    if (application.customer_id) {
+      await admin.from("customers").update({ status: "active", updated_at: now }).eq("id", application.customer_id);
+      await admin.from("profiles").update({ account_status: "approved", updated_at: now }).eq("id", application.customer_id);
+    } else if (application.email) {
+      await admin.from("profiles").update({ account_status: "approved", updated_at: now }).eq("email", application.email.toLowerCase());
+    }
+    const identifier = application.email?.trim() || application.phone?.trim() || "";
+    const otpError = identifier
+      ? (identifier.includes("@")
+        ? await client.auth.signInWithOtp({ email: identifier.toLowerCase(), options: { shouldCreateUser: false } })
+        : await client.auth.signInWithOtp({ phone: identifier.replace(/\s/g, ""), options: { shouldCreateUser: false } })).error
+      : new Error("No customer email or phone number is available for OTP delivery.");
+    if (otpError) console.error("Approval OTP delivery failed", otpError);
+    return response({ approved: true, otpSent: !otpError, message: otpError ? "Customer approved. Ask the customer to request a code from their registered contact." : "Customer approved. A one-time code was sent to the customer's registered contact." });
+  }
 
   if (route === "/v1/customer/overview" && request.method === "GET") {
     const [{ data: profile }, { data: vehicles }] = await Promise.all([

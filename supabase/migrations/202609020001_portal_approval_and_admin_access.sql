@@ -24,7 +24,14 @@ create policy "portal managers manage profiles" on public.profiles for all to au
 -- the full operations schema is installed.
 do $$
 begin
-  if to_regclass('public.customers') is not null then
+  if exists (
+    select 1
+      from pg_class c
+      join pg_namespace n on n.oid = c.relnamespace
+     where n.nspname = 'public'
+       and c.relname = 'customers'
+       and c.relkind in ('r', 'p')
+  ) then
     execute 'create or replace function public.sync_customer_profile_approval()
       returns trigger language plpgsql security definer set search_path = public as $fn$
       begin

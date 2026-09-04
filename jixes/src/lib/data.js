@@ -77,6 +77,20 @@ export async function invokeFunction(name, body) {
   return { data, error };
 }
 
+export async function invokeApi(path, body) {
+  const session = getSession();
+  if (!supabaseUrl || !supabaseKey || !session?.accessToken || !navigator.onLine) return { data: null, error: new Error("Connect to Supabase to complete this action") };
+  try {
+    const result = await fetch(`${supabaseUrl}/functions/v1/api${path}`, {
+      method: "POST",
+      headers: { apikey: supabaseKey, Authorization: `Bearer ${session.accessToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const data = await result.json().catch(() => ({}));
+    return result.ok ? { data, error: null } : { data: null, error: new Error(data.message || "The request could not be completed") };
+  } catch (error) { return { data: null, error: asError(error, "Could not complete the request") }; }
+}
+
 export function subscribeToTable(table, callback) {
   if (!supabase || !allowedTables.has(table)) return () => {};
   const channel = supabase.channel(`${table}-changes`).on("postgres_changes", { event: "*", schema: "public", table }, callback).subscribe();

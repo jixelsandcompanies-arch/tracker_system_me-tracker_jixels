@@ -3,6 +3,26 @@
 
 create extension if not exists pgcrypto;
 
+-- Earlier portal versions exposed these names as views over the customer app
+-- tables. The current admin workspace needs writable tables with these names.
+-- Keep the views for rollback and migrate their compatible records below.
+do $$
+declare relation_name text;
+begin
+  foreach relation_name in array array['customers', 'bikes', 'payments', 'support_cases'] loop
+    if exists (
+      select 1
+        from pg_class c
+        join pg_namespace n on n.oid = c.relnamespace
+       where n.nspname = 'public'
+         and c.relname = relation_name
+         and c.relkind = 'v'
+    ) then
+      execute format('alter view public.%I rename to %I', relation_name, relation_name || '_legacy');
+    end if;
+  end loop;
+end $$;
+
 create table if not exists public.customers (
   id uuid primary key default gen_random_uuid(), full_name text not null,
   email text, phone text, national_id text, address text, county text, town text,
@@ -65,6 +85,44 @@ create table if not exists public.audit_logs (
   id uuid primary key default gen_random_uuid(), actor_id uuid references public.profiles(id) on delete set null,
   action text not null, resource text not null, detail jsonb not null default '{}'::jsonb, created_at timestamptz not null default now()
 );
+
+do $$
+begin
+  if to_regclass('public.customers_legacy') is not null then
+    insert into public.customers (id, full_name, email, phone, status, created_at, updated_at)
+    select id, full_name, email, phone,
+      case when account_status in ('active', 'approved') then 'active' else 'pending' end,
+      created_at, updated_at
+    from public.customers_legacy
+    on conflict (id) do nothing;
+  end if;
+
+  if to_regclass('public.bikes_legacy') is not null then
+    insert into public.bikes (id, identifier, model, product_type, customer_id, status, created_at)
+    select id, registration, coalesce(model, 'Unspecified'), coalesce(vehicle_type, 'bike'), owner_id, 'active', created_at
+    from public.bikes_legacy
+    on conflict (id) do nothing;
+  end if;
+
+  if to_regclass('public.payments_legacy') is not null then
+    insert into public.payments (id, customer_id, product_id, amount, status, paid_at, receipt_number, created_at)
+    select id, owner_id, vehicle_id, amount, status,
+      case when status in ('completed', 'confirmed', 'paid') then updated_at else null end,
+      provider_reference, created_at
+    from public.payments_legacy
+    on conflict (id) do nothing;
+  end if;
+
+  if to_regclass('public.support_cases_legacy') is not null then
+    insert into public.support_cases (id, title, notes, priority, status, customer_id, product_id, created_at)
+    select id, title, body,
+      case when severity in ('low', 'normal', 'high', 'urgent') then severity else 'normal' end,
+      case when read_at is null then 'open' else 'resolved' end,
+      owner_id, vehicle_id, created_at
+    from public.support_cases_legacy
+    on conflict (id) do nothing;
+  end if;
+end $$;
 
 alter table public.alerts add column if not exists kind text;
 alter table public.alerts add column if not exists detail text;

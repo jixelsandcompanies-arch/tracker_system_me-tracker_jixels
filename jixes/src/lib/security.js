@@ -7,6 +7,7 @@ const rolePermissions = {
 };
 
 const roleAliases = {
+  admin: "Super administrator",
   super_admin: "Super administrator",
   operations_manager: "Operations manager",
   finance_officer: "Finance officer",

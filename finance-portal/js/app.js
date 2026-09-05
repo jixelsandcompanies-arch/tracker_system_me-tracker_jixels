@@ -14,6 +14,7 @@
   let data = readData();
   let page = "dashboard";
   let authMode = "login";
+  let authDraft = { name: "", phone: "", email: "", password: "", confirm: "" };
   let sidebarOpen = false;
   let sidebarCollapsed = false;
   let notificationsOpen = false;
@@ -58,7 +59,7 @@
   const rowCheck = (scope, id) => `<label class="row-select"><input type="checkbox" data-select-row="${scope}" value="${escapeHtml(id)}"><span></span></label>`;
   const selectAll = scope => `<label class="row-select row-select-all"><input type="checkbox" data-select-all="${scope}"><span></span></label>`;
   const bulkActions = scope => `<div class="bulk-actions"><button class="button button-secondary" type="button" data-delete-selected="${scope}">Delete selected</button><button class="button danger-button" type="button" data-delete-all="${scope}">Delete all</button></div>`;
-  const passwordInput = (name, autocomplete, placeholder) => `<span class="password-field"><input name="${name}" type="password" placeholder="${placeholder}" autocomplete="${autocomplete}" required><button type="button" class="password-toggle" data-toggle-password aria-label="Show password">${icons.eye}</button></span>`;
+  const passwordInput = (name, autocomplete, placeholder, value = "") => `<span class="password-field"><input name="${name}" type="password" value="${escapeHtml(value)}" placeholder="${placeholder}" autocomplete="${autocomplete}" required><button type="button" class="password-toggle" data-toggle-password aria-label="Show password">${icons.eye}</button></span>`;
   const isValidEmail = value => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
   const isStrongPassword = value => /[a-z]/.test(value) && /[A-Z]/.test(value) && /\d/.test(value) && /[^A-Za-z0-9]/.test(value) && !/\s/.test(value) && value.length >= 8;
   const safeLoginMessage = error => {
@@ -149,6 +150,7 @@
     root.innerHTML = registrationPendingView();
     document.querySelector("[data-return-login]")?.addEventListener("click", () => {
       authMode = "login";
+      authDraft = { name: "", phone: "", email: "", password: "", confirm: "" };
       root.innerHTML = loginView();
       bindLoginEvents();
     });
@@ -187,10 +189,7 @@
   }
 
   function accountsPage() {
-    const account = editingAccountId ? data.accounts.find(item => item.id === editingAccountId) || {} : {};
-    const value = key => escapeHtml(account[key] ?? "");
-    const selected = statusValue => account.status === statusValue ? "selected" : "";
-    return `<section class="page-stack"><div class="section-heading"><div><h2>Finance Accounts</h2><p>Create and manage financing records.</p></div></div><div class="card"><div class="card-header"><div><div class="card-title">${editingAccountId ? "Modify finance account" : "Add finance account"}</div><div class="card-subtitle">${editingAccountId ? escapeHtml(editingAccountId) : "No sample accounts are included."}</div></div></div><div class="card-body"><form id="account-form"><div class="form-grid"><div class="field"><label>Customer name</label><input name="customer" value="${value("customer")}" required></div><div class="field"><label>Phone number</label><input name="phone" value="${value("phone")}"></div><div class="field"><label>Bike registration</label><input name="bike" value="${value("bike")}" required></div><div class="field"><label>Bike model</label><input name="model" value="${value("model")}"></div><div class="field"><label>Total finance amount</label><input name="total" type="number" min="0" value="${value("total")}" required></div><div class="field"><label>Amount paid</label><input name="paid" type="number" min="0" value="${value("paid") || 0}"></div><div class="field"><label>Status</label><select name="status"><option ${selected("On Track")}>On Track</option><option ${selected("Overdue")}>Overdue</option><option ${selected("Completed")}>Completed</option></select></div></div><div class="form-actions">${editingAccountId ? '<button class="button button-secondary" type="button" data-cancel-account-edit>Cancel</button>' : ""}<button class="button button-primary">${editingAccountId ? "Update account" : "Save account"}</button></div></form></div></div><div class="card"><div class="card-header"><div><div class="card-title">All finance accounts</div></div><div class="toolbar"><input id="account-search" placeholder="Search accounts"><select id="account-filter"><option value="">All statuses</option><option>On Track</option><option>Overdue</option><option>Completed</option></select>${bulkActions("accounts")}</div></div><div id="account-list">${accountTable(data.accounts, true)}</div></div></section>`;
+    return `<section class="page-stack"><div class="section-heading"><div><h2>Finance Accounts</h2><p>Review financing records and account status.</p></div></div><div class="card"><div class="card-header"><div><div class="card-title">Finance accounts</div><div class="card-subtitle">Customer financing records are created through the approved onboarding workflow.</div></div><div class="toolbar"><input id="account-search" placeholder="Search accounts" aria-label="Search accounts"><select id="account-filter" aria-label="Filter accounts by status"><option value="">All statuses</option><option>On Track</option><option>Overdue</option><option>Completed</option></select></div></div><div id="account-list">${accountTable(data.accounts, false)}</div></div></section>`;
   }
 
   function registrationDate(value) {
@@ -356,7 +355,24 @@
     bindEvents();
   }
 
+  function prepareLoginForm() {
+    const form = document.getElementById("login-form");
+    if (!form) return;
+    const applyDraft = () => {
+      form.setAttribute("autocomplete", "off");
+      ["name", "phone", "email", "password", "confirm"].forEach(key => {
+        const input = form.elements.namedItem(key);
+        if (!input) return;
+        input.setAttribute("autocomplete", key === "password" || key === "confirm" ? "new-password" : "off");
+        input.value = authDraft[key] || "";
+      });
+    };
+    applyDraft();
+    window.requestAnimationFrame(applyDraft);
+  }
+
   function bindLoginEvents() {
+    prepareLoginForm();
     document.querySelectorAll("[data-auth-mode]").forEach(button => button.addEventListener("click", () => {
       authMode = button.dataset.authMode;
       root.innerHTML = loginView();
@@ -374,6 +390,7 @@
       event.preventDefault(); const formData = new FormData(event.currentTarget);
       const email = formData.get("email").trim().toLowerCase();
       const password = formData.get("password");
+      authDraft = { name: formData.get("name") || "", phone: formData.get("phone") || "", email, password, confirm: formData.get("confirm") || "" };
       if (!email || !password) {
         root.innerHTML = loginView("Enter your finance workspace email and password."); bindLoginEvents(); return;
       }
@@ -527,7 +544,7 @@
       saveData(data);
       render();
     }));
-    document.querySelector("[data-logout]")?.addEventListener("click", () => { session = null; render(); });
+    document.querySelector("[data-logout]")?.addEventListener("click", () => { authDraft = { name: "", phone: "", email: "", password: "", confirm: "" }; session = null; render(); });
     document.querySelector("[data-print-reconciliation]")?.addEventListener("click", printReconciliationPdf);
     document.querySelector("[data-export-report]")?.addEventListener("click", exportFinanceReport);
     document.querySelector(".commission-table")?.addEventListener("click", event => {

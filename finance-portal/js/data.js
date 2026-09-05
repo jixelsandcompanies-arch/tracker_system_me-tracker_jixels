@@ -21,15 +21,24 @@
     return response.status === 204 ? null : response.json();
   }
   function saveData(data) {
-    memoryData = { ...emptyData, ...clone(data) };
+    const previousData = memoryData;
+    const nextData = { ...emptyData, ...clone(data) };
+    memoryData = nextData;
     if (!accessToken) return Promise.resolve();
-    const jobs = Object.entries(tables).flatMap(([key, table]) => (memoryData[key] || []).map(item => {
-      const customer = key === "accounts" ? memoryData.customers.find(candidate => candidate.id === item.customerId || (candidate.full_name === item.customer && candidate.phone === item.phone)) : null;
-      const record = { external_id: String(item.id || `${key}-${Date.now()}`), data: item, updated_at: new Date().toISOString() };
-      if (key === "accounts") Object.assign(record, { customer_id: customer?.id || item.customerId || null, outstanding: Math.max(0, Number(item.balance || 0)), status: item.status || "active" });
-      return request(`/rest/v1/${table}?on_conflict=external_id`, { method: "POST", headers: { Prefer: "resolution=merge-duplicates" }, body: JSON.stringify(record) });
-    }));
-    jobs.push(request("/rest/v1/finance_settings?on_conflict=id", { method: "POST", headers: { Prefer: "resolution=merge-duplicates" }, body: JSON.stringify({ id: "default", data: memoryData.settings, updated_at: new Date().toISOString() }) }));
+    const jobs = Object.entries(tables).flatMap(([key, table]) => {
+      const previousRows = new Map((previousData[key] || []).map(item => [String(item.id), item]));
+      const nextRows = new Map((nextData[key] || []).map(item => [String(item.id), item]));
+      const writes = [...nextRows.entries()].flatMap(([externalId, item]) => {
+        if (JSON.stringify(previousRows.get(externalId)) === JSON.stringify(item)) return [];
+        const customer = key === "accounts" ? nextData.customers.find(candidate => candidate.id === item.customerId || (candidate.full_name === item.customer && candidate.phone === item.phone)) : null;
+        const record = { external_id: externalId, data: item, updated_at: new Date().toISOString() };
+        if (key === "accounts") Object.assign(record, { customer_id: customer?.id || item.customerId || null, outstanding: Math.max(0, Number(item.balance || 0)), status: item.status || "active" });
+        return [request(`/rest/v1/${table}?on_conflict=external_id`, { method: "POST", headers: { Prefer: "resolution=merge-duplicates" }, body: JSON.stringify(record) })];
+      });
+      const deletes = [...previousRows.keys()].filter(externalId => !nextRows.has(externalId)).map(externalId => request(`/rest/v1/${table}?external_id=eq.${encodeURIComponent(externalId)}`, { method: "DELETE" }));
+      return [...writes, ...deletes];
+    });
+    if (JSON.stringify(previousData.settings) !== JSON.stringify(nextData.settings)) jobs.push(request("/rest/v1/finance_settings?on_conflict=id", { method: "POST", headers: { Prefer: "resolution=merge-duplicates" }, body: JSON.stringify({ id: "default", data: nextData.settings, updated_at: new Date().toISOString() }) }));
     return Promise.all(jobs).catch(error => { window.dispatchEvent(new CustomEvent("finance-sync-error", { detail: error.message })); return null; });
   }
   async function hydrate(token) {

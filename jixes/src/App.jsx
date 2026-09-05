@@ -399,6 +399,21 @@ function LoginScreen({ onSignIn }) {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
+  useEffect(() => {
+    const clearAutofill = () => {
+      const form = document.querySelector(".login-card");
+      if (!form) return;
+      form.setAttribute("autocomplete", "off");
+      const emailInput = form.querySelector('input[type="email"]');
+      const passwordInput = form.querySelector('input[type="password"]');
+      if (emailInput) { emailInput.setAttribute("autocomplete", "off"); emailInput.value = ""; }
+      if (passwordInput) { passwordInput.setAttribute("autocomplete", "new-password"); passwordInput.value = ""; }
+    };
+    clearAutofill();
+    const timer = window.setTimeout(clearAutofill, 50);
+    return () => window.clearTimeout(timer);
+  }, []);
+
   async function submit(event) {
     event.preventDefault();
     setLoading(true);

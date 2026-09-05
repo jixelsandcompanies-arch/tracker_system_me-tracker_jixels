@@ -57,6 +57,41 @@ function tramigoLocation(report: any) {
   return { latitude, longitude, speedKph: Number(source?.Speed ?? source?.speed ?? 0), recordedAt: source?.DateTimeActual ?? report?.DateTimeActual ?? new Date().toISOString() };
 }
 
+function isExpoPushToken(value: unknown) {
+  return typeof value === "string" && /^(?:Expo|Exponent)PushToken\[[^\]]+\]$/.test(value);
+}
+
+async function sendCustomerApprovalPush(
+  admin: ReturnType<typeof createClient>,
+  customerId: string,
+) {
+  const { data: tokens, error } = await admin
+    .from("customer_push_tokens")
+    .select("expo_push_token")
+    .eq("customer_id", customerId);
+  if (error || !tokens?.length) return false;
+
+  const messages = tokens.map(({ expo_push_token }) => ({
+    to: expo_push_token,
+    sound: "default",
+    title: "Jixels account approved",
+    body: "Your account is approved. Open Jixels Customer Trackings to enter your secure approval code.",
+    data: { type: "customer_approval", customerId },
+  }));
+  try {
+    const result = await fetch("https://exp.host/--/api/v2/push/send", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify(messages),
+    });
+    if (!result.ok) console.error("Customer approval push failed", await result.text());
+    return result.ok;
+  } catch (error) {
+    console.error("Customer approval push failed", error);
+    return false;
+  }
+}
+
 async function registerPortalUser(client: ReturnType<typeof createClient>, admin: ReturnType<typeof createClient>, body: Record<string, unknown>, role: "customer" | "agent" | "finance") {
   const email = String(body.email ?? "").trim().toLowerCase();
   const password = String(body.password ?? "");
@@ -84,6 +119,11 @@ async function registerPortalUser(client: ReturnType<typeof createClient>, admin
     if (customerError) { console.error("Customer account provisioning failed", customerError); return fail("Your registration was received but the customer account is still being prepared. Please contact an administrator.", 503, "CUSTOMER_PROVISIONING_FAILED"); }
     const { error: screeningError } = await admin.from("screening_applications").insert({ customer_id: data.user.id, full_name: fullName, email, phone, status: "pending", updated_at: now });
     if (screeningError) console.error("Customer screening provisioning failed", screeningError);
+    const pushToken = body.pushToken;
+    if (isExpoPushToken(pushToken)) {
+      const { error: pushTokenError } = await admin.from("customer_push_tokens").upsert({ customer_id: data.user.id, expo_push_token: pushToken, platform: String(body.platform ?? "mobile"), updated_at: now }, { onConflict: "customer_id,expo_push_token" });
+      if (pushTokenError) console.error("Customer push token provisioning failed", pushTokenError);
+    }
   }
   return response({ status: "pending", message: "Registration submitted for administrator approval." }, 201);
 }
@@ -277,8 +317,12 @@ Deno.serve(async (request) => {
     const { data: manager, error: managerError } = await admin.from("profiles").select("role").eq("id", user.id).maybeSingle();
     if (managerError || !manager || !["admin", "super_admin", "operations_manager"].includes(manager.role)) return fail("Administrator approval is required.", 403, "FORBIDDEN");
     const applicationId = String(body.applicationId ?? "").trim();
-    if (!applicationId) return fail("A screening application is required.", 422, "INVALID_APPLICATION");
-    const { data: application, error: applicationError } = await admin.from("screening_applications").select("id,customer_id,email,phone").eq("id", applicationId).maybeSingle();
+    const customerId = String(body.customerId ?? "").trim();
+    if (!applicationId && !customerId) return fail("A screening application or customer is required.", 422, "INVALID_APPLICATION");
+    const applicationQuery = admin.from("screening_applications").select("id,customer_id,email,phone");
+    const { data: application, error: applicationError } = applicationId
+      ? await applicationQuery.eq("id", applicationId).maybeSingle()
+      : await applicationQuery.eq("customer_id", customerId).order("created_at", { ascending: false }).limit(1).maybeSingle();
     if (applicationError || !application) return fail("Screening application not found.", 404, "NOT_FOUND");
     const now = new Date().toISOString();
     const { error: approvalError } = await admin.from("screening_applications").update({ status: "approved", reviewed_by: user.id, reviewed_at: now, approved_at: now, updated_at: now }).eq("id", application.id);
@@ -295,8 +339,9 @@ Deno.serve(async (request) => {
         ? await client.auth.signInWithOtp({ email: identifier.toLowerCase(), options: { shouldCreateUser: false } })
         : await client.auth.signInWithOtp({ phone: identifier.replace(/\s/g, ""), options: { shouldCreateUser: false } })).error
       : new Error("No customer email or phone number is available for OTP delivery.");
+    const pushSent = application.customer_id ? await sendCustomerApprovalPush(admin, application.customer_id) : false;
     if (otpError) console.error("Approval OTP delivery failed", otpError);
-    return response({ approved: true, otpSent: !otpError, message: otpError ? "Customer approved. Ask the customer to request a code from their registered contact." : "Customer approved. A one-time code was sent to the customer's registered contact." });
+    return response({ approved: true, otpSent: !otpError, pushSent, message: otpError ? "Customer approved. Ask the customer to request a code from their registered contact." : "Customer approved. A one-time code was sent to the customer's registered contact." });
   }
 
   if (route === "/v1/customer/overview" && request.method === "GET") {

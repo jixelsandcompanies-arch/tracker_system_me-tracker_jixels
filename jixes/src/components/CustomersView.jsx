@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { ClipboardList, Download, Eye, Gauge, Search, ShieldCheck, Trash2, Wifi, X } from "lucide-react";
-import { deleteRecord, hasSupabaseConfig, importRecords, listRecords, subscribeToTable, updateRecord } from "../lib/data";
+import { deleteRecord, hasSupabaseConfig, importRecords, invokeApi, listRecords, subscribeToTable, updateRecord } from "../lib/data";
 import { recordAudit } from "../lib/security";
 
 const fields = ["id", "full_name", "phone", "email", "national_id", "address", "county", "town", "status", "tracker_number", "created_at", "updated_at"];
@@ -35,7 +35,7 @@ export default function CustomersView({ approvalMode = false }){
   const load=async()=>{if(!hasSupabaseConfig)return setMessage("Connect Supabase to view live records.");const result=await listRecords("customers",{pageSize:1000});if(result.error)return setMessage(result.error.message);setCustomers(result.data);setMessage("");};
   useEffect(()=>{load();return subscribeToTable("customers",load);},[]);
   const visible=customers.filter((customer)=>(approvalMode || customerState(customer.status)==="approved")&&JSON.stringify(customer).toLowerCase().includes(search.toLowerCase()));
-  async function changeStatus(customer,status){const result=await updateRecord("customers",customer.id,{status});if(result.error)return setMessage(result.error.message);recordAudit({action:`${status === "active" ? "approved" : "rejected"} customer account`,resource:"Customers",detail:customer.full_name});await load();}
+  async function changeStatus(customer,status){if(status==="active"){const result=await invokeApi("/v1/admin/screening/approve",{customerId:customer.id});if(result.error)return setMessage(result.error.message);recordAudit({action:"approved customer and issued OTP",resource:"Customer Accounts",detail:customer.full_name});setMessage(result.data?.message||"Customer approved and notified.");await load();return;}const result=await updateRecord("customers",customer.id,{status});if(result.error)return setMessage(result.error.message);recordAudit({action:"rejected customer account",resource:"Customers",detail:customer.full_name});await load();}
   async function removeCustomer(){const result=await deleteRecord("customers",pendingDelete.id);if(result.error)return setMessage(result.error.message);recordAudit({action:"deleted rejected customer account",resource:"Customers",detail:pendingDelete.full_name});setPendingDelete(undefined);await load();}
   const toggle=(id)=>setSelectedIds((ids)=>ids.includes(id)?ids.filter((item)=>item!==id):[...ids,id]);
   async function removeCustomers(ids){if(!ids.length||!window.confirm(`Delete ${ids.length} customer record${ids.length===1?"":"s"}?`))return;for(const id of ids){const result=await deleteRecord("customers",id);if(result.error){setMessage(result.error.message);return;}}recordAudit({action:"deleted customer records",resource:"Customers",detail:`${ids.length} record(s)`});setSelectedIds([]);await load();}

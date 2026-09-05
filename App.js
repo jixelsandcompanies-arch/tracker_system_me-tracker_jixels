@@ -57,6 +57,21 @@ async function enableNotifications() {
   if (current.status !== "granted") await Notifications.requestPermissionsAsync();
 }
 
+async function customerPushToken() {
+  if (config.demoMode || Platform.OS === "web") return null;
+  try {
+    await enableNotifications();
+    const permission = await Notifications.getPermissionsAsync();
+    if (permission.status !== "granted") return null;
+    const token = await Notifications.getExpoPushTokenAsync({ projectId: "000c3287-aab6-4be1-858a-3ddf2c670c49" });
+    return token.data || null;
+  } catch {
+    // Push delivery is optional. Approval and OTP delivery still work through
+    // the registered email or phone number when notifications are unavailable.
+    return null;
+  }
+}
+
 async function saveProfilePhoto(uri) {
   const directory = `${FileSystem.documentDirectory}profile/`;
   await FileSystem.makeDirectoryAsync(directory, { intermediates: true }).catch(() => {});
@@ -125,7 +140,8 @@ function AuthScreen({ onAuthenticated, onPendingApproval, pendingEmail, approved
     setBusy(true);
     try {
       if (mode === "register") {
-        const application = config.demoMode ? { status: "pending" } : await authApi.register({ name: name.trim(), email: normalizedEmail, phone: phone.trim(), password });
+        const pushToken = await customerPushToken();
+        const application = config.demoMode ? { status: "pending" } : await authApi.register({ name: name.trim(), email: normalizedEmail, phone: phone.trim(), password, pushToken, platform: Platform.OS });
         if (application?.status !== "pending" && application?.status !== "submitted") throw new Error("Registration was not accepted.");
         onPendingApproval({ name: name.trim(), email: normalizedEmail, phone: phone.trim() });
         return;
@@ -182,6 +198,13 @@ function PendingApproval({ applicant, onEnterCode, onBackToLogin }) {
     const timer = setInterval(check, 15_000);
     return () => { active = false; clearInterval(timer); };
   }, [applicant?.email, onEnterCode]);
+  useEffect(() => {
+    const subscription = Notifications.addNotificationReceivedListener(notification => {
+      if (notification.request.content.data?.type !== "customer_approval") return;
+      Alert.alert("Your account has been approved", "A secure approval code was sent to your registered contact. Enter it to finish setup.", [{ text: "Enter code", onPress: onEnterCode }]);
+    });
+    return () => subscription.remove();
+  }, [onEnterCode]);
   return <View style={styles.approvalPage}><StatusBar style="light" /><View style={styles.approvalGlow} /><Logo /><View style={styles.approvalIcon}><Ionicons name="time-outline" size={46} color={colors.orange} /></View><Text style={styles.approvalTitle}>Account awaiting approval</Text><Text style={styles.approvalText}>Thanks, {applicant?.name || "customer"}. Jixels administration must approve your registration. After approval, Jixels Customer Trackings sends a six-digit verification code to your registered contact.</Text><View style={styles.approvalSteps}><View style={styles.approvalStep}><Ionicons name="checkmark-circle" size={21} color={colors.green} /><Text style={styles.approvalStepText}>Registration received</Text></View><View style={styles.approvalLine} /><View style={styles.approvalStep}><Ionicons name="hourglass-outline" size={21} color={colors.orange} /><Text style={styles.approvalStepText}>Admin verification and approval</Text></View><View style={styles.approvalLine} /><View style={styles.approvalStep}><Ionicons name="chatbox-ellipses-outline" size={21} color={colors.white} /><Text style={styles.approvalStepText}>Six-digit security code sent</Text></View></View><Pressable onPress={onEnterCode} style={styles.approvalButton}><Text style={styles.primaryButtonText}>Enter approval code</Text><Ionicons name="keypad-outline" size={18} color={colors.white} /></Pressable><Pressable onPress={onBackToLogin} style={styles.approvalSecondary}><Text style={styles.approvalSecondaryText}>Back to login</Text></Pressable></View>;
 }
 
@@ -926,12 +949,18 @@ function CustomerApp({ session, onLogout }) {
 }
 
 export default function App() {
-  const [phase, setPhase] = useState("otp");
+  const [phase, setPhase] = useState("auth");
   const [applicant, setApplicant] = useState(null);
   const [approvedEmail, setApprovedEmail] = useState(null);
   const [displayName, setDisplayName] = useState(customer.name);
   const [loginCount, setLoginCount] = useState(0);
   const [session, setSession] = useState(null);
+  useEffect(() => {
+    const subscription = Notifications.addNotificationResponseReceivedListener(response => {
+      if (response.notification.request.content.data?.type === "customer_approval") setPhase("otp");
+    });
+    return () => subscription.remove();
+  }, []);
   const authenticate = async (nextSession) => {
     setSession(nextSession);
     setDisplayName(nextSession?.user?.name || customer.name);

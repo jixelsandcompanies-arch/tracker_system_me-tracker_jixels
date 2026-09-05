@@ -198,9 +198,14 @@
     return parsed ? parsed.toLocaleDateString() : "-";
   }
 
+  function customerDirectoryTable(rows) {
+    if (!rows.length) return empty("No customer registrations", "New customer registrations will appear here.");
+    return `<div class="table-wrap"><table><thead><tr><th>Customer</th><th>Contact</th><th>Registration</th><th>Approval status</th></tr></thead><tbody>${rows.map(customer => `<tr><td><strong>${escapeHtml(customer.full_name)}</strong></td><td>${escapeHtml(customer.email || "-")}<br><small>${escapeHtml(customer.phone || "-")}</small></td><td>${registrationDate(customer.created_at)}</td><td>${status(customer.status || "pending")}</td></tr>`).join("")}</tbody></table></div>`;
+  }
+
   function customersPage() {
     const rows = data.customers || [];
-    return `<section class="finance-module"><div class="section-heading"><div><div class="eyebrow"><i></i> SHARED CUSTOMER DIRECTORY</div><h2>Customers</h2><p>Customer registrations from the Jixels app appear here for finance review.</p></div><span class="live-status"><i></i> ${rows.length} registered</span></div><section class="card module-table"><div class="card-header"><div><div class="card-title">Customer registrations</div><div class="card-subtitle">Customer approval remains an Admin workflow.</div></div></div>${rows.length ? `<div class="table-wrap"><table><thead><tr><th>Customer</th><th>Contact</th><th>Registration</th><th>Approval status</th></tr></thead><tbody>${rows.map(customer => `<tr><td><strong>${escapeHtml(customer.full_name)}</strong></td><td>${escapeHtml(customer.email || "-")}<br><small>${escapeHtml(customer.phone || "-")}</small></td><td>${registrationDate(customer.created_at)}</td><td>${status(customer.status || "pending")}</td></tr>`).join("")}</tbody></table></div>` : empty("No customer registrations", "New customer registrations will appear here.")}</section></section>`;
+    return `<section class="finance-module finance-directory"><div class="section-heading"><div><div class="eyebrow"><i></i> SHARED CUSTOMER DIRECTORY</div><h2>Customers</h2><p>Customer registrations from the Jixels app are available here for finance review.</p></div><span class="live-status"><i></i> Live data</span></div><section class="finance-directory-summary"><span class="directory-summary-icon">${icons.accounts}</span><div><span>Registered customers</span><strong>${rows.length}</strong></div><p>Shared customer records for finance review. Account approval remains an Admin workflow.</p></section><section class="card module-table"><div class="card-header directory-card-header"><div><div class="card-title">Customer records</div><div class="card-subtitle">Review customer contact details and registration status.</div></div><label class="table-search" for="customer-search"><span aria-hidden="true">⌕</span><input id="customer-search" placeholder="Search customers" aria-label="Search customers"></label></div><div id="customer-list">${customerDirectoryTable(rows)}</div></section></section>`;
   }
 
   function staffPage() {
@@ -620,6 +625,13 @@
       saveData(data); render();
     });
     document.querySelector("[data-cancel-account-edit]")?.addEventListener("click", () => { editingAccountId = null; render(); });
+    const customerSearch = document.getElementById("customer-search");
+    if (customerSearch) customerSearch.addEventListener("input", () => {
+      const query = customerSearch.value.trim().toLowerCase();
+      const rows = (data.customers || []).filter(customer => `${customer.full_name || ""} ${customer.email || ""} ${customer.phone || ""} ${customer.status || ""}`.toLowerCase().includes(query));
+      const target = document.getElementById("customer-list");
+      if (target) target.innerHTML = customerDirectoryTable(rows);
+    });
     const search = document.getElementById("account-search"); const filter = document.getElementById("account-filter");
     if (search) search.addEventListener("input", updateAccountList); if (filter) filter.addEventListener("change", updateAccountList);
     const paymentSearch = document.getElementById("payment-search");

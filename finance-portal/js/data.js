@@ -3,7 +3,7 @@
   const SUPABASE_KEY = "sb_publishable_IeSvEQI25WeymzwM-3j4VQ_a6a84vRO";
   // Never manufacture finance settings or operational records in the browser.
   // Settings are empty until an authorized Finance user saves them to Supabase.
-  const emptyData = { accounts: [], payments: [], agents: [], customers: [], staff: [], alerts: [], auditLogs: [], notifications: [], settings: { workspaceName: "", timezone: "", currency: "", commissionRate: "", dailyCollectionTarget: "", overdueGraceDays: "", exportRetentionDays: "", sessionTimeoutMinutes: "", notifyPayments: false, notifyReconciliation: false, notifyCommissions: false } };
+  const emptyData = { accounts: [], payments: [], agents: [], customers: [], staff: [], alerts: [], auditLogs: [], notifications: [], settings: { workspaceName: "", timezone: "", currency: "", saleCommission: "", monthlyCustomerCommission: "", commissionRate: "", dailyCollectionTarget: "", overdueGraceDays: "", exportRetentionDays: "", sessionTimeoutMinutes: "", notifyPayments: false, notifyReconciliation: false, notifyCommissions: false } };
   let memoryData = JSON.parse(JSON.stringify(emptyData)); let accessToken = null;
   const tables = { accounts: "finance_accounts", payments: "finance_payments", agents: "finance_agents", alerts: "finance_alerts", auditLogs: "finance_audit_logs" };
   const dashboardTables = { accounts: tables.accounts, payments: tables.payments };

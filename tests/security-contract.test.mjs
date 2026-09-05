@@ -8,6 +8,8 @@ const session = read("src/services/session.js");
 const payments = read("src/services/payments.js");
 const tracking = read("src/services/tracking.js");
 const apiFunction = read("supabase/functions/api/index.ts");
+const financeApp = read("finance-portal/js/app.js");
+const financeData = read("finance-portal/js/data.js");
 const agentAuth = read("Jixels angets/src/services/auth.js");
 const agentEas = JSON.parse(read("Jixels angets/eas.json"));
 const eas = JSON.parse(read("eas.json"));
@@ -40,6 +42,9 @@ assert.match(apiFunction, /route === "\/v1\/auth\/account-status"/, "customer ac
 assert.match(apiFunction, /resetPasswordForEmail/, "password reset must use Supabase Auth");
 assert.match(agentAuth, /\/v1\/agent\/auth\/login/, "agent app login must use the shared agent auth route");
 assert.match(agentAuth, /\/v1\/agent\/auth\/register/, "agent app registration must use the shared agent auth route");
+assert.match(financeApp, /commissionRules\(\)/, "Finance commission calculations must use saved rules");
+assert.match(financeData, /saleCommission: ""/, "Finance must not invent a sale commission default");
+assert.doesNotMatch(financeApp, /SALE_COMMISSION|MONTHLY_CUSTOMER_COMMISSION|KES 500 per sale|KES 50 per customer/, "Finance must not contain fixed commission values");
 
 console.log("PASS production HTTPS and demo-mode policy");
 console.log("PASS shared backend release URL policy");

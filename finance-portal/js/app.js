@@ -95,8 +95,15 @@
   };
 
   const paintLoadingFrame = () => new Promise(resolve => window.requestAnimationFrame(() => window.requestAnimationFrame(resolve)));
-  const SALE_COMMISSION = 500;
-  const MONTHLY_CUSTOMER_COMMISSION = 50;
+  const configuredAmount = key => {
+    const value = Number(data.settings?.[key]);
+    return Number.isFinite(value) && value >= 0 ? value : 0;
+  };
+  const commissionRules = () => ({ sale: configuredAmount("saleCommission"), monthlyCustomer: configuredAmount("monthlyCustomerCommission") });
+  const commissionRuleNote = () => {
+    const rules = commissionRules();
+    return rules.sale || rules.monthlyCustomer ? `${money(rules.sale)} per sale plus ${money(rules.monthlyCustomer)} per customer this month` : "Commission policy has not been configured";
+  };
   const sameDay = (left, right) => left && right && left.toDateString() === right.toDateString();
   const parseDate = value => {
     const date = value ? new Date(value) : null;
@@ -125,8 +132,9 @@
     });
     return [...map.values()].map(row => {
       const customerList = [...row.customers.values()];
-      const saleCommission = row.sales.length * SALE_COMMISSION;
-      const monthlyCommission = customerList.length * MONTHLY_CUSTOMER_COMMISSION;
+      const rules = commissionRules();
+      const saleCommission = row.sales.length * rules.sale;
+      const monthlyCommission = customerList.length * rules.monthlyCustomer;
       return { ...row, total: row.saleValue, customerList, sold: row.sales.length, saleCommission, monthlyCommission, commission: saleCommission + monthlyCommission };
     });
   };
@@ -194,7 +202,7 @@
       ["Collections", money(collections), "Total money received from customers", "blue"],
       ["Outstanding Balance", money(outstanding), "Total amount customers still owe", "orange"],
       ["Overdue Accounts", overdue.length, "Accounts with overdue payments", "red"],
-      ["Commissions", money(commissionRows().reduce((sum, row) => sum + row.commission, 0)), "KES 500 per sale plus KES 50 per customer this month", "green"],
+      ["Commissions", money(commissionRows().reduce((sum, row) => sum + row.commission, 0)), commissionRuleNote(), "green"],
       ["Due Today", money(sum(data.accounts.filter(account => account.status !== "Completed"), "dailyTarget")), "Total payments expected today", "orange"],
       ["Payments Today", money(sum(todayPayments, "amount")), "Total money actually received today", "green"],
       ["Tracker Sales", money(trackerSalesTotal), "Total value of trackers sold to all customers", "red"],
@@ -231,7 +239,7 @@
     const rows = commissionRows();
     const totals = rows.reduce((sum, row) => ({ paid: sum.paid + row.total, commission: sum.commission + row.commission, customers: sum.customers + row.customerList.length, sold: sum.sold + row.sold }), { paid: 0, commission: 0, customers: 0, sold: 0 });
     const body = rows.map(row => `<tr><td><strong>${escapeHtml(row.agent)}</strong><small>${escapeHtml(row.phone || "No phone")}</small></td><td>${escapeHtml(row.code)}</td><td>${row.customerList.length}</td><td>${row.sold}</td><td>${money(row.total)}</td><td><strong>${money(row.commission)}</strong></td><td>${row.customerList.map(customer => `<span>${escapeHtml(customer.name)} - ${escapeHtml(customer.product || "No tracker")}</span>`).join("") || "<span>No customer sales yet</span>"}</td><td><div class="commission-actions"><button class="commission-action view" type="button" data-view-agent="${escapeHtml(row.code)}">View customers</button><button class="commission-action pay" type="button" data-pay-commission="${escapeHtml(row.code)}" ${row.commission ? "" : "disabled"}>Pay commission</button><button class="commission-action remove" type="button" data-delete-agent="${escapeHtml(row.code)}">Delete</button></div></td></tr>`).join("");
-    return `<section class="commission-workspace"><div class="section-heading"><div><div class="eyebrow"><i></i> AGENT SALES</div><h2>Commissions</h2><p>KES 500 is earned once for each approved tracker sale. KES 50 is earned for each approved customer this month.</p></div></div><div class="metrics">${metric("Commission due", money(totals.commission), "KES 500 per sale + KES 50 per customer", "green")}${metric("Tracker sales", money(totals.paid), "Value of approved tracker sales", "blue")}${metric("Customers sold to", totals.customers, "Approved customer records", "orange")}${metric("Sold trackers", totals.sold, "Approved tracker sales", "blue")}</div><section class="card commission-panel"><div class="card-header commission-card-header"><div><div class="card-title">Agent commission register</div><div class="card-subtitle">Commission is calculated from approved tracker sales and active customers.</div></div><label class="commission-search"><span aria-hidden="true">⌕</span><input id="commission-search" placeholder="Search agents, code, customers" aria-label="Search commission register"></label></div><div class="table-wrap commission-table-wrap"><table class="commission-table"><thead><tr><th>Agent</th><th>Code</th><th>Customers</th><th>Sold trackers</th><th>Tracker sale value</th><th>Commission</th><th>Customers / trackers</th><th>Actions</th></tr></thead><tbody>${body}</tbody></table></div></section></section>`;
+    return `<section class="commission-workspace"><div class="section-heading"><div><div class="eyebrow"><i></i> AGENT SALES</div><h2>Commissions</h2><p>${escapeHtml(commissionRuleNote())}. Commission is calculated only from approved tracker sales and customer records.</p></div></div><div class="metrics">${metric("Commission due", money(totals.commission), commissionRuleNote(), "green")}${metric("Tracker sales", money(totals.paid), "Value of approved tracker sales", "blue")}${metric("Customers sold to", totals.customers, "Approved customer records", "orange")}${metric("Sold trackers", totals.sold, "Approved tracker sales", "blue")}</div><section class="card commission-panel"><div class="card-header commission-card-header"><div><div class="card-title">Agent commission register</div><div class="card-subtitle">Commission is calculated from approved tracker sales and active customers.</div></div><label class="commission-search"><span aria-hidden="true">⌕</span><input id="commission-search" placeholder="Search agents, code, customers" aria-label="Search commission register"></label></div><div class="table-wrap commission-table-wrap"><table class="commission-table"><thead><tr><th>Agent</th><th>Code</th><th>Customers</th><th>Sold trackers</th><th>Tracker sale value</th><th>Commission</th><th>Customers / trackers</th><th>Actions</th></tr></thead><tbody>${body}</tbody></table></div></section></section>`;
   }
 
   function paymentRecords(query = "") {
@@ -632,13 +640,18 @@
         render();
       }
     }));
-    document.getElementById("settings-form")?.addEventListener("submit", event => event.preventDefault());
+    const settingsForm = document.getElementById("settings-form");
+    const financeRulesCard = [...(settingsForm?.querySelectorAll(".settings-card") || [])].find(card => card.querySelector("h2")?.textContent === "Finance rules");
+    financeRulesCard?.insertAdjacentHTML("afterbegin", `<label>Commission per approved tracker sale<input name="saleCommission" type="number" min="0" value="${escapeHtml(data.settings.saleCommission)}"></label><label>Monthly commission per approved customer<input name="monthlyCustomerCommission" type="number" min="0" value="${escapeHtml(data.settings.monthlyCustomerCommission)}"></label>`);
+    settingsForm?.addEventListener("submit", event => event.preventDefault());
     document.querySelector("[data-save-settings]")?.addEventListener("click", () => {
       const form = new FormData(document.getElementById("settings-form"));
       data.settings = {
         workspaceName: form.get("workspaceName"),
         timezone: form.get("timezone"),
         currency: form.get("currency"),
+        saleCommission: form.get("saleCommission"),
+        monthlyCustomerCommission: form.get("monthlyCustomerCommission"),
         commissionRate: form.get("commissionRate"),
         dailyCollectionTarget: form.get("dailyCollectionTarget"),
         overdueGraceDays: form.get("overdueGraceDays"),

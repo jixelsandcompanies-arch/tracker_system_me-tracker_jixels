@@ -1,5 +1,9 @@
--- An approved screening application is the authoritative tracker-sale event.
--- Materialise it once for Finance, product inventory, and agent commissions.
+-- Commission amounts are business settings, not application constants. Existing
+-- materialized sale rows must not retain the legacy fixed commission values.
+update public.finance_accounts
+set data = data - 'saleCommission' - 'monthlyCustomerCommission'
+where data ?| array['saleCommission', 'monthlyCustomerCommission'];
+
 create or replace function public.materialize_tracker_sale(p_application_id uuid)
 returns void
 language plpgsql
@@ -30,18 +34,14 @@ begin
   select * into product_row
   from public.bikes
   where id = application_row.product_id;
-
   if not found then
     raise exception 'Approved sale % has no inventory product', p_application_id;
   end if;
 
-  select full_name
-    into agent_name
+  select full_name into agent_name
   from public.profiles
   where id = application_row.installer_agent_id;
-
   agent_code := coalesce(application_row.installer_agent_id::text, 'Unassigned');
-
   sale_id := 'SALE-' || application_row.id::text;
   total := greatest(coalesce(product_row.payable_amount, 0), 0);
   deposit := greatest(coalesce(application_row.deposit_amount, 0), 0);
@@ -115,29 +115,5 @@ begin
   end if;
 end;
 $$;
-
-create or replace function public.on_approved_tracker_sale()
-returns trigger
-language plpgsql
-security definer
-set search_path = public
-as $$
-begin
-  if new.status = 'approved' and old.status is distinct from 'approved' then
-    perform public.materialize_tracker_sale(new.id);
-  end if;
-  return new;
-end;
-$$;
-
-drop trigger if exists screening_application_materialize_sale on public.screening_applications;
-create trigger screening_application_materialize_sale
-after update of status on public.screening_applications
-for each row execute function public.on_approved_tracker_sale();
-
--- Recover approvals created before this trigger existed.
-select public.materialize_tracker_sale(id)
-from public.screening_applications
-where status = 'approved';
 
 notify pgrst, 'reload schema';

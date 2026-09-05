@@ -9,7 +9,7 @@
   window.addEventListener("error", event => showFatalError(event.error || event.message));
   window.addEventListener("unhandledrejection", event => showFatalError(event.reason));
   try {
-  const { readData, saveData, registerFinanceUser, authenticateFinanceUser, money } = window.FinanceStore;
+  const { readData, saveData, registerFinanceUser, financeAccountStatus, authenticateFinanceUser, money } = window.FinanceStore;
   const root = document.getElementById("root");
   let data = readData();
   let page = "dashboard";
@@ -64,6 +64,7 @@
   const safeLoginMessage = error => {
     const message = String(error?.message || "");
     console.error("Finance authentication failed", error);
+    if (error?.code === "ACCOUNT_NOT_FOUND" || /finance account not found/i.test(message)) return "Finance account not found. Please register a Finance account before signing in.";
     if (/invalid[_ ]credentials|invalid login|incorrect email|password/i.test(message)) return "Incorrect email or password. Please check your details and try again.";
     if (/account[_ ]locked|temporarily locked/i.test(message)) return "Your account has been temporarily locked because of too many failed login attempts. Please contact an administrator or use account recovery.";
     if (/permission|not approved|not authorized|awaiting administrator approval|account is not active/i.test(message)) {
@@ -71,7 +72,7 @@
       return message || "Your account is not approved for the Finance portal. Please contact an administrator.";
     }
     if (/network|fetch|offline|connect/i.test(message)) return "Unable to connect to the server. Check your internet connection and try again.";
-    return "We could not complete the sign-in request. If you recently registered, your Finance account may still be waiting for administrator approval.";
+    return "Finance account not found. Please register a Finance account before signing in.";
   };
   const commissionRate = () => Math.max(0, Number(data.settings.commissionRate || 5)) / 100;
   const sameDay = (left, right) => left && right && left.toDateString() === right.toDateString();
@@ -361,12 +362,22 @@
           if (!name || !phone) throw new Error("Complete your full name and phone number.");
           if (password !== confirm) throw new Error("Passwords do not match.");
           if (!isStrongPassword(password)) throw new Error("Use 8+ characters with uppercase, lowercase, number, and special character.");
-          root.innerHTML = authLoadingView();
+          const submit = event.currentTarget.querySelector("button[type=submit]");
+          if (submit) { submit.disabled = true; submit.textContent = "Submitting registration..."; }
           const registration = await registerFinanceUser({ name, email, phone, password });
-          root.innerHTML = loginView(registration.message || "Your Finance registration is waiting for administrator approval. You can sign in after the account is approved."); bindLoginEvents(); return;
+          root.innerHTML = loginView(registration.message || "Registration details submitted successfully. Please wait for administrator approval before signing in."); bindLoginEvents(); return;
         } else {
-          root.innerHTML = authLoadingView();
+          const submit = event.currentTarget.querySelector("button[type=submit]");
+          if (submit) { submit.disabled = true; submit.textContent = "Checking Finance account..."; }
+          const account = await financeAccountStatus(email);
+          if (!account.exists) {
+            const error = new Error("Finance account not found.");
+            error.code = "ACCOUNT_NOT_FOUND";
+            throw error;
+          }
+          if (!account.approved) throw new Error(account.message || "Your Finance registration is waiting for administrator approval. You can sign in after the account is approved.");
           session = await authenticateFinanceUser(email, password);
+          root.innerHTML = authLoadingView();
         }
         startWorkspaceLoading();
       } catch (error) {

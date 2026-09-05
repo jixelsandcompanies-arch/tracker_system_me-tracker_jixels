@@ -158,7 +158,7 @@ async function registerPortalUser(client: ReturnType<typeof createClient>, admin
       if (pushTokenError) console.error("Customer push token provisioning failed", pushTokenError);
     }
   }
-  return response({ status: "pending", message: "Registration submitted for administrator approval." }, 201);
+  return response({ status: "pending", message: "Registration details submitted successfully. Please wait for administrator approval before signing in." }, 201);
 }
 
 const customerRoles = new Set(["customer"]);
@@ -257,6 +257,25 @@ async function accountStatus(admin: ReturnType<typeof createClient>, url: URL) {
   });
 }
 
+async function financeAccountStatus(admin: ReturnType<typeof createClient>, url: URL) {
+  const email = String(url.searchParams.get("email") ?? "").trim().toLowerCase();
+  if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return fail("A valid email address is required.", 422, "INVALID_EMAIL");
+
+  const { data: profile, error } = await admin
+    .from("profiles")
+    .select("role,account_status")
+    .eq("email", email)
+    .maybeSingle();
+  if (error) {
+    console.error("Finance account status lookup failed", error);
+    return fail("Finance account status is temporarily unavailable.", 503, "ACCOUNT_STATUS_UNAVAILABLE");
+  }
+  if (!profile) return response({ exists: false, approved: false, message: "Finance account not found. Please register a Finance account before signing in." });
+  if (!financeRoles.has(profile.role)) return response({ exists: true, approved: false, message: "This email is registered for a different Jixels workspace and cannot access Finance." });
+  if (!approvedStatuses.has(profile.account_status)) return response({ exists: true, approved: false, message: "Your Finance registration is waiting for administrator approval. You can sign in after the account is approved." });
+  return response({ exists: true, approved: true, message: "Finance account approved." });
+}
+
 Deno.serve(async (request) => {
   if (request.method === "OPTIONS") return new Response(null, { headers: cors });
   const url = new URL(request.url);
@@ -318,6 +337,7 @@ Deno.serve(async (request) => {
   if (route === "/v1/finance/auth/request-password-reset" && request.method === "POST") {
     return requestPortalPasswordReset(client, admin, body, financeRoles);
   }
+  if (route === "/v1/finance/auth/account-status" && request.method === "GET") return financeAccountStatus(admin, url);
   if (route === "/v1/auth/account-status" && request.method === "GET") return accountStatus(admin, url);
   if (route === "/v1/auth/request-admin-otp" && request.method === "POST") {
     const identifier = String(body.identifier ?? "").trim(); const purpose = String(body.purpose ?? "app-access");

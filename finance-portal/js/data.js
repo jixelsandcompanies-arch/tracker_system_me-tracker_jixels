@@ -40,7 +40,8 @@
       request("/rest/v1/customers?select=id,full_name,email,phone,status,created_at&order=created_at.desc"),
       request("/rest/v1/profiles?select=id,full_name,email,phone,role,account_status&role=in.(agent,support_agent,finance,finance_officer,admin,super_admin)&order=full_name.asc")
     ]);
-    memoryData = { ...emptyData, customers: customers || [], staff: staff || [] };
+    const nonCustomerAccountIds = new Set((staff || []).filter((profile) => profile.role !== "customer").map((profile) => profile.id));
+    memoryData = { ...emptyData, customers: (customers || []).filter((customer) => !nonCustomerAccountIds.has(customer.id)), staff: staff || [] };
     rows.forEach(([key, values]) => { memoryData[key] = (values || []).map(row => ({ ...(row.data || {}), id: row.data?.id || row.external_id })); });
     if (settings?.[0]?.data) memoryData.settings = { ...emptyData.settings, ...settings[0].data };
     return clone(memoryData);
@@ -54,7 +55,16 @@
       return profile;
     } finally { accessToken = previous; }
   }
-  async function registerFinanceUser({ name, email, phone, password }) { const response = await fetch(`${SUPABASE_URL}/functions/v1/api/v1/finance/auth/register`, { method: "POST", headers: { apikey: SUPABASE_KEY, "Content-Type": "application/json" }, body: JSON.stringify({ name, email, phone, password }) }); const result = await response.json().catch(() => ({})); if (!response.ok) throw new Error(result.message || "Finance registration could not be completed. Please try again."); return { pending: true, message: result.message || "Finance registration submitted for administrator approval." }; }
+  function portalError(result, fallback) { const error = new Error(result.message || fallback); error.code = result.code; return error; }
+  async function registerFinanceUser({ name, email, phone, password }) { const response = await fetch(`${SUPABASE_URL}/functions/v1/api/v1/finance/auth/register`, { method: "POST", headers: { apikey: SUPABASE_KEY, "Content-Type": "application/json" }, body: JSON.stringify({ name, email, phone, password }) }); const result = await response.json().catch(() => ({})); if (!response.ok) throw portalError(result, "Finance registration could not be completed. Please try again."); return { pending: true, message: result.message || "Registration details submitted successfully. Please wait for administrator approval before signing in." }; }
+  async function financeAccountStatus(email) {
+    let response;
+    try { response = await fetch(`${SUPABASE_URL}/functions/v1/api/v1/finance/auth/account-status?email=${encodeURIComponent(email)}`, { headers: { apikey: SUPABASE_KEY } }); }
+    catch (error) { console.error("Finance account lookup failed", error); throw new Error("Unable to connect to the server. Check your internet connection and try again."); }
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) throw portalError(result, "We could not check the Finance account.");
+    return result;
+  }
   async function authenticateFinanceUser(email, password) {
     const response = await fetch(`${SUPABASE_URL}/functions/v1/api/v1/finance/auth/login`, {
       method: "POST",
@@ -62,10 +72,10 @@
       body: JSON.stringify({ email, password })
     });
     const result = await response.json().catch(() => ({}));
-    if (!response.ok || !result.accessToken || !result.user) throw new Error(result.message || "Incorrect email or password. Please check your details and try again.");
+    if (!response.ok || !result.accessToken || !result.user) throw portalError(result, "Incorrect email or password. Please check your details and try again.");
     await hydrate(result.accessToken);
     return { id: result.user.id, name: result.user.name || result.user.email.split("@")[0], email: result.user.email, phone: result.user.phone || "", role: result.user.role, accessToken: result.accessToken };
   }
   const money = value => new Intl.NumberFormat("en-KE", { style: "currency", currency: "KES", maximumFractionDigits: 0 }).format(Number(value || 0));
-  window.FinanceStore = { emptyData, readData, saveData, registerFinanceUser, authenticateFinanceUser, hydrate, money };
+  window.FinanceStore = { emptyData, readData, saveData, registerFinanceUser, financeAccountStatus, authenticateFinanceUser, hydrate, money };
 })();

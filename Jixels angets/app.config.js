@@ -14,6 +14,15 @@ export default {
       resizeMode: "contain",
       backgroundColor: "#0D467D"
     },
+    androidStatusBar: {
+      backgroundColor: "#0D467D",
+      barStyle: "light-content",
+      translucent: false
+    },
+    androidNavigationBar: {
+      backgroundColor: "#0D467D",
+      barStyle: "light-content"
+    },
     android: {
       package: "com.jixelstechnologies.agent",
       softwareKeyboardLayoutMode: "resize",

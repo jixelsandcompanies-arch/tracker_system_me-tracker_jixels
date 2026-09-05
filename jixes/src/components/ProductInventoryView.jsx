@@ -34,7 +34,10 @@ export default function ProductInventoryView() {
     return () => unsubscribers.forEach((unsubscribe) => unsubscribe());
   }, []);
 
-  const agents = data.profiles.filter((profile) => ["support_agent", "Support agent"].includes(profile.role));
+  const agents = data.profiles.filter((profile) =>
+    ["agent", "support_agent", "Support agent"].includes(profile.role)
+    && ["active", "approved"].includes(profile.account_status || "active"),
+  );
   const set = (key, value) => setForm((current) => ({ ...current, [key]: value }));
   const open = (product = null) => {
     setEditing(product);

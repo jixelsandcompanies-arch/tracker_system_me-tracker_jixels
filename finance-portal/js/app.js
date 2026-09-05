@@ -88,8 +88,11 @@
     if (!button) return;
     button.disabled = true;
     button.classList.add("is-loading");
+    button.setAttribute("aria-busy", "true");
     button.innerHTML = `<i class="button-spinner" aria-hidden="true"></i><span>${label}</span><span aria-hidden="true">↗</span>`;
   };
+
+  const paintAuthButtonLoading = () => new Promise(resolve => window.requestAnimationFrame(() => window.requestAnimationFrame(resolve)));
   const commissionRate = () => Math.max(0, Number(data.settings.commissionRate || 5)) / 100;
   const sameDay = (left, right) => left && right && left.toDateString() === right.toDateString();
   const parseDate = value => {
@@ -414,12 +417,14 @@
           if (!isStrongPassword(password)) throw new Error("Use 8+ characters with uppercase, lowercase, number, and special character.");
           const submit = event.currentTarget.querySelector("button[type=submit]");
           setAuthButtonLoading(submit, "Creating account...");
+          await paintAuthButtonLoading();
           const registration = await registerFinanceUser({ name, email, phone, password });
           if (!registration.pending) throw new Error("Registration was not submitted. Please try again.");
           showRegistrationPending(); return;
         } else {
           const submit = event.currentTarget.querySelector("button[type=submit]");
           setAuthButtonLoading(submit, "Signing in...");
+          await paintAuthButtonLoading();
           const account = await financeAccountStatus(email);
           if (!account.exists) {
             const error = new Error("Finance account not found.");

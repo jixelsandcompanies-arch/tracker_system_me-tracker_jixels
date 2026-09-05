@@ -212,7 +212,7 @@ function OtpVerification({ applicant, onVerified, onBack, initialGate = false })
   const [code, setCode] = useState("");
   const [contact, setContact] = useState(applicant?.email ?? "");
   const [busy, setBusy] = useState(false);
-  const [resendIn, setResendIn] = useState(30);
+  const [resendIn, setResendIn] = useState(initialGate ? 0 : 30);
   const [expiresIn, setExpiresIn] = useState(300);
   const [expired, setExpired] = useState(false);
   const entrance = useRef(new Animated.Value(0)).current;
@@ -259,7 +259,7 @@ function OtpVerification({ applicant, onVerified, onBack, initialGate = false })
     } finally { setBusy(false); }
   };
   useEffect(() => {
-    if (config.demoMode || initialCodeRequested.current) return;
+    if (config.demoMode || initialGate || initialCodeRequested.current) return;
     initialCodeRequested.current = true;
     requestNewCode();
   }, [initialGate]);
@@ -949,7 +949,7 @@ function CustomerApp({ session, onLogout }) {
 }
 
 export default function App() {
-  const [phase, setPhase] = useState("auth");
+  const [phase, setPhase] = useState("otp");
   const [applicant, setApplicant] = useState(null);
   const [approvedEmail, setApprovedEmail] = useState(null);
   const [displayName, setDisplayName] = useState(customer.name);

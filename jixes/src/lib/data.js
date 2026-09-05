@@ -98,9 +98,16 @@ export async function invokeApi(path, body) {
 }
 
 export function subscribeToTable(table, callback) {
-  if (!supabase || !allowedTables.has(table)) return () => {};
-  const channel = supabase.channel(`${table}-changes`).on("postgres_changes", { event: "*", schema: "public", table }, callback).subscribe();
-  return () => supabase.removeChannel(channel);
+  if (!supabase || !allowedTables.has(table) || typeof WebSocket === "undefined") return () => {};
+  try {
+    const channel = supabase.channel(`${table}-changes`).on("postgres_changes", { event: "*", schema: "public", table }, callback).subscribe();
+    return () => supabase.removeChannel(channel).catch(() => {});
+  } catch (error) {
+    // Realtime is an enhancement. Initial REST loads must keep the operations
+    // workspace usable when a browser or network blocks WebSockets.
+    console.warn("Realtime subscription unavailable", error);
+    return () => {};
+  }
 }
 export async function importRecords(table, records) {
   if (!records.length) return { data: [], error: null };

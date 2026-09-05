@@ -14,6 +14,8 @@
   let data = readData();
   let page = "dashboard";
   let authMode = "login";
+  let sidebarOpen = false;
+  let sidebarCollapsed = false;
   let notificationsOpen = false;
   let loading = false;
   let loadingMode = "launch";
@@ -43,7 +45,10 @@
     logout: icon('<path d="M10 5H5v14h5M14 8l4 4-4 4M18 12H9"/>')
   };
   const navigation = [
-    ["dashboard", icons.dashboard, "Dashboard"], ["customers", icons.accounts, "Customers"], ["staff", icons.commissions, "Staff"], ["accounts", icons.accounts, "Accounts"], ["payments", icons.payments, "Payments"]
+    ["dashboard", icons.dashboard, "Dashboard"], ["customers", icons.accounts, "Customers"], ["staff", icons.commissions, "Staff"], ["accounts", icons.accounts, "Accounts"], ["commissions", icons.commissions, "Commissions"],
+    ["payments", icons.payments, "Payments"], ["overdue", icons.overdue, "Overdue"],
+    ["reconciliation", icons.reconciliation, "Reconciliation"], ["reports", icons.reports, "Reports"],
+    ["alerts", icons.alerts, "Alerts"], ["settings", icons.settings, "Settings"], ["audit", icons.audit, "Audit Logs"]
   ];
 
   const escapeHtml = value => String(value || "").replace(/[&<>'"]/g, char => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" })[char]);
@@ -185,7 +190,7 @@
     const account = editingAccountId ? data.accounts.find(item => item.id === editingAccountId) || {} : {};
     const value = key => escapeHtml(account[key] ?? "");
     const selected = statusValue => account.status === statusValue ? "selected" : "";
-    return `<section class="page-stack"><div class="section-heading"><div><h2>Finance Accounts</h2><p>Create and manage financing records.</p></div></div><div class="card"><div class="card-header"><div><div class="card-title">${editingAccountId ? "Modify finance account" : "Add finance account"}</div><div class="card-subtitle">${editingAccountId ? escapeHtml(editingAccountId) : "No sample accounts are included."}</div></div></div><div class="card-body"><form id="account-form"><div class="form-grid"><div class="field"><label>Customer name</label><input name="customer" value="${value("customer")}" required></div><div class="field"><label>Phone number</label><input name="phone" value="${value("phone")}"></div><div class="field"><label>Bike registration</label><input name="bike" value="${value("bike")}" required></div><div class="field"><label>Bike model</label><input name="model" value="${value("model")}"></div><div class="field"><label>Total finance amount</label><input name="total" type="number" min="0" value="${value("total")}" required></div><div class="field"><label>Amount paid</label><input name="paid" type="number" min="0" value="${value("paid") || 0}"></div><div class="field"><label>Status</label><select name="status"><option ${selected("On Track")}>On Track</option><option ${selected("Overdue")}>Overdue</option><option ${selected("Completed")}>Completed</option></select></div></div><div class="form-actions">${editingAccountId ? '<button class="button button-secondary" type="button" data-cancel-account-edit>Cancel</button>' : ""}<button class="button button-primary">${editingAccountId ? "Update account" : "Save account"}</button></div></form></div></div><div class="card"><div class="card-header"><div><div class="card-title">All finance accounts</div></div><div class="toolbar account-toolbar"><label class="table-search" for="account-search"><span aria-hidden="true">⌕</span><input id="account-search" placeholder="Search accounts" aria-label="Search accounts"></label><select id="account-filter" aria-label="Filter accounts by status"><option value="">All statuses</option><option>On Track</option><option>Overdue</option><option>Completed</option></select>${bulkActions("accounts")}</div></div><div id="account-list">${accountTable(data.accounts, true)}</div></div></section>`;
+    return `<section class="page-stack"><div class="section-heading"><div><h2>Finance Accounts</h2><p>Create and manage financing records.</p></div></div><div class="card"><div class="card-header"><div><div class="card-title">${editingAccountId ? "Modify finance account" : "Add finance account"}</div><div class="card-subtitle">${editingAccountId ? escapeHtml(editingAccountId) : "No sample accounts are included."}</div></div></div><div class="card-body"><form id="account-form"><div class="form-grid"><div class="field"><label>Customer name</label><input name="customer" value="${value("customer")}" required></div><div class="field"><label>Phone number</label><input name="phone" value="${value("phone")}"></div><div class="field"><label>Bike registration</label><input name="bike" value="${value("bike")}" required></div><div class="field"><label>Bike model</label><input name="model" value="${value("model")}"></div><div class="field"><label>Total finance amount</label><input name="total" type="number" min="0" value="${value("total")}" required></div><div class="field"><label>Amount paid</label><input name="paid" type="number" min="0" value="${value("paid") || 0}"></div><div class="field"><label>Status</label><select name="status"><option ${selected("On Track")}>On Track</option><option ${selected("Overdue")}>Overdue</option><option ${selected("Completed")}>Completed</option></select></div></div><div class="form-actions">${editingAccountId ? '<button class="button button-secondary" type="button" data-cancel-account-edit>Cancel</button>' : ""}<button class="button button-primary">${editingAccountId ? "Update account" : "Save account"}</button></div></form></div></div><div class="card"><div class="card-header"><div><div class="card-title">All finance accounts</div></div><div class="toolbar"><input id="account-search" placeholder="Search accounts"><select id="account-filter"><option value="">All statuses</option><option>On Track</option><option>Overdue</option><option>Completed</option></select>${bulkActions("accounts")}</div></div><div id="account-list">${accountTable(data.accounts, true)}</div></div></section>`;
   }
 
   function registrationDate(value) {
@@ -342,11 +347,12 @@
     if (!online) { root.innerHTML = offlineView(); bindOfflineEvents(); return; }
     if (loading) { root.innerHTML = loadingView(); return; }
     if (!session) { root.innerHTML = loginView(); bindLoginEvents(); return; }
+    const currentLabel = navigation.find(item => item[0] === page)[2];
     const noticeRows = data.notifications.map(item => `<button class="notification-item ${item.unread ? "unread" : ""}" data-mark-notifications><span class="notification-dot"></span><span><strong>${escapeHtml(item.title)}</strong><small>${escapeHtml(item.detail)}</small><time>${escapeHtml(item.time)}</time></span></button>`).join("");
     const userEmail = session?.email || "";
     const userName = session?.name || userEmail.split("@")[0] || "Finance user";
     const initials = userName.split(/\s+/).map(part => part[0]).join("").slice(0, 2).toUpperCase() || "FU";
-    root.innerHTML = `<div class="app finance-app"><main class="main"><header class="topbar finance-topbar"><div class="finance-topbar-start"><button class="finance-topbar-brand" data-go="dashboard" aria-label="Open Finance dashboard"><img src="./assets/jixels-form-ni-tenje.svg?v=3" alt="Jixels Form Ni Tenje"></button><nav class="finance-topnav" aria-label="Finance navigation">${navigation.map(([id, navIcon, label]) => `<button data-go="${id}" class="${page === id ? "active" : ""}" aria-current="${page === id ? "page" : "false"}"><span>${navIcon}</span>${label}</button>`).join("")}</nav></div><div class="topbar-actions"><button class="notification-button ${data.notifications.some(item => item.unread) ? "has-unread" : ""}" data-notifications aria-label="Notifications">${icons.alerts}</button><div class="top-profile"><span class="user-avatar">${escapeHtml(initials)}</span><span><strong>${escapeHtml(userName)}</strong><small>${escapeHtml(userEmail || "Finance workspace")}</small></span></div><button class="finance-logout" data-logout type="button" aria-label="Sign out" title="Sign out">${icons.logout}</button></div>${notificationsOpen ? `<div class="notification-panel"><div class="notification-panel-heading"><strong>Notifications</strong><button data-mark-notifications>Mark all read</button></div><div class="notification-list">${noticeRows || "<p>No finance notifications.</p>"}</div></div>` : ""}</header><div class="content">${view()}</div><footer class="system-footer"><span><strong>JIXELS FINANCE</strong> · Form Ni Tenje · Finance workspace</span><span>© 2026 Jixels Technologies</span></footer></main></div>`;
+    root.innerHTML = `<div class="app ${sidebarCollapsed ? "sidebar-collapsed" : ""}"><aside class="sidebar ${sidebarOpen ? "open" : ""} ${sidebarCollapsed ? "collapsed" : ""}"><div class="sidebar-header"><button class="sidebar-toggle" data-collapse aria-label="Toggle navigation">${icons.menu}</button><div class="brand"><img class="finance-brand-logo" src="./assets/jixels-form-ni-tenje.svg?v=3" alt="Jixels Form Ni Tenje"></div></div><nav class="nav">${navigation.map(([id, navIcon, label], index) => `${index === 0 ? '<div class="nav-section">FINANCE</div>' : index === 7 ? '<div class="nav-section">REPORTING</div>' : index === 9 ? '<div class="nav-section">ADMIN</div>' : ''}<button data-go="${id}" class="${page === id ? "active" : ""}" title="${label}" aria-label="${label}"><span class="nav-icon">${navIcon}</span><span class="nav-label">${label}</span></button>`).join("")}</nav><div class="sidebar-footer"><button data-logout>${icons.logout}<span>Logout</span></button></div></aside>${sidebarOpen ? '<button class="scrim" data-close-menu aria-label="Close menu"></button>' : ""}<main class="main"><header class="topbar"><button class="menu-button" data-menu aria-label="Open navigation">${icons.menu}</button><div class="topbar-actions"><button class="notification-button ${data.notifications.some(item => item.unread) ? "has-unread" : ""}" data-notifications aria-label="Notifications">${icons.alerts}</button><div class="top-profile"><span class="user-avatar">${escapeHtml(initials)}</span><span><strong>${escapeHtml(userName)}</strong><small>${escapeHtml(userEmail || "Finance workspace")}</small></span></div></div>${notificationsOpen ? `<div class="notification-panel"><div class="notification-panel-heading"><strong>Notifications</strong><button data-mark-notifications>Mark all read</button></div><div class="notification-list">${noticeRows || "<p>No finance notifications.</p>"}</div><button data-go="alerts">View alert center</button></div>` : ""}</header><div class="content">${view()}</div><footer class="system-footer"><span><strong>JIXELS FINANCE</strong> · Form Ni Tenje · Finance workspace</span><span>© 2026 Jixels Technologies</span></footer></main></div>${commissionModal()}`;
     bindEvents();
   }
 
@@ -427,7 +433,7 @@
   }
 
   function openPage(nextPage) {
-    page = nextPage; loading = true; loadingMode = "page"; render();
+    page = nextPage; sidebarOpen = false; if (window.innerWidth > 760) sidebarCollapsed = true; loading = true; loadingMode = "page"; render();
     window.setTimeout(() => { loading = false; render(); }, 320);
   }
 
@@ -504,6 +510,17 @@
 
   function bindEvents() {
     document.querySelectorAll("[data-go]").forEach(button => button.addEventListener("click", () => openPage(button.dataset.go)));
+    const menu = document.querySelector("[data-menu]");
+    if (menu) menu.addEventListener("click", () => { sidebarOpen = true; render(); });
+    document.querySelector("[data-close-menu]")?.addEventListener("click", () => { sidebarOpen = false; render(); });
+    document.querySelector("[data-collapse]")?.addEventListener("click", () => { if (window.innerWidth <= 760) sidebarOpen = false; else sidebarCollapsed = !sidebarCollapsed; render(); });
+    document.querySelector(".main")?.addEventListener("pointerdown", () => {
+      if (window.innerWidth > 760 && !sidebarCollapsed) {
+        sidebarCollapsed = true;
+        document.querySelector(".app")?.classList.add("sidebar-collapsed");
+        document.querySelector(".sidebar")?.classList.add("collapsed");
+      }
+    });
     document.querySelectorAll("[data-notifications]").forEach(button => button.addEventListener("click", () => { notificationsOpen = !notificationsOpen; render(); }));
     document.querySelectorAll("[data-mark-notifications]").forEach(button => button.addEventListener("click", () => {
       data.notifications = data.notifications.map(item => ({ ...item, unread: false }));

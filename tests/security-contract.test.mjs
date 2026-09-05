@@ -20,7 +20,9 @@ assert.match(session, /if \(!session\.expiresAt\) return false/, "stored session
 assert.match(payments, /Idempotency-Key/, "M-Pesa requests require an idempotency key");
 assert.match(payments, /stable payment idempotency key is required/, "M-Pesa must reject missing idempotency keys");
 assert.match(tracking, /socket\.on\("connect".*tracker:subscribe/, "tracker subscription must be connection-scoped");
-assert.match(app, /identifier: identity/, "OTP must be bound to a registered identifier");
+assert.match(app, /verifyApprovalCode\(\{ email: applicant\.email, code \}\)/, "approval code verification must be bound to the registered customer email");
+assert.match(apiFunction, /customer_approval_codes/, "approval codes must be stored server-side");
+assert.match(apiFunction, /sendCustomerApprovalPush\(admin, application\.customer_id, code/, "approval code delivery must use the customer app notification");
 
 const reportAction = app.match(/const action = \{[^;]+reportType: "payments"[^;]+\};/)?.[0] ?? "";
 assert.ok(reportAction, "payment report request must exist");
@@ -39,7 +41,7 @@ assert.match(agentAuth, /\/v1\/agent\/auth\/register/, "agent app registration m
 console.log("PASS production HTTPS and demo-mode policy");
 console.log("PASS shared backend release URL policy");
 console.log("PASS expiring secure-session policy");
-console.log("PASS OTP identity binding");
+console.log("PASS in-app approval-code binding");
 console.log("PASS M-Pesa idempotency contract");
 console.log("PASS connection-scoped tracker subscription contract");
 console.log("PASS token-derived report ownership contract");

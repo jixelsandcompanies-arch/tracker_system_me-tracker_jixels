@@ -83,14 +83,14 @@ export async function invokeFunction(name, body) {
   return { data, error };
 }
 
-export async function invokeApi(path, body) {
+export async function invokeApi(path, body, method = "POST") {
   const session = getSession();
   if (!supabaseUrl || !supabaseKey || !session?.accessToken || !navigator.onLine) return { data: null, error: new Error("Connect to Supabase to complete this action") };
   try {
     const result = await fetch(`${supabaseUrl}/functions/v1/api${path}`, {
-      method: "POST",
+      method,
       headers: { apikey: supabaseKey, Authorization: `Bearer ${session.accessToken}`, "Content-Type": "application/json" },
-      body: JSON.stringify(body),
+      body: body == null ? undefined : JSON.stringify(body),
     });
     const data = await result.json().catch(() => ({}));
     return result.ok ? { data, error: null } : { data: null, error: new Error(data.message || "The request could not be completed") };

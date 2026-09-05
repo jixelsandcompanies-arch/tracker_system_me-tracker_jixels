@@ -9,6 +9,7 @@ export const authApi = {
   },
   register: data => apiRequest("/v1/auth/register", { method: "POST", body: data }),
   requestPasswordReset: email => apiRequest("/v1/auth/request-password-reset", { method: "POST", body: { email } }),
+  verifyApprovalCode: data => apiRequest("/v1/auth/verify-customer-approval-code", { method: "POST", body: data }),
   verifyOtp: data => apiRequest("/v1/auth/verify-admin-otp", { method: "POST", body: data }),
   requestOtp: data => apiRequest("/v1/auth/request-admin-otp", { method: "POST", body: data }),
   accountStatus: email => apiRequest(`/v1/auth/account-status?email=${encodeURIComponent(email)}`),

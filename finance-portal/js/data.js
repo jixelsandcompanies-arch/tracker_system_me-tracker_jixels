@@ -20,7 +20,17 @@
     if (!response.ok) { console.error("Finance API request failed", path, response.status, await response.text().catch(() => "")); throw new Error(safeError(response.status)); }
     return response.status === 204 ? null : response.json();
   }
-  function saveData(data) { memoryData = { ...emptyData, ...clone(data) }; if (!accessToken) return; const jobs = Object.entries(tables).flatMap(([key, table]) => (memoryData[key] || []).map(item => request(`/rest/v1/${table}?on_conflict=external_id`, { method: "POST", headers: { Prefer: "resolution=merge-duplicates" }, body: JSON.stringify({ external_id: String(item.id || `${key}-${Date.now()}`), data: item, updated_at: new Date().toISOString() }) }))); jobs.push(request("/rest/v1/finance_settings?on_conflict=id", { method: "POST", headers: { Prefer: "resolution=merge-duplicates" }, body: JSON.stringify({ id: "default", data: memoryData.settings, updated_at: new Date().toISOString() }) })); Promise.all(jobs).catch(error => window.dispatchEvent(new CustomEvent("finance-sync-error", { detail: error.message })));
+  function saveData(data) {
+    memoryData = { ...emptyData, ...clone(data) };
+    if (!accessToken) return Promise.resolve();
+    const jobs = Object.entries(tables).flatMap(([key, table]) => (memoryData[key] || []).map(item => {
+      const customer = key === "accounts" ? memoryData.customers.find(candidate => candidate.id === item.customerId || (candidate.full_name === item.customer && candidate.phone === item.phone)) : null;
+      const record = { external_id: String(item.id || `${key}-${Date.now()}`), data: item, updated_at: new Date().toISOString() };
+      if (key === "accounts") Object.assign(record, { customer_id: customer?.id || item.customerId || null, outstanding: Math.max(0, Number(item.balance || 0)), status: item.status || "active" });
+      return request(`/rest/v1/${table}?on_conflict=external_id`, { method: "POST", headers: { Prefer: "resolution=merge-duplicates" }, body: JSON.stringify(record) });
+    }));
+    jobs.push(request("/rest/v1/finance_settings?on_conflict=id", { method: "POST", headers: { Prefer: "resolution=merge-duplicates" }, body: JSON.stringify({ id: "default", data: memoryData.settings, updated_at: new Date().toISOString() }) }));
+    return Promise.all(jobs).catch(error => { window.dispatchEvent(new CustomEvent("finance-sync-error", { detail: error.message })); return null; });
   }
   async function hydrate(token) {
     accessToken = token;

@@ -61,9 +61,21 @@ function isExpoPushToken(value: unknown) {
   return typeof value === "string" && /^(?:Expo|Exponent)PushToken\[[^\]]+\]$/.test(value);
 }
 
+async function sha256(value: string) {
+  const bytes = new TextEncoder().encode(value);
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return Array.from(new Uint8Array(digest)).map((item) => item.toString(16).padStart(2, "0")).join("");
+}
+
+function approvalCode() {
+  return String(crypto.getRandomValues(new Uint32Array(1))[0] % 1_000_000).padStart(6, "0");
+}
+
 async function sendCustomerApprovalPush(
   admin: ReturnType<typeof createClient>,
   customerId: string,
+  code: string,
+  email: string,
 ) {
   const { data: tokens, error } = await admin
     .from("customer_push_tokens")
@@ -76,7 +88,7 @@ async function sendCustomerApprovalPush(
     sound: "default",
     title: "Jixels account approved",
     body: "Your account is approved. Open Jixels Customer Trackings to enter your secure approval code.",
-    data: { type: "customer_approval", customerId },
+    data: { type: "customer_approval", customerId, code, email },
   }));
   try {
     const result = await fetch("https://exp.host/--/api/v2/push/send", {
@@ -90,6 +102,27 @@ async function sendCustomerApprovalPush(
     console.error("Customer approval push failed", error);
     return false;
   }
+}
+
+async function removeCustomerWorkspace(admin: ReturnType<typeof createClient>, customerId: string) {
+  const { data: bikes, error: bikesError } = await admin.from("bikes").select("id").eq("customer_id", customerId);
+  if (bikesError) throw bikesError;
+  const bikeIds = (bikes ?? []).map((bike) => bike.id);
+  const remove = async (request: any) => {
+    const { error } = await request;
+    if (error) throw error;
+  };
+
+  await remove(admin.from("support_cases").delete().eq("customer_id", customerId));
+  await remove(admin.from("screening_applications").delete().eq("customer_id", customerId));
+  await remove(admin.from("payments").delete().eq("customer_id", customerId));
+  await remove(admin.from("finance_accounts").delete().eq("customer_id", customerId));
+  await remove(admin.from("finance_accounts").delete().filter("data->>customerId", "eq", customerId));
+  if (bikeIds.length) {
+    await remove(admin.from("trackers").delete().in("bike_id", bikeIds));
+    await remove(admin.from("bikes").delete().in("id", bikeIds));
+  }
+  await remove(admin.from("customers").delete().eq("id", customerId));
 }
 
 async function registerPortalUser(client: ReturnType<typeof createClient>, admin: ReturnType<typeof createClient>, body: Record<string, unknown>, role: "customer" | "agent" | "finance") {
@@ -163,11 +196,17 @@ async function portalSignIn(
     if (profile.account_status === "rejected" || profile.account_status === "suspended") return fail("This account is not active. Please contact Jixels support.", 403, "ACCOUNT_INACTIVE");
     return fail("Your account is not active. Please contact Jixels support.", 403, "ACCOUNT_INACTIVE");
   }
+  let assignedVehicles: unknown[] = [];
+  if (agentRoles.has(profile.role)) {
+    const { data: bikes, error: bikesError } = await admin.from("bikes").select("id,identifier,model,product_type,payable_amount,status,assigned_agent_id,trackers(identifier)").eq("assigned_agent_id", data.user.id).order("created_at", { ascending: false });
+    if (bikesError) console.error("Agent vehicle load failed", bikesError);
+    assignedVehicles = (bikes ?? []).map((bike: any) => ({ id: bike.id, registration: bike.identifier, model: bike.model, product_type: bike.product_type, payable_amount: bike.payable_amount, status: bike.status, assigned_agent_id: bike.assigned_agent_id, tracker: bike.trackers?.[0]?.identifier ?? "Pending" }));
+  }
   return response({
     accessToken: data.session.access_token,
     refreshToken: data.session.refresh_token,
     expiresAt: new Date(data.session.expires_at! * 1000).toISOString(),
-    user: { id: data.user.id, email: data.user.email, name: profile.full_name, phone: profile.phone, role: profile.role },
+    user: { id: data.user.id, email: data.user.email, name: profile.full_name, phone: profile.phone, role: profile.role, assignedVehicles },
   });
 }
 
@@ -300,6 +339,20 @@ Deno.serve(async (request) => {
     if (error || !data.session || !data.user) return fail(error?.message ?? "The code is invalid or expired.", 401, "OTP_INVALID_OR_EXPIRED");
     return response({ verified: true, accessToken: data.session.access_token, refreshToken: data.session.refresh_token, expiresAt: new Date(data.session.expires_at! * 1000).toISOString(), user: { id: data.user.id, email: data.user.email, phone: data.user.phone } });
   }
+  if (route === "/v1/auth/verify-customer-approval-code" && request.method === "POST") {
+    const email = String(body.email ?? "").trim().toLowerCase();
+    const code = String(body.code ?? "").trim();
+    if (!email || !/^\d{6}$/.test(code)) return fail("Enter your registered email address and the six-digit approval code.", 422, "INVALID_APPROVAL_CODE");
+    const { data: profile, error: profileError } = await admin.from("profiles").select("id,role,account_status").eq("email", email).maybeSingle();
+    if (profileError || !profile || profile.role !== "customer") return fail("Customer account not found. Register an account or contact Jixels support.", 404, "ACCOUNT_NOT_FOUND");
+    if (!approvedStatuses.has(profile.account_status)) return fail("This account is still awaiting administrator approval.", 403, "ACCOUNT_PENDING_APPROVAL");
+    const { data: stored, error: storedError } = await admin.from("customer_approval_codes").select("code_hash,expires_at,used_at").eq("customer_id", profile.id).maybeSingle();
+    if (storedError || !stored || stored.used_at || new Date(stored.expires_at).getTime() <= Date.now()) return fail("The approval code is unavailable or expired. Ask an administrator to issue a new code.", 401, "APPROVAL_CODE_EXPIRED");
+    if (stored.code_hash !== await sha256(code)) return fail("The approval code is incorrect.", 401, "APPROVAL_CODE_INVALID");
+    const { error: useError } = await admin.from("customer_approval_codes").update({ used_at: new Date().toISOString() }).eq("customer_id", profile.id);
+    if (useError) return fail("The approval code could not be verified. Please try again.", 503, "APPROVAL_CODE_UNAVAILABLE");
+    return response({ verified: true, message: "Account verified. Sign in with your registered email and password." });
+  }
 
   if (route === "/v1/mpesa/c2b/register" && request.method === "POST") {
     try {
@@ -312,6 +365,27 @@ Deno.serve(async (request) => {
   const { data: identity } = await client.auth.getUser();
   const user = identity.user;
   if (!user) return fail("Authentication is required.", 401, "UNAUTHORIZED");
+
+  const deleteMatch = route.match(/^\/v1\/admin\/users\/([^/]+)$/);
+  if (deleteMatch && request.method === "DELETE") {
+    const targetId = decodeURIComponent(deleteMatch[1]);
+    const { data: manager, error: managerError } = await admin.from("profiles").select("role").eq("id", user.id).maybeSingle();
+    if (managerError || !manager || !adminRoles.has(manager.role)) return fail("Administrator permission is required to delete an account.", 403, "FORBIDDEN");
+    if (targetId === user.id) return fail("You cannot delete the account currently signed in to Admin.", 422, "CANNOT_DELETE_SELF");
+    try {
+      await removeCustomerWorkspace(admin, targetId);
+      const { data: profile, error: profileError } = await admin.from("profiles").select("id").eq("id", targetId).maybeSingle();
+      if (profileError) throw profileError;
+      if (profile) {
+        const { error: deleteError } = await admin.auth.admin.deleteUser(targetId);
+        if (deleteError) throw deleteError;
+      }
+      return response({ deleted: true, message: "The account and its linked workspace records were permanently deleted." });
+    } catch (error) {
+      console.error("Admin account deletion failed", error);
+      return fail("The account could not be deleted completely.", 500, "ACCOUNT_DELETE_FAILED");
+    }
+  }
 
   if (route === "/v1/admin/screening/approve" && request.method === "POST") {
     const { data: manager, error: managerError } = await admin.from("profiles").select("role").eq("id", user.id).maybeSingle();
@@ -333,15 +407,43 @@ Deno.serve(async (request) => {
     } else if (application.email) {
       await admin.from("profiles").update({ account_status: "approved", updated_at: now }).eq("email", application.email.toLowerCase());
     }
-    const identifier = application.email?.trim() || application.phone?.trim() || "";
-    const otpError = identifier
-      ? (identifier.includes("@")
-        ? await client.auth.signInWithOtp({ email: identifier.toLowerCase(), options: { shouldCreateUser: false } })
-        : await client.auth.signInWithOtp({ phone: identifier.replace(/\s/g, ""), options: { shouldCreateUser: false } })).error
-      : new Error("No customer email or phone number is available for OTP delivery.");
-    const pushSent = application.customer_id ? await sendCustomerApprovalPush(admin, application.customer_id) : false;
-    if (otpError) console.error("Approval OTP delivery failed", otpError);
-    return response({ approved: true, otpSent: !otpError, pushSent, message: otpError ? "Customer approved. Ask the customer to request a code from their registered contact." : "Customer approved. A one-time code was sent to the customer's registered contact." });
+    if (!application.customer_id) return fail("The approved customer does not have a mobile account for notification delivery.", 422, "CUSTOMER_APP_NOT_FOUND");
+    const code = approvalCode();
+    const { error: codeError } = await admin.from("customer_approval_codes").upsert({ customer_id: application.customer_id, code_hash: await sha256(code), expires_at: new Date(Date.now() + 5 * 60_000).toISOString(), used_at: null }, { onConflict: "customer_id" });
+    if (codeError) return fail("Customer approved, but the in-app approval code could not be created.", 503, "APPROVAL_CODE_UNAVAILABLE");
+    const pushSent = await sendCustomerApprovalPush(admin, application.customer_id, code, application.email ?? "");
+    return response({ approved: true, pushSent, message: pushSent ? "Customer approved. The Jixels Customer app received an in-app approval code." : "Customer approved. The customer must open the registered Jixels Customer app to receive the in-app code." });
+  }
+
+  if (route === "/v1/agent/customers" && (request.method === "GET" || request.method === "POST")) {
+    const { data: agentProfile, error: agentError } = await admin.from("profiles").select("role,account_status").eq("id", user.id).maybeSingle();
+    if (agentError || !agentProfile || !agentRoles.has(agentProfile.role)) return fail("This account does not have permission to onboard customers.", 403, "PORTAL_ACCESS_DENIED");
+    if (!approvedStatuses.has(agentProfile.account_status)) return fail("Your agent account is awaiting administrator approval.", 403, "ACCOUNT_PENDING_APPROVAL");
+    if (request.method === "GET") {
+      const { data: applications, error } = await admin.from("screening_applications").select("id,customer_id,full_name,phone,national_id,tracker_identifier,deposit_amount,status,created_at,bikes(id,identifier,model,payable_amount,trackers(identifier))").eq("installer_agent_id", user.id).order("created_at", { ascending: false });
+      if (error) return fail("Agent customers could not be loaded.", 503, "CUSTOMERS_UNAVAILABLE");
+      return response({ customers: (applications ?? []).map((item: any) => ({ id: item.customer_id ?? item.id, vehicleId: item.bikes?.id ?? "", name: item.full_name, phone: item.phone ?? "", idNumber: item.national_id ?? "", bike: item.bikes?.identifier ?? "Pending assignment", vehicleModel: item.bikes?.model ?? "Assigned bike", tracker: item.tracker_identifier ?? item.bikes?.trackers?.[0]?.identifier ?? "Pending", kyc: "Submitted", install: "Pending", payment: Number(item.deposit_amount ?? 0) > 0 ? "Deposit Paid" : "Pending", payableAmount: Number(item.bikes?.payable_amount ?? 0), amount: Number(item.deposit_amount ?? 0), balance: Math.max(0, Number(item.bikes?.payable_amount ?? 0) - Number(item.deposit_amount ?? 0)), commission: 0, receipt: "", date: item.created_at?.slice(0, 10) ?? "", screeningStatus: item.status })) });
+    }
+    const name = String(body.name ?? "").trim();
+    const phone = String(body.phone ?? "").trim();
+    const nationalId = String(body.nationalId ?? "").trim();
+    const location = String(body.location ?? "").trim();
+    const bikeId = String(body.bikeId ?? "").trim();
+    const depositAmount = Number(body.depositAmount ?? 0);
+    if (!name || !phone || !nationalId || !bikeId) return fail("Enter the customer name, phone number, national ID, and assigned bike.", 422, "INVALID_CUSTOMER_REGISTRATION");
+    if (!Number.isFinite(depositAmount) || depositAmount < 0) return fail("Enter a valid customer deposit amount.", 422, "INVALID_DEPOSIT");
+    const { data: bike, error: bikeError } = await admin.from("bikes").select("id,identifier,model,payable_amount,status,trackers(identifier)").eq("id", bikeId).eq("assigned_agent_id", user.id).maybeSingle();
+    if (bikeError || !bike) return fail("This bike is not assigned to your agent account.", 403, "BIKE_NOT_ASSIGNED");
+    if (depositAmount > Number(bike.payable_amount ?? 0)) return fail("The deposit cannot be higher than the total payable amount.", 422, "INVALID_DEPOSIT");
+    const now = new Date().toISOString();
+    const { data: customer, error: customerError } = await admin.from("customers").insert({ full_name: name, phone, national_id: nationalId, address: location || null, status: "pending", created_at: now, updated_at: now }).select("id").single();
+    if (customerError || !customer) return fail("Customer registration could not be saved.", 503, "CUSTOMER_REGISTRATION_FAILED");
+    const { error: applicationError } = await admin.from("screening_applications").insert({ customer_id: customer.id, product_id: bike.id, installer_agent_id: user.id, full_name: name, phone, national_id: nationalId, tracker_identifier: bike.trackers?.[0]?.identifier ?? bike.identifier, deposit_amount: depositAmount, status: "pending", created_at: now, updated_at: now });
+    if (applicationError) {
+      await admin.from("customers").delete().eq("id", customer.id);
+      return fail("Customer screening could not be submitted.", 503, "SCREENING_REGISTRATION_FAILED");
+    }
+    return response({ customer: { id: customer.id, vehicleId: bike.id, name, phone, idNumber: nationalId, location: location || "Field location", bike: bike.identifier, vehicleModel: bike.model, tracker: bike.trackers?.[0]?.identifier ?? "Pending", kyc: "Submitted", install: "Pending", payment: depositAmount > 0 ? "Deposit Paid" : "Pending", payableAmount: Number(bike.payable_amount ?? 0), amount: depositAmount, balance: Math.max(0, Number(bike.payable_amount ?? 0) - depositAmount), commission: 0, receipt: "", date: now.slice(0, 10), screeningStatus: "pending" } }, 201);
   }
 
   if (route === "/v1/customer/overview" && request.method === "GET") {

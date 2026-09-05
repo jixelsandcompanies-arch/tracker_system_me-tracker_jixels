@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Search, ShieldCheck, Trash2, X } from "lucide-react";
-import { deleteRecord, hasSupabaseConfig, listRecords, subscribeToTable, updateRecord } from "../lib/data";
+import { hasSupabaseConfig, invokeApi, listRecords, subscribeToTable, updateRecord } from "../lib/data";
 import { recordAudit } from "../lib/security";
 
 const label = (status) => status === "approved" ? "Approved" : status === "rejected" ? "Rejected" : "Pending";
@@ -26,7 +26,7 @@ export default function AgentAccountsView() {
     load();
   };
   const remove = async () => {
-    const result = await deleteRecord("profiles", pendingDelete.id);
+    const result = await invokeApi(`/v1/admin/users/${encodeURIComponent(pendingDelete.id)}`, null, "DELETE");
     if (result.error) return setMessage(result.error.message);
     recordAudit({ action: "deleted rejected staff account", resource: "Staff Accounts", detail: pendingDelete.full_name });
     setPendingDelete(null); load();

@@ -11,5 +11,7 @@ export const authApi = {
     return normalizeSession(await apiRequest("/v1/agent/auth/login", { method: "POST", body: { email, password } }));
   },
   register: data => apiRequest("/v1/agent/auth/register", { method: "POST", body: data }),
+  listCustomers: token => apiRequest("/v1/agent/customers", { token }),
+  onboardCustomer: (token, data) => apiRequest("/v1/agent/customers", { method: "POST", token, body: data }),
   requestPasswordReset: email => apiRequest("/v1/agent/auth/request-password-reset", { method: "POST", body: { email } })
 };

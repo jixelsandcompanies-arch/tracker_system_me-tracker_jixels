@@ -316,6 +316,16 @@ function LaunchSkeleton({ onComplete }) {
   </View>;
 }
 
+function agentAccessMessage(error) {
+  if (!(error instanceof ApiError)) return error instanceof Error ? error.message : "Check your connection and try again.";
+  if (error.code === "ACCOUNT_PENDING_APPROVAL") return "Your registration was received and is waiting for administrator approval. You cannot access the agent workspace until Admin approves it.";
+  if (error.code === "ACCOUNT_INACTIVE") return "This agent account is unavailable. Contact Jixels Admin before trying to sign in again.";
+  if (error.code === "PORTAL_ACCESS_DENIED") return "This account does not have permission to use the Agent app. Register an agent account or contact Jixels Admin.";
+  if (error.code === "PROFILE_UNAVAILABLE") return "Your account exists but is still being prepared. Wait a moment, then try again. If this continues, contact Jixels Admin.";
+  if (error.code === "INVALID_CREDENTIALS") return "No active agent account was found with these details, or the password is incorrect. Use Register only if you have not created an agent account yet.";
+  return error.message || "Check your connection and try again.";
+}
+
 function Login({ onLogin }) {
   const [mode, setMode] = useState("login");
   const [resettingPassword, setResettingPassword] = useState(false);
@@ -352,7 +362,7 @@ function Login({ onLogin }) {
         await authApi.register({ name: name.trim(), email: cleanEmail, phone: phone.trim(), password });
         setBusy(false);
         setMode("login");
-        Alert.alert("Registration submitted", "Jixels admin will review the agent account before login is enabled.");
+        Alert.alert("Registration received", "Your agent account is pending. It now appears in Admin under Staff Accounts. Jixels Admin must approve it before you can sign in.");
       } catch (error) {
         setBusy(false);
         Alert.alert("Registration unavailable", error instanceof ApiError || error instanceof Error ? error.message : "Check your connection and try again.");
@@ -369,7 +379,7 @@ function Login({ onLogin }) {
       onLogin({ ...normalizeAgentSession(session, cleanEmail), loginPassword: password });
     } catch (error) {
       setBusy(false);
-      Alert.alert("Login failed", error instanceof ApiError || error instanceof Error ? error.message : "Check your connection and try again.");
+      Alert.alert("Agent access unavailable", agentAccessMessage(error));
     }
   }
 
@@ -579,7 +589,7 @@ function Customers({ customers, onDeposit, onRefresh, refreshing, darkMode = fal
   </ScrollView>;
 }
 
-function Onboarding({ addCustomer, navigate, assignedVehicles, onRefresh, refreshing, darkMode = false }) {
+function Onboarding({ addCustomer, navigate, assignedVehicles, accessToken, onRefresh, refreshing, darkMode = false }) {
   const [form, setForm] = useState({ name: "", phone: "", idNumber: "", location: "", depositAmount: "" });
   const [selectedVehicleId, setSelectedVehicleId] = useState(assignedVehicles[0]?.id || "");
   const [vehiclePickerOpen, setVehiclePickerOpen] = useState(false);
@@ -587,6 +597,7 @@ function Onboarding({ addCustomer, navigate, assignedVehicles, onRefresh, refres
   const [passportPhoto, setPassportPhoto] = useState(null);
   const [idFrontPhoto, setIdFrontPhoto] = useState(null);
   const [idBackPhoto, setIdBackPhoto] = useState(null);
+  const [saving, setSaving] = useState(false);
   const selectedVehicle = assignedVehicles.find(vehicle => vehicle.id === selectedVehicleId) || assignedVehicles[0];
   const matchingVehicles = assignedVehicles.filter(vehicle => `${vehicle.registration} ${vehicle.model} ${vehicle.tracker}`.toLowerCase().includes(vehicleSearch.trim().toLowerCase()));
 
@@ -603,35 +614,22 @@ function Onboarding({ addCustomer, navigate, assignedVehicles, onRefresh, refres
     Alert.alert("ID captured", "Both front and back side of the customer ID are saved.");
   }
 
-  function save() {
-    if (!form.name.trim() || !form.phone.trim()) return Alert.alert("Missing details", "Enter customer name and phone.");
+  async function save() {
+    if (!form.name.trim() || !form.phone.trim() || !form.idNumber.trim()) return Alert.alert("Missing details", "Enter the customer name, phone number, and national ID once.");
     if (!selectedVehicle) return Alert.alert("No assigned bike", "Only bikes assigned to this agent can be sold. Ask admin to assign inventory first.");
     if (!idFrontPhoto || !idBackPhoto) return Alert.alert("Capture ID", "Capture and save both the front and back side of the customer ID.");
     const depositAmount = Number(form.depositAmount);
     if (!Number.isFinite(depositAmount) || depositAmount < 0) return Alert.alert("Check deposit", "Enter a valid deposit amount, or use 0 if no deposit was collected.");
     if (selectedVehicle.payableAmount > 0 && depositAmount > selectedVehicle.payableAmount) return Alert.alert("Check deposit", "The deposit cannot be higher than the total payable amount.");
-    addCustomer({
-      id: `CUS-${Math.floor(10000 + Math.random() * 89999)}`,
-      vehicleId: selectedVehicle.id,
-      name: form.name.trim(),
-      phone: form.phone.trim(),
-      idNumber: form.idNumber.trim(),
-      location: form.location.trim() || "Field location",
-      bike: selectedVehicle.registration,
-      vehicleModel: selectedVehicle.model,
-      tracker: selectedVehicle.tracker,
-      kyc: passportPhoto && idFrontPhoto && idBackPhoto ? "Submitted" : "Pending",
-      install: "Pending",
-      payment: "Pending",
-      payableAmount: selectedVehicle.payableAmount,
-      amount: depositAmount,
-      balance: selectedVehicle.payableAmount,
-      commission: 0,
-      receipt: "",
-      date: new Date().toISOString().slice(0, 10)
-    });
-    Alert.alert("Customer saved", "The agent record is ready for admin review.");
-    navigate("customers");
+    setSaving(true);
+    try {
+      const result = await authApi.onboardCustomer(accessToken, { name: form.name.trim(), phone: form.phone.trim(), nationalId: form.idNumber.trim(), location: form.location.trim(), bikeId: selectedVehicle.id, depositAmount });
+      addCustomer(result.customer);
+      Alert.alert("Customer registration received", "The customer now appears in Admin and Finance as pending. An administrator must approve the screening before account access is available.");
+      navigate("customers");
+    } catch (error) {
+      Alert.alert("Customer registration unavailable", error instanceof Error ? error.message : "Check your connection and try again.");
+    } finally { setSaving(false); }
   }
 
   const idButtonText = !idFrontPhoto ? "Capture ID front" : !idBackPhoto ? "Capture ID back" : "ID captured";
@@ -640,7 +638,7 @@ function Onboarding({ addCustomer, navigate, assignedVehicles, onRefresh, refres
     <View style={[styles.formCard, darkMode && styles.darkCard]}>
       <Field label="Full name" value={form.name} onChangeText={name => setForm({ ...form, name })} />
       <Field label="Phone number" value={form.phone} onChangeText={phone => setForm({ ...form, phone })} keyboardType="phone-pad" />
-      <Field label="National ID or passport" value={form.idNumber} onChangeText={idNumber => setForm({ ...form, idNumber })} />
+      <Field label="National ID or passport (enter once)" value={form.idNumber} onChangeText={idNumber => setForm({ ...form, idNumber })} />
       <Field label="Location" value={form.location} onChangeText={location => setForm({ ...form, location })} />
       <Text style={styles.fieldLabel}>Assigned bike to sell</Text>
       <View style={styles.reportBikePicker}>
@@ -665,7 +663,7 @@ function Onboarding({ addCustomer, navigate, assignedVehicles, onRefresh, refres
         {idFrontPhoto && <Image source={{ uri: idFrontPhoto }} style={styles.documentPreview} />}
         {idBackPhoto && <Image source={{ uri: idBackPhoto }} style={styles.documentPreview} />}
       </View>
-      <Pressable onPress={save} style={styles.primaryButton}><Text style={styles.primaryText}>Save customer</Text><Ionicons name="checkmark" color={colors.white} size={18} /></Pressable>
+      <Pressable disabled={saving} onPress={save} style={styles.primaryButton}>{saving ? <ActivityIndicator color={colors.white} /> : <><Text style={styles.primaryText}>Submit customer registration</Text><Ionicons name="checkmark" color={colors.white} size={18} /></>}</Pressable>
     </View>
   </ScrollView>;
 }
@@ -1029,6 +1027,12 @@ function AgentApp({ agent, onLogout }) {
     setRefreshing(true);
     const net = await Network.getNetworkStateAsync().catch(() => ({ isConnected: true }));
     setIsOnline(Boolean(net.isConnected));
+    if (agent.accessToken && net.isConnected) {
+      try {
+        const result = await authApi.listCustomers(agent.accessToken);
+        setCustomers(result.customers || []);
+      } catch (error) { console.warn("Agent customer refresh failed", error); }
+    }
     setTimeout(() => setRefreshing(false), 450);
   }
 
@@ -1103,7 +1107,7 @@ function AgentApp({ agent, onLogout }) {
 
   const body = screen === "dashboard" ? <Dashboard compact={compact} customers={customers} navigate={navigate} isOnline={isOnline} onRefresh={refresh} refreshing={refreshing} darkMode={darkMode} />
     : screen === "customers" ? <Customers customers={customers} onDeposit={requestDeposit} onRefresh={refresh} refreshing={refreshing} darkMode={darkMode} />
-    : screen === "onboard" ? <Onboarding addCustomer={addCustomer} navigate={navigate} assignedVehicles={availableAssignedVehicles} onRefresh={refresh} refreshing={refreshing} darkMode={darkMode} />
+    : screen === "onboard" ? <Onboarding addCustomer={addCustomer} navigate={navigate} assignedVehicles={availableAssignedVehicles} accessToken={agent.accessToken} onRefresh={refresh} refreshing={refreshing} darkMode={darkMode} />
     : screen === "payments" ? <Commissions customers={customers} onRefresh={refresh} refreshing={refreshing} darkMode={darkMode} />
     : screen === "alerts" ? <Alerts alerts={agentAlerts} markAllRead={() => setDeletedAlertIds(new Set(agentAlerts.map(alert => alert.id)))} markAlertRead={id => setReadAlertIds(current => new Set(current).add(id))} deleteAlerts={ids => setDeletedAlertIds(current => new Set([...current, ...ids]))} onRefresh={refresh} refreshing={refreshing} darkMode={darkMode} />
     : screen === "trackers" ? <Trackers customers={customers} onInstallComplete={markInstallComplete} onRefresh={refresh} refreshing={refreshing} darkMode={darkMode} />

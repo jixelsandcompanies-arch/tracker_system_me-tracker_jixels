@@ -133,7 +133,7 @@
     const registering = authMode === "register";
     const title = registering ? "Submitting registration" : "Signing you in";
     const detail = registering ? "Creating your finance profile and sending it for administrator approval." : "Checking your finance access and loading secure workspace records.";
-    return `<main class="login-screen"><section class="login-shell"><div class="login-story"><div class="login-brand"><img src="./assets/jixels-form-ni-tenje.svg" alt="Jixels Form Ni Tenje"></div><div class="login-story-copy"><span class="login-kicker"><i></i> FINANCE OPERATIONS PLATFORM</span><h1>Every payment.<br>One clear view.</h1><p>Manage financed accounts, collections, overdue balances, reconciliation, and reports from one secure workspace.</p></div></div><div class="login-form-panel"><section class="login-card finance-auth-loading" aria-live="polite"><div class="login-form-mark">✓</div><div class="eyebrow">FINANCE WORKSPACE</div><h2>${title}</h2><p>${detail}</p><div class="finance-auth-loader" aria-label="Loading"><i></i><i></i><i></i></div></section><footer class="login-panel-footer">© 2026 Jixels Technologies</footer></div></section></main>`;
+    return `<main class="finance-launch finance-auth-loading" aria-live="polite"><div class="finance-launch-stage"><div class="finance-launch-ring">⌖</div><div class="finance-launch-road"></div><span class="launch-finance-car">◼</span><span class="launch-finance-bike">●</span><span class="launch-finance-tuktuk">JX</span></div><small>WELCOME TO JIXELS FINANCE</small><h1>${title}</h1><p>${detail}</p><div class="finance-launch-dots" aria-label="Loading"><i></i><i></i><i></i></div></main>`;
   }
 
   function accountTable(accounts, allowRemove) {

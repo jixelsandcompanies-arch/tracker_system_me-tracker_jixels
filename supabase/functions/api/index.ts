@@ -407,11 +407,14 @@ Deno.serve(async (request) => {
     } else if (application.email) {
       await admin.from("profiles").update({ account_status: "approved", updated_at: now }).eq("email", application.email.toLowerCase());
     }
-    if (!application.customer_id) return fail("The approved customer does not have a mobile account for notification delivery.", 422, "CUSTOMER_APP_NOT_FOUND");
+    if (!application.customer_id) return response({ approved: true, pushSent: false, message: "Customer approved. The customer must register the Jixels Customer app before an in-app approval code can be issued." });
+    const { data: mobileProfile, error: mobileProfileError } = await admin.from("profiles").select("email,role").eq("id", application.customer_id).maybeSingle();
+    if (mobileProfileError) return fail("Customer approved, but mobile account status could not be checked.", 503, "CUSTOMER_APP_UNAVAILABLE");
+    if (!mobileProfile || mobileProfile.role !== "customer") return response({ approved: true, pushSent: false, message: "Customer approved. The customer must register the Jixels Customer app before an in-app approval code can be issued." });
     const code = approvalCode();
     const { error: codeError } = await admin.from("customer_approval_codes").upsert({ customer_id: application.customer_id, code_hash: await sha256(code), expires_at: new Date(Date.now() + 5 * 60_000).toISOString(), used_at: null }, { onConflict: "customer_id" });
     if (codeError) return fail("Customer approved, but the in-app approval code could not be created.", 503, "APPROVAL_CODE_UNAVAILABLE");
-    const pushSent = await sendCustomerApprovalPush(admin, application.customer_id, code, application.email ?? "");
+    const pushSent = await sendCustomerApprovalPush(admin, application.customer_id, code, mobileProfile.email ?? application.email ?? "");
     return response({ approved: true, pushSent, message: pushSent ? "Customer approved. The Jixels Customer app received an in-app approval code." : "Customer approved. The customer must open the registered Jixels Customer app to receive the in-app code." });
   }
 

@@ -132,26 +132,54 @@ async function registerPortalUser(client: ReturnType<typeof createClient>, admin
   const phone = String(body.phone ?? "").trim();
   if (!email || !password || !fullName) return fail("Complete your name, email, and password.", 422, "INVALID_REGISTRATION");
   const { data, error } = await client.auth.signUp({ email, password, options: { data: { full_name: fullName, phone } } });
+  const existingProfile = async () => {
+    const { data: profile, error: profileError } = await admin
+      .from("profiles")
+      .select("id,role,account_status")
+      .eq("email", email)
+      .maybeSingle();
+    if (profileError) {
+      console.error("Existing registration lookup failed", profileError);
+      return null;
+    }
+    return profile;
+  };
+  const existing = await existingProfile();
   // Supabase can return an obfuscated user with no identities for an existing email.
-  // Do not overwrite that account's profile or allow it to be registered under another role.
+  // A repeat submission for the same pending account is not a technical failure.
+  // Do not overwrite an account registered for a different portal role.
   if (data.user && data.user.identities?.length === 0) {
+    if (existing?.role === role && existing.account_status === "pending") {
+      return response({ status: "pending", message: "Registration details were already submitted. Please wait for administrator approval before signing in." });
+    }
     return fail("An account with this email already exists. Sign in or reset its password.", 409, "ACCOUNT_ALREADY_EXISTS");
   }
   if (error || !data.user) {
     console.error("Portal registration failed", error);
     const providerMessage = String(error?.message ?? "").toLowerCase();
+    if (providerMessage.includes("already") || providerMessage.includes("exists") || providerMessage.includes("registered")) {
+      if (existing?.role === role && existing.account_status === "pending") {
+        return response({ status: "pending", message: "Registration details were already submitted. Please wait for administrator approval before signing in." });
+      }
+      if (existing && existing.role !== role) return fail("This email is registered for a different Jixels workspace.", 409, "PORTAL_ROLE_CONFLICT");
+      return fail("An account with this email already exists. Sign in or reset its password.", 409, "ACCOUNT_ALREADY_EXISTS");
+    }
     if (providerMessage.includes("password")) return fail("Use a stronger password that meets the account requirements.", 422, "INVALID_PASSWORD");
     if (providerMessage.includes("signup") && providerMessage.includes("disabled")) return fail("Registration is temporarily unavailable. Contact Jixels support.", 503, "SIGNUP_DISABLED");
     return fail("Registration could not be completed. Please try again.", 400, "REGISTRATION_FAILED");
   }
+  const rollbackAuthUser = async () => {
+    const { error: deleteError } = await admin.auth.admin.deleteUser(data.user!.id);
+    if (deleteError) console.error("Registration rollback failed", deleteError);
+  };
   const { error: profileError } = await admin.from("profiles").upsert({ id: data.user.id, full_name: fullName, email, phone, role, account_status: "pending", updated_at: new Date().toISOString() }, { onConflict: "id" });
-  if (profileError) { console.error("Portal profile provisioning failed", profileError); return fail("Your registration was received but the profile is still being prepared. Please contact an administrator.", 503, "PROFILE_PROVISIONING_FAILED"); }
+  if (profileError) { console.error("Portal profile provisioning failed", profileError); await rollbackAuthUser(); return fail("Registration could not be completed. Please try again.", 503, "PROFILE_PROVISIONING_FAILED"); }
   if (role === "customer") {
     const now = new Date().toISOString();
     const { error: customerError } = await admin.from("customers").upsert({ id: data.user.id, full_name: fullName, email, phone, status: "pending", created_at: now, updated_at: now }, { onConflict: "id" });
-    if (customerError) { console.error("Customer account provisioning failed", customerError); return fail("Your registration was received but the customer account is still being prepared. Please contact an administrator.", 503, "CUSTOMER_PROVISIONING_FAILED"); }
+    if (customerError) { console.error("Customer account provisioning failed", customerError); await rollbackAuthUser(); return fail("Registration could not be completed. Please try again.", 503, "CUSTOMER_PROVISIONING_FAILED"); }
     const { error: screeningError } = await admin.from("screening_applications").insert({ customer_id: data.user.id, full_name: fullName, email, phone, status: "pending", updated_at: now });
-    if (screeningError) console.error("Customer screening provisioning failed", screeningError);
+    if (screeningError) { console.error("Customer screening provisioning failed", screeningError); await rollbackAuthUser(); return fail("Registration could not be completed. Please try again.", 503, "CUSTOMER_APPROVAL_PROVISIONING_FAILED"); }
     const pushToken = body.pushToken;
     if (isExpoPushToken(pushToken)) {
       const { error: pushTokenError } = await admin.from("customer_push_tokens").upsert({ customer_id: data.user.id, expo_push_token: pushToken, platform: String(body.platform ?? "mobile"), updated_at: now }, { onConflict: "customer_id,expo_push_token" });

@@ -14,6 +14,12 @@ export default {
       resizeMode: "contain",
       backgroundColor: "#0D467D"
     },
+    updates: {
+      url: "https://u.expo.dev/d39d37aa-156b-4bfd-b74d-c2fb8aed6bb6"
+    },
+    runtimeVersion: {
+      policy: "appVersion"
+    },
     androidStatusBar: {
       backgroundColor: "#0D467D",
       barStyle: "light-content",

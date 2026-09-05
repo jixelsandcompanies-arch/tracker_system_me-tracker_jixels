@@ -71,16 +71,44 @@ function approvalCode() {
   return String(crypto.getRandomValues(new Uint32Array(1))[0] % 1_000_000).padStart(6, "0");
 }
 
+const screeningDocumentBucket = "screening-documents";
+const screeningDocumentFields = ["customer_photo_url", "id_front_url", "id_back_url"] as const;
+
+function decodeScreeningDocument(value: unknown) {
+  if (typeof value !== "string") return null;
+  const match = value.match(/^data:(image\/(?:jpeg|png));base64,([A-Za-z0-9+/=]+)$/);
+  if (!match || match[2].length > 7_000_000) return null;
+  const binary = atob(match[2]);
+  return {
+    contentType: match[1],
+    extension: match[1] === "image/png" ? "png" : "jpg",
+    bytes: Uint8Array.from(binary, (character) => character.charCodeAt(0)),
+  };
+}
+
+async function uploadScreeningDocument(admin: ReturnType<typeof createClient>, applicationId: string, field: string, value: unknown) {
+  const document = decodeScreeningDocument(value);
+  if (!document) throw new Error("Each customer image must be a JPEG or PNG smaller than 5 MB.");
+  const path = `${applicationId}/${field}-${crypto.randomUUID()}.${document.extension}`;
+  const { error } = await admin.storage.from(screeningDocumentBucket).upload(path, document.bytes, { contentType: document.contentType, upsert: false });
+  if (error) throw error;
+  return path;
+}
+
+async function removeScreeningDocuments(admin: ReturnType<typeof createClient>, paths: string[]) {
+  if (paths.length) await admin.storage.from(screeningDocumentBucket).remove(paths);
+}
+
 async function sendCustomerApprovalPush(
   admin: ReturnType<typeof createClient>,
-  customerId: string,
+  customerIds: string[],
   code: string,
   email: string,
 ) {
   const { data: tokens, error } = await admin
     .from("customer_push_tokens")
     .select("expo_push_token")
-    .eq("customer_id", customerId);
+    .in("customer_id", [...new Set(customerIds.filter(Boolean))]);
   if (error || !tokens?.length) return false;
 
   const messages = tokens.map(({ expo_push_token }) => ({
@@ -88,7 +116,7 @@ async function sendCustomerApprovalPush(
     sound: "default",
     title: "Jixels account approved",
     body: "Your account is approved. Open Jixels Customer Trackings to enter your secure approval code.",
-    data: { type: "customer_approval", customerId, code, email },
+    data: { type: "customer_approval", customerId: customerIds[0], code, email },
   }));
   try {
     const result = await fetch("https://exp.host/--/api/v2/push/send", {
@@ -108,20 +136,35 @@ async function removeCustomerWorkspace(admin: ReturnType<typeof createClient>, c
   const { data: bikes, error: bikesError } = await admin.from("bikes").select("id").eq("customer_id", customerId);
   if (bikesError) throw bikesError;
   const bikeIds = (bikes ?? []).map((bike) => bike.id);
+  const { data: applications, error: applicationsError } = await admin.from("screening_applications").select("id,customer_photo_url,id_front_url,id_back_url").eq("customer_id", customerId);
+  if (applicationsError) throw applicationsError;
+  const applicationIds = (applications ?? []).map((application) => application.id);
+  const documentPaths = (applications ?? []).flatMap((application: any) => screeningDocumentFields.map((field) => application[field]).filter(Boolean));
   const remove = async (request: any) => {
     const { error } = await request;
     if (error) throw error;
   };
 
   await remove(admin.from("support_cases").delete().eq("customer_id", customerId));
+  await remove(admin.from("customer_approval_codes").delete().eq("customer_id", customerId));
+  await remove(admin.from("customer_push_tokens").delete().eq("customer_id", customerId));
+  await remove(admin.from("payment_requests").delete().eq("owner_id", customerId));
+  await remove(admin.from("alerts").delete().eq("owner_id", customerId));
   await remove(admin.from("screening_applications").delete().eq("customer_id", customerId));
   await remove(admin.from("payments").delete().eq("customer_id", customerId));
   await remove(admin.from("finance_accounts").delete().eq("customer_id", customerId));
   await remove(admin.from("finance_accounts").delete().filter("data->>customerId", "eq", customerId));
+  await remove(admin.from("finance_payments").delete().filter("data->>customerId", "eq", customerId));
+  if (applicationIds.length) await remove(admin.from("finance_payments").delete().in("external_id", applicationIds.map((id) => `DEPOSIT-${id}`)));
   if (bikeIds.length) {
+    const { data: trackers, error: trackersError } = await admin.from("trackers").select("id").in("bike_id", bikeIds);
+    if (trackersError) throw trackersError;
+    const trackerIds = (trackers ?? []).map((tracker) => tracker.id);
+    if (trackerIds.length) await remove(admin.from("tracker_heartbeats").delete().in("tracker_id", trackerIds));
     await remove(admin.from("trackers").delete().in("bike_id", bikeIds));
     await remove(admin.from("bikes").delete().in("id", bikeIds));
   }
+  await removeScreeningDocuments(admin, documentPaths);
   await remove(admin.from("customers").delete().eq("id", customerId));
 }
 
@@ -176,6 +219,25 @@ async function registerPortalUser(client: ReturnType<typeof createClient>, admin
   if (profileError) { console.error("Portal profile provisioning failed", profileError); await rollbackAuthUser(); return fail("Registration could not be completed. Please try again.", 503, "PROFILE_PROVISIONING_FAILED"); }
   if (role === "customer") {
     const now = new Date().toISOString();
+    const { data: submittedApplication, error: submittedApplicationError } = await admin
+      .from("screening_applications")
+      .select("id,customer_id")
+      .eq("email", email)
+      .eq("status", "pending")
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (submittedApplicationError) { console.error("Customer screening lookup failed", submittedApplicationError); await rollbackAuthUser(); return fail("Registration could not be completed. Please try again.", 503, "CUSTOMER_SCREENING_LOOKUP_FAILED"); }
+    // A field-agent onboarding already owns the customer and screening record.
+    // Register only the mobile identity here so the customer does not appear twice.
+    if (submittedApplication) {
+      const pushToken = body.pushToken;
+      if (isExpoPushToken(pushToken)) {
+        const { error: pushTokenError } = await admin.from("customer_push_tokens").upsert({ customer_id: data.user.id, expo_push_token: pushToken, platform: String(body.platform ?? "mobile"), updated_at: now }, { onConflict: "customer_id,expo_push_token" });
+        if (pushTokenError) console.error("Customer push token provisioning failed", pushTokenError);
+      }
+      return response({ status: "pending", message: "Registration details submitted successfully. Please wait for administrator approval before signing in." }, 201);
+    }
     const { error: customerError } = await admin.from("customers").upsert({ id: data.user.id, full_name: fullName, email, phone, status: "pending", created_at: now, updated_at: now }, { onConflict: "id" });
     if (customerError) { console.error("Customer account provisioning failed", customerError); await rollbackAuthUser(); return fail("Registration could not be completed. Please try again.", 503, "CUSTOMER_PROVISIONING_FAILED"); }
     const { error: screeningError } = await admin.from("screening_applications").insert({ customer_id: data.user.id, full_name: fullName, email, phone, status: "pending", updated_at: now });
@@ -453,6 +515,50 @@ Deno.serve(async (request) => {
   const user = identity.user;
   if (!user) return fail("Authentication is required.", 401, "UNAUTHORIZED");
 
+  const screeningDocumentMatch = route.match(/^\/v1\/admin\/screening\/([^/]+)\/documents$/);
+  if (screeningDocumentMatch && request.method === "GET") {
+    const { data: manager, error: managerError } = await admin.from("profiles").select("role").eq("id", user.id).maybeSingle();
+    if (managerError || !manager || !adminRoles.has(manager.role)) return fail("Administrator permission is required to view identity documents.", 403, "FORBIDDEN");
+    const applicationId = decodeURIComponent(screeningDocumentMatch[1]);
+    const { data: application, error: applicationError } = await admin
+      .from("screening_applications")
+      .select(screeningDocumentFields.join(","))
+      .eq("id", applicationId)
+      .maybeSingle();
+    if (applicationError || !application) return fail("Screening application not found.", 404, "NOT_FOUND");
+    const documents: Record<string, string> = {};
+    for (const field of screeningDocumentFields) {
+      const path = application[field];
+      if (!path) continue;
+      const { data, error } = await admin.storage.from(screeningDocumentBucket).createSignedUrl(path, 300);
+      if (error) {
+        console.error("Screening document signing failed", error);
+        return fail("A customer document could not be opened.", 503, "DOCUMENT_UNAVAILABLE");
+      }
+      if (data?.signedUrl) documents[field] = data.signedUrl;
+    }
+    return response({ documents });
+  }
+
+  const paymentPhoneMatch = route.match(/^\/v1\/agent\/customers\/([^/]+)\/payment-phone$/);
+  if (paymentPhoneMatch && request.method === "PATCH") {
+    const { data: agentProfile, error: agentError } = await admin.from("profiles").select("role,account_status").eq("id", user.id).maybeSingle();
+    if (agentError || !agentProfile || !agentRoles.has(agentProfile.role)) return fail("This account does not have permission to update customer payment details.", 403, "PORTAL_ACCESS_DENIED");
+    if (!approvedStatuses.has(agentProfile.account_status)) return fail("Your agent account is awaiting administrator approval.", 403, "ACCOUNT_PENDING_APPROVAL");
+    const paymentPhone = String(body.paymentPhone ?? "").trim();
+    if (!paymentPhone) return fail("Enter the phone number that should receive the payment prompt.", 422, "INVALID_PAYMENT_PHONE");
+    const customerId = decodeURIComponent(paymentPhoneMatch[1]);
+    const { data: application, error } = await admin
+      .from("screening_applications")
+      .update({ payment_phone: paymentPhone, updated_at: new Date().toISOString() })
+      .eq("customer_id", customerId)
+      .eq("installer_agent_id", user.id)
+      .select("customer_id,payment_phone")
+      .maybeSingle();
+    if (error || !application) return fail("Customer payment details could not be saved.", 404, "CUSTOMER_NOT_FOUND");
+    return response({ customerId: application.customer_id, paymentPhone: application.payment_phone });
+  }
+
   const accountApprovalMatch = route.match(/^\/v1\/admin\/account-approvals\/([^/]+)$/);
   if ((route === "/v1/admin/account-approvals" && request.method === "GET") || (accountApprovalMatch && request.method === "POST")) {
     const { data: manager, error: managerError } = await admin.from("profiles").select("role").eq("id", user.id).maybeSingle();
@@ -509,17 +615,49 @@ Deno.serve(async (request) => {
   }
 
   const deleteMatch = route.match(/^\/v1\/admin\/users\/([^/]+)$/);
+  const deleteProductMatch = route.match(/^\/v1\/admin\/products\/([^/]+)$/);
+  if (deleteProductMatch && request.method === "DELETE") {
+    const { data: manager, error: managerError } = await admin.from("profiles").select("role").eq("id", user.id).maybeSingle();
+    if (managerError || !manager || !adminRoles.has(manager.role)) return fail("Administrator permission is required to delete inventory.", 403, "FORBIDDEN");
+    const productId = decodeURIComponent(deleteProductMatch[1]);
+    const { data: applications, error: applicationsError } = await admin.from("screening_applications").select("customer_id").eq("product_id", productId);
+    if (applicationsError) return fail("Inventory links could not be checked.", 500, "PRODUCT_DELETE_FAILED");
+    try {
+      for (const customerId of new Set((applications ?? []).map((application) => application.customer_id).filter(Boolean))) await removeCustomerWorkspace(admin, customerId);
+      const { data: trackers, error: trackersError } = await admin.from("trackers").select("id").eq("bike_id", productId);
+      if (trackersError) throw trackersError;
+      const trackerIds = (trackers ?? []).map((tracker) => tracker.id);
+      if (trackerIds.length) await admin.from("tracker_heartbeats").delete().in("tracker_id", trackerIds);
+      await admin.from("trackers").delete().eq("bike_id", productId);
+      const { error: deleteError } = await admin.from("bikes").delete().eq("id", productId);
+      if (deleteError) throw deleteError;
+      return response({ deleted: true, message: "The inventory product and every linked record were permanently deleted." });
+    } catch (error) {
+      console.error("Inventory deletion failed", error);
+      return fail("The inventory product could not be deleted completely.", 500, "PRODUCT_DELETE_FAILED");
+    }
+  }
   if (deleteMatch && request.method === "DELETE") {
     const targetId = decodeURIComponent(deleteMatch[1]);
     const { data: manager, error: managerError } = await admin.from("profiles").select("role").eq("id", user.id).maybeSingle();
     if (managerError || !manager || !adminRoles.has(manager.role)) return fail("Administrator permission is required to delete an account.", 403, "FORBIDDEN");
     if (targetId === user.id) return fail("You cannot delete the account currently signed in to Admin.", 422, "CANNOT_DELETE_SELF");
     try {
+      const { data: customer, error: customerError } = await admin.from("customers").select("email").eq("id", targetId).maybeSingle();
+      if (customerError) throw customerError;
+      const { data: mobileProfile, error: mobileProfileError } = customer?.email
+        ? await admin.from("profiles").select("id").eq("email", customer.email.toLowerCase()).maybeSingle()
+        : { data: null, error: null };
+      if (mobileProfileError) throw mobileProfileError;
       await removeCustomerWorkspace(admin, targetId);
       const { data: profile, error: profileError } = await admin.from("profiles").select("id").eq("id", targetId).maybeSingle();
       if (profileError) throw profileError;
       if (profile) {
         const { error: deleteError } = await admin.auth.admin.deleteUser(targetId);
+        if (deleteError) throw deleteError;
+      }
+      if (mobileProfile && mobileProfile.id !== targetId) {
+        const { error: deleteError } = await admin.auth.admin.deleteUser(mobileProfile.id);
         if (deleteError) throw deleteError;
       }
       return response({ deleted: true, message: "The account and its linked workspace records were permanently deleted." });
@@ -543,20 +681,15 @@ Deno.serve(async (request) => {
     const now = new Date().toISOString();
     const { error: approvalError } = await admin.from("screening_applications").update({ status: "approved", reviewed_by: user.id, reviewed_at: now, approved_at: now, updated_at: now }).eq("id", application.id);
     if (approvalError) return fail("The screening application could not be approved.", 400, "APPROVAL_FAILED");
-    if (application.customer_id) {
-      await admin.from("customers").update({ status: "active", updated_at: now }).eq("id", application.customer_id);
-      await admin.from("profiles").update({ account_status: "approved", updated_at: now }).eq("id", application.customer_id);
-    } else if (application.email) {
-      await admin.from("profiles").update({ account_status: "approved", updated_at: now }).eq("email", application.email.toLowerCase());
-    }
-    if (!application.customer_id) return response({ approved: true, pushSent: false, message: "Customer approved. The customer must register the Jixels Customer app before an in-app approval code can be issued." });
-    const { data: mobileProfile, error: mobileProfileError } = await admin.from("profiles").select("email,role").eq("id", application.customer_id).maybeSingle();
+    if (application.customer_id) await admin.from("customers").update({ status: "active", updated_at: now }).eq("id", application.customer_id);
+    if (application.email) await admin.from("profiles").update({ account_status: "approved", updated_at: now }).eq("email", application.email.toLowerCase());
+    const { data: mobileProfile, error: mobileProfileError } = await admin.from("profiles").select("id,email,role").eq("email", application.email?.toLowerCase() ?? "").maybeSingle();
     if (mobileProfileError) return fail("Customer approved, but mobile account status could not be checked.", 503, "CUSTOMER_APP_UNAVAILABLE");
     if (!mobileProfile || mobileProfile.role !== "customer") return response({ approved: true, pushSent: false, message: "Customer approved. The customer must register the Jixels Customer app before an in-app approval code can be issued." });
     const code = approvalCode();
-    const { error: codeError } = await admin.from("customer_approval_codes").upsert({ customer_id: application.customer_id, code_hash: await sha256(code), expires_at: new Date(Date.now() + 5 * 60_000).toISOString(), used_at: null }, { onConflict: "customer_id" });
+    const { error: codeError } = await admin.from("customer_approval_codes").upsert({ customer_id: mobileProfile.id, code_hash: await sha256(code), expires_at: new Date(Date.now() + 5 * 60_000).toISOString(), used_at: null }, { onConflict: "customer_id" });
     if (codeError) return fail("Customer approved, but the in-app approval code could not be created.", 503, "APPROVAL_CODE_UNAVAILABLE");
-    const pushSent = await sendCustomerApprovalPush(admin, application.customer_id, code, mobileProfile.email ?? application.email ?? "");
+    const pushSent = await sendCustomerApprovalPush(admin, [mobileProfile.id, application.customer_id].filter(Boolean), code, mobileProfile.email ?? application.email ?? "");
     return response({ approved: true, pushSent, message: pushSent ? "Customer approved. The Jixels Customer app received an in-app approval code." : "Customer approved. The customer must open the registered Jixels Customer app to receive the in-app code." });
   }
 
@@ -565,37 +698,68 @@ Deno.serve(async (request) => {
     if (agentError || !agentProfile || !agentRoles.has(agentProfile.role)) return fail("This account does not have permission to onboard customers.", 403, "PORTAL_ACCESS_DENIED");
     if (!approvedStatuses.has(agentProfile.account_status)) return fail("Your agent account is awaiting administrator approval.", 403, "ACCOUNT_PENDING_APPROVAL");
     if (request.method === "GET") {
-      const { data: applications, error } = await admin.from("screening_applications").select("id,customer_id,full_name,phone,national_id,tracker_identifier,deposit_amount,status,created_at,bikes(id,identifier,model,payable_amount,trackers(identifier))").eq("installer_agent_id", user.id).order("created_at", { ascending: false });
+      const { data: applications, error } = await admin.from("screening_applications").select("id,customer_id,full_name,email,phone,payment_phone,national_id,location,product_identifier,product_type,product_model,tracker_identifier,deposit_amount,status,created_at,customers(email,address),bikes(id,identifier,model,payable_amount,trackers(identifier))").eq("installer_agent_id", user.id).order("created_at", { ascending: false });
       if (error) return fail("Agent customers could not be loaded.", 503, "CUSTOMERS_UNAVAILABLE");
-      return response({ customers: (applications ?? []).map((item: any) => ({ id: item.customer_id ?? item.id, vehicleId: item.bikes?.id ?? "", name: item.full_name, phone: item.phone ?? "", idNumber: item.national_id ?? "", bike: item.bikes?.identifier ?? "Pending assignment", vehicleModel: item.bikes?.model ?? "Assigned bike", tracker: item.tracker_identifier ?? item.bikes?.trackers?.[0]?.identifier ?? "Pending", kyc: item.status === "approved" ? "Approved" : "Submitted", install: "Pending", payment: Number(item.deposit_amount ?? 0) > 0 ? "Deposit Paid" : "Pending", payableAmount: Number(item.bikes?.payable_amount ?? 0), amount: Number(item.deposit_amount ?? 0), balance: Math.max(0, Number(item.bikes?.payable_amount ?? 0) - Number(item.deposit_amount ?? 0)), commission: item.status === "approved" ? 550 : 0, receipt: "", date: item.created_at?.slice(0, 10) ?? "", screeningStatus: item.status })) });
+      return response({ customers: (applications ?? []).map((item: any) => ({ id: item.customer_id ?? item.id, vehicleId: item.bikes?.id ?? "", name: item.full_name, phone: item.phone ?? "", email: item.email ?? item.customers?.email ?? "", location: item.location ?? item.customers?.address ?? "", payerPhone: item.payment_phone ?? "", idNumber: item.national_id ?? "", bike: item.product_identifier ?? item.bikes?.identifier ?? "Pending assignment", vehicleModel: item.product_model ?? item.bikes?.model ?? "Assigned bike", tracker: item.tracker_identifier ?? item.bikes?.trackers?.[0]?.identifier ?? "Pending", kyc: item.status === "approved" ? "Approved" : "Submitted", install: "Pending", payment: Number(item.deposit_amount ?? 0) > 0 ? "Deposit Paid" : "Pending", payableAmount: Number(item.bikes?.payable_amount ?? 0), amount: Number(item.deposit_amount ?? 0), balance: Math.max(0, Number(item.bikes?.payable_amount ?? 0) - Number(item.deposit_amount ?? 0)), commission: item.status === "approved" ? 550 : 0, receipt: "", date: item.created_at?.slice(0, 10) ?? "", screeningStatus: item.status })) });
     }
     const name = String(body.name ?? "").trim();
     const phone = String(body.phone ?? "").trim();
+    const email = String(body.email ?? "").trim().toLowerCase();
     const nationalId = String(body.nationalId ?? "").trim();
     const location = String(body.location ?? "").trim();
     const bikeId = String(body.bikeId ?? "").trim();
     const depositAmount = Number(body.depositAmount ?? 0);
-    if (!name || !phone || !nationalId || !bikeId) return fail("Enter the customer name, phone number, national ID, and assigned bike.", 422, "INVALID_CUSTOMER_REGISTRATION");
+    if (!name || !phone || !email || !nationalId || !bikeId || !body.customerPhoto || !body.idFrontPhoto || !body.idBackPhoto) return fail("Enter the customer name, phone number, email address, national ID, assigned bike, and all three images.", 422, "INVALID_CUSTOMER_REGISTRATION");
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return fail("Enter a valid customer email address.", 422, "INVALID_EMAIL");
     if (!Number.isFinite(depositAmount) || depositAmount < 0) return fail("Enter a valid customer deposit amount.", 422, "INVALID_DEPOSIT");
-    const { data: bike, error: bikeError } = await admin.from("bikes").select("id,identifier,model,payable_amount,status,customer_id,trackers(identifier)").eq("id", bikeId).eq("assigned_agent_id", user.id).maybeSingle();
+    const { data: bike, error: bikeError } = await admin.from("bikes").select("id,identifier,model,product_type,payable_amount,status,customer_id,trackers(identifier)").eq("id", bikeId).eq("assigned_agent_id", user.id).maybeSingle();
     if (bikeError || !bike) return fail("This bike is not assigned to your agent account.", 403, "BIKE_NOT_ASSIGNED");
     if (bike.customer_id || ["pending", "sold"].includes(String(bike.status).toLowerCase())) return fail("This tracker is already linked to another customer sale.", 409, "TRACKER_ALREADY_SOLD");
     if (depositAmount > Number(bike.payable_amount ?? 0)) return fail("The deposit cannot be higher than the total payable amount.", 422, "INVALID_DEPOSIT");
     const now = new Date().toISOString();
-    const { data: customer, error: customerError } = await admin.from("customers").insert({ full_name: name, phone, national_id: nationalId, address: location || null, status: "pending", created_at: now, updated_at: now }).select("id").single();
+    const { data: customer, error: customerError } = await admin.from("customers").insert({ full_name: name, email, phone, national_id: nationalId, address: location || null, status: "pending", created_at: now, updated_at: now }).select("id").single();
     if (customerError || !customer) return fail("Customer registration could not be saved.", 503, "CUSTOMER_REGISTRATION_FAILED");
-    const { error: applicationError } = await admin.from("screening_applications").insert({ customer_id: customer.id, product_id: bike.id, installer_agent_id: user.id, full_name: name, phone, national_id: nationalId, tracker_identifier: bike.trackers?.[0]?.identifier ?? bike.identifier, deposit_amount: depositAmount, status: "pending", created_at: now, updated_at: now });
-    if (applicationError) {
+
+    // This conditional update is the transaction boundary that prevents two
+    // onboarding requests from claiming the same tracker.
+    const { data: reservedBike, error: reservationError } = await admin.from("bikes")
+      .update({ customer_id: customer.id, status: "pending", updated_at: now })
+      .eq("id", bike.id)
+      .eq("assigned_agent_id", user.id)
+      .is("customer_id", null)
+      .select("id")
+      .maybeSingle();
+    if (reservationError || !reservedBike) {
+      await admin.from("customers").delete().eq("id", customer.id);
+      return fail("The tracker was just assigned to another customer. Choose another assigned tracker.", 409, "TRACKER_ALREADY_SOLD");
+    }
+
+    const { data: application, error: applicationError } = await admin.from("screening_applications").insert({ customer_id: customer.id, product_id: bike.id, installer_agent_id: user.id, full_name: name, email, phone, national_id: nationalId, location: location || null, product_identifier: bike.identifier, product_type: bike.product_type, product_model: bike.model, tracker_identifier: bike.trackers?.[0]?.identifier ?? bike.identifier, deposit_amount: depositAmount, status: "pending", created_at: now, updated_at: now }).select("id").single();
+    if (applicationError || !application) {
+      await admin.from("bikes").update({ customer_id: null, status: "available", updated_at: now }).eq("id", bike.id).eq("customer_id", customer.id);
       await admin.from("customers").delete().eq("id", customer.id);
       return fail("Customer screening could not be submitted.", 503, "SCREENING_REGISTRATION_FAILED");
     }
-    const { error: reservationError } = await admin.from("bikes").update({ customer_id: customer.id, status: "pending", updated_at: now }).eq("id", bike.id).eq("assigned_agent_id", user.id).is("customer_id", null);
-    if (reservationError) {
-      await admin.from("screening_applications").delete().eq("customer_id", customer.id);
+
+    const uploadedPaths: string[] = [];
+    try {
+      const customerPhotoUrl = await uploadScreeningDocument(admin, application.id, "customer-photo", body.customerPhoto);
+      uploadedPaths.push(customerPhotoUrl);
+      const idFrontUrl = await uploadScreeningDocument(admin, application.id, "national-id-front", body.idFrontPhoto);
+      uploadedPaths.push(idFrontUrl);
+      const idBackUrl = await uploadScreeningDocument(admin, application.id, "national-id-back", body.idBackPhoto);
+      uploadedPaths.push(idBackUrl);
+      const { error: documentsError } = await admin.from("screening_applications").update({ customer_photo_url: customerPhotoUrl, id_front_url: idFrontUrl, id_back_url: idBackUrl, updated_at: now }).eq("id", application.id);
+      if (documentsError) throw documentsError;
+    } catch (error) {
+      console.error("Customer screening document upload failed", error);
+      await removeScreeningDocuments(admin, uploadedPaths);
+      await admin.from("screening_applications").delete().eq("id", application.id);
+      await admin.from("bikes").update({ customer_id: null, status: "available", updated_at: now }).eq("id", bike.id).eq("customer_id", customer.id);
       await admin.from("customers").delete().eq("id", customer.id);
-      return fail("The tracker could not be reserved for this customer.", 503, "TRACKER_RESERVATION_FAILED");
+      return fail("Customer images could not be saved. The registration was not submitted; capture the three images again.", 503, "SCREENING_DOCUMENTS_FAILED");
     }
-    return response({ customer: { id: customer.id, vehicleId: bike.id, name, phone, idNumber: nationalId, location: location || "Field location", bike: bike.identifier, vehicleModel: bike.model, tracker: bike.trackers?.[0]?.identifier ?? "Pending", kyc: "Submitted", install: "Pending", payment: depositAmount > 0 ? "Deposit Paid" : "Pending", payableAmount: Number(bike.payable_amount ?? 0), amount: depositAmount, balance: Math.max(0, Number(bike.payable_amount ?? 0) - depositAmount), commission: 0, receipt: "", date: now.slice(0, 10), screeningStatus: "pending" } }, 201);
+    return response({ customer: { id: customer.id, vehicleId: bike.id, name, phone, email, idNumber: nationalId, location: location || "Field location", bike: bike.identifier, vehicleModel: bike.model, tracker: bike.trackers?.[0]?.identifier ?? "Pending", kyc: "Submitted", install: "Pending", payment: depositAmount > 0 ? "Deposit Paid" : "Pending", payableAmount: Number(bike.payable_amount ?? 0), amount: depositAmount, balance: Math.max(0, Number(bike.payable_amount ?? 0) - Number(depositAmount)), commission: 0, receipt: "", date: now.slice(0, 10), screeningStatus: "pending" } }, 201);
   }
 
   if (route === "/v1/agent/assignments" && request.method === "GET") {

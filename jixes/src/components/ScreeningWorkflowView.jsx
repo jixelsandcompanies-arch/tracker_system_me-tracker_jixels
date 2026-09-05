@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Search, ShieldCheck, UserRound, X } from "lucide-react";
+import { Search, ShieldCheck, Trash2, UserRound, X } from "lucide-react";
 import { hasSupabaseConfig, invokeApi, listRecords, subscribeToTable, updateRecord } from "../lib/data";
 import { recordAudit } from "../lib/security";
 
@@ -13,7 +13,20 @@ function Document({ src, label, fallback = "Not submitted" }) {
 function ReviewDrawer({ application, agents, onClose, onChanged }) {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
+  const [documents, setDocuments] = useState(null);
+  const [documentsLoading, setDocumentsLoading] = useState(true);
   const agent = agents.find((item) => item.id === application.installer_agent_id)?.full_name || "Unassigned";
+  useEffect(() => {
+    let active = true;
+    setDocumentsLoading(true);
+    invokeApi(`/v1/admin/screening/${encodeURIComponent(application.id)}/documents`, null, "GET").then((result) => {
+      if (!active) return;
+      setDocuments(result.data?.documents || null);
+      setDocumentsLoading(false);
+    });
+    return () => { active = false; };
+  }, [application.id]);
+  const documentUrl = (field) => documents?.[field] || (String(application[field] || "").startsWith("http") ? application[field] : "");
   const approve = async () => {
     setBusy(true); setMessage("");
     const result = await invokeApi("/v1/admin/screening/approve", { applicationId: application.id });
@@ -31,7 +44,15 @@ function ReviewDrawer({ application, agents, onClose, onChanged }) {
     recordAudit({ action: "suspended screening application", resource: "Screening", detail: application.full_name });
     setMessage("Application suspended."); onChanged();
   };
-  return <div className="detail-backdrop" onClick={onClose}><aside className="detail-drawer screening-review-drawer" onClick={(event) => event.stopPropagation()}><div className="detail-heading"><div><span className="eyebrow">CUSTOMER SCREENING</span><h2>{application.full_name}</h2><p>{applicationId(application)} · {statusLabel(application.status)}</p></div><button className="icon-btn" onClick={onClose}><X size={18}/></button></div><div className="screening-documents"><Document src={application.customer_photo_url} label="Customer photo"/><Document src={application.id_front_url} label="National ID — front"/><Document src={application.id_back_url} label="National ID — back"/><Document src={application.passport_url} label="Passport"/></div><section className="screening-review-details"><h3>Customer details</h3><dl><div><dt>National ID / Passport</dt><dd>{application.national_id || "—"}</dd></div><div><dt>Phone</dt><dd>{application.phone || "—"}</dd></div><div><dt>Email</dt><dd>{application.email || "—"}</dd></div><div><dt>Address / Town</dt><dd>{application.address_town || "—"}</dd></div></dl><h3>Product and account</h3><dl><div><dt>Product identity</dt><dd>{application.vehicle_type || "product"} | {application.registration_number || application.chassis_vin || "—"}</dd></div><div><dt>Make / Model</dt><dd>{[application.vehicle_make, application.vehicle_model].filter(Boolean).join(" ") || "—"}</dd></div><div><dt>Agent</dt><dd>{agent}</dd></div><div><dt>Deposit</dt><dd>KES {Number(application.deposit_amount || 0).toLocaleString()}</dd></div><div><dt>Tracker / IMEI</dt><dd>{application.tracker_identifier || application.tracker_serial_number || "—"}</dd></div><div><dt>Service plan</dt><dd>{application.service_plan || "—"}</dd></div></dl></section>{message && <div className="import-message">{message}</div>}<div className="detail-actions"><button className="button secondary" onClick={onClose}>Close</button>{application.status !== "suspended" && application.status !== "declined" && <button className="button secondary" disabled={busy} onClick={suspend}>Suspend</button>}{application.status !== "approved" && <button className="button primary" disabled={busy} onClick={approve}><ShieldCheck size={15}/>{busy ? "Processing…" : "Approve customer"}</button>}</div></aside></div>;
+  const remove = async () => {
+    if (!application.customer_id || !window.confirm(`Permanently delete ${application.full_name} and every linked record?`)) return;
+    setBusy(true); setMessage("");
+    const result = await invokeApi(`/v1/admin/users/${encodeURIComponent(application.customer_id)}`, null, "DELETE");
+    setBusy(false);
+    if (result.error) return setMessage(result.error.message);
+    onChanged(); onClose();
+  };
+  return <div className="detail-backdrop" onClick={onClose}><aside className="detail-drawer screening-review-drawer" onClick={(event) => event.stopPropagation()}><div className="detail-heading"><div><span className="eyebrow">CUSTOMER SCREENING</span><h2>{application.full_name}</h2><p>{applicationId(application)} · {statusLabel(application.status)}</p></div><button className="icon-btn" onClick={onClose}><X size={18}/></button></div><div className="screening-documents"><Document src={documentUrl("customer_photo_url")} label="Customer photo" fallback={documentsLoading ? "Loading image" : "Not submitted"}/><Document src={documentUrl("id_front_url")} label="National ID — front" fallback={documentsLoading ? "Loading image" : "Not submitted"}/><Document src={documentUrl("id_back_url")} label="National ID — back" fallback={documentsLoading ? "Loading image" : "Not submitted"}/></div><section className="screening-review-details"><h3>Customer details</h3><dl><div><dt>National ID</dt><dd>{application.national_id || "—"}</dd></div><div><dt>Phone</dt><dd>{application.phone || "—"}</dd></div><div><dt>Email</dt><dd>{application.email || "—"}</dd></div><div><dt>Location</dt><dd>{application.location || "—"}</dd></div></dl><h3>Product and account</h3><dl><div><dt>Product identity</dt><dd>{application.product_type || "Product"} | {application.product_identifier || "—"}</dd></div><div><dt>Make / Model</dt><dd>{application.product_model || "—"}</dd></div><div><dt>Agent</dt><dd>{agent}</dd></div><div><dt>Deposit</dt><dd>KES {Number(application.deposit_amount || 0).toLocaleString()}</dd></div><div><dt>Tracker / IMEI</dt><dd>{application.tracker_identifier || "—"}</dd></div><div><dt>Service plan</dt><dd>KES {Number(application.monthly_service_amount || 700).toLocaleString()} per month</dd></div></dl></section>{message && <div className="import-message">{message}</div>}<div className="detail-actions"><button className="button secondary" onClick={onClose}>Close</button>{application.status !== "suspended" && application.status !== "declined" && <button className="button secondary" disabled={busy} onClick={suspend}>Suspend</button>}{application.status === "approved" ? <button className="button danger" disabled={busy} onClick={remove}><Trash2 size={15}/>{busy ? "Deleting…" : "Delete customer"}</button> : <button className="button primary" disabled={busy} onClick={approve}><ShieldCheck size={15}/>{busy ? "Processing…" : "Approve customer"}</button>}</div></aside></div>;
 }
 
 export default function ScreeningWorkflowView() {

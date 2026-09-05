@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Bike, Radio, Search, Trash2, UserRound, X } from "lucide-react";
-import { createRecord, deleteRecord, hasSupabaseConfig, listRecords, subscribeToTable, updateRecord } from "../lib/data";
+import { createRecord, hasSupabaseConfig, invokeApi, listRecords, subscribeToTable, updateRecord } from "../lib/data";
 import { recordAudit } from "../lib/security";
 
 const empty = { product_type: "bike", tracker_number: "", assigned_agent_id: "", payable_amount: "" };
@@ -96,7 +96,10 @@ export default function ProductInventoryView() {
   const toggle = (id) => setSelectedIds((ids) => ids.includes(id) ? ids.filter((item) => item !== id) : [...ids, id]);
   async function remove(ids) {
     if (!ids.length || !window.confirm(`Delete ${ids.length} product record${ids.length === 1 ? "" : "s"}?`)) return;
-    for (const id of ids) await deleteRecord("bikes", id);
+    for (const id of ids) {
+      const result = await invokeApi(`/v1/admin/products/${encodeURIComponent(id)}`, null, "DELETE");
+      if (result.error) { setMessage(result.error.message); return; }
+    }
     recordAudit({ action: "deleted inventory products", resource: "Product Inventory", detail: `${ids.length} record(s)` });
     setSelectedIds([]);
     load();

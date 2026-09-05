@@ -583,10 +583,11 @@ function Customers({ customers, onDeposit, onRefresh, refreshing, darkMode = fal
 }
 
 function Onboarding({ addCustomer, navigate, assignedVehicles, accessToken, onRefresh, refreshing, darkMode = false }) {
-  const [form, setForm] = useState({ name: "", phone: "", idNumber: "", location: "", depositAmount: "" });
+  const [form, setForm] = useState({ name: "", phone: "", email: "", idNumber: "", location: "", depositAmount: "" });
   const [selectedVehicleId, setSelectedVehicleId] = useState(assignedVehicles[0]?.id || "");
   const [vehiclePickerOpen, setVehiclePickerOpen] = useState(false);
   const [vehicleSearch, setVehicleSearch] = useState("");
+  const [customerPhoto, setCustomerPhoto] = useState(null);
   const [idFrontPhoto, setIdFrontPhoto] = useState(null);
   const [idBackPhoto, setIdBackPhoto] = useState(null);
   const [saving, setSaving] = useState(false);
@@ -596,20 +597,23 @@ function Onboarding({ addCustomer, navigate, assignedVehicles, accessToken, onRe
   async function captureImage(setImage, label) {
     const permission = await ImagePicker.requestCameraPermissionsAsync();
     if (!permission.granted) return Alert.alert("Camera permission", `Allow camera access to capture ${label}.`);
-    const result = await ImagePicker.launchCameraAsync({ quality: 0.55, allowsEditing: false });
-    if (!result.canceled) setImage(result.assets[0].uri);
+    const result = await ImagePicker.launchCameraAsync({ quality: 0.45, allowsEditing: false, base64: true });
+    const asset = result.assets?.[0];
+    if (!result.canceled && asset?.base64) setImage(`data:${asset.mimeType || "image/jpeg"};base64,${asset.base64}`);
+    else if (!result.canceled) Alert.alert("Image capture", `The ${label} image could not be prepared. Please capture it again.`);
   }
 
   async function save() {
-    if (!form.name.trim() || !form.phone.trim() || !form.idNumber.trim()) return Alert.alert("Missing details", "Enter the customer name, phone number, and national ID once.");
+    if (!form.name.trim() || !form.phone.trim() || !form.email.trim() || !form.idNumber.trim()) return Alert.alert("Missing details", "Enter the customer name, phone number, email address, and national ID once.");
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email.trim())) return Alert.alert("Email address", "Enter a valid customer email address.");
     if (!selectedVehicle) return Alert.alert("No assigned bike", "Only bikes assigned to this agent can be sold. Ask admin to assign inventory first.");
-    if (!idFrontPhoto || !idBackPhoto) return Alert.alert("Capture ID", "Capture and save both the front and back side of the customer ID.");
+    if (!customerPhoto || !idFrontPhoto || !idBackPhoto) return Alert.alert("Capture documents", "Capture the customer photo and both the front and back side of the national ID.");
     const depositAmount = Number(form.depositAmount);
     if (!Number.isFinite(depositAmount) || depositAmount < 0) return Alert.alert("Check deposit", "Enter a valid deposit amount, or use 0 if no deposit was collected.");
     if (selectedVehicle.payableAmount > 0 && depositAmount > selectedVehicle.payableAmount) return Alert.alert("Check deposit", "The deposit cannot be higher than the total payable amount.");
     setSaving(true);
     try {
-      const result = await authApi.onboardCustomer(accessToken, { name: form.name.trim(), phone: form.phone.trim(), nationalId: form.idNumber.trim(), location: form.location.trim(), bikeId: selectedVehicle.id, depositAmount });
+      const result = await authApi.onboardCustomer(accessToken, { name: form.name.trim(), phone: form.phone.trim(), email: form.email.trim(), nationalId: form.idNumber.trim(), location: form.location.trim(), bikeId: selectedVehicle.id, depositAmount, customerPhoto, idFrontPhoto, idBackPhoto });
       addCustomer(result.customer);
       Alert.alert("Customer registration received", "The customer now appears in Admin and Finance as pending. An administrator must approve the screening before account access is available.");
       navigate("customers");
@@ -623,6 +627,7 @@ function Onboarding({ addCustomer, navigate, assignedVehicles, accessToken, onRe
     <View style={[styles.formCard, darkMode && styles.darkCard]}>
       <Field label="Full name" value={form.name} onChangeText={name => setForm({ ...form, name })} />
       <Field label="Phone number" value={form.phone} onChangeText={phone => setForm({ ...form, phone })} keyboardType="phone-pad" />
+      <Field label="Email address" value={form.email} onChangeText={email => setForm({ ...form, email })} keyboardType="email-address" />
       <Field label="National ID or passport (enter once)" value={form.idNumber} onChangeText={idNumber => setForm({ ...form, idNumber })} />
       <Field label="Location" value={form.location} onChangeText={location => setForm({ ...form, location })} />
       <Text style={styles.fieldLabel}>Assigned bike to sell</Text>
@@ -639,11 +644,13 @@ function Onboarding({ addCustomer, navigate, assignedVehicles, accessToken, onRe
       </View>
       {selectedVehicle && <View style={styles.agreedPaymentNote}><Text style={styles.microLabel}>TOTAL PAYABLE</Text><Text style={styles.agreedPaymentValue}>{money(selectedVehicle.payableAmount)}</Text></View>}
       <Field label="Deposit amount to prompt" value={form.depositAmount} onChangeText={depositAmount => setForm({ ...form, depositAmount })} keyboardType="numeric" />
+      <Pressable onPress={() => captureImage(setCustomerPhoto, "customer photo")} style={styles.secondaryButton}><Ionicons name="camera-outline" color={colors.blue} size={18} /><Text style={styles.secondaryText}>{customerPhoto ? "Retake customer photo" : "Capture customer photo"}</Text></Pressable>
       <View style={styles.captureRow}>
         <Pressable onPress={() => captureImage(setIdFrontPhoto, "National ID front")} style={styles.secondaryButton}><Ionicons name="scan-outline" color={colors.blue} size={18} /><Text style={styles.secondaryText}>{idFrontPhoto ? "Rescan ID front" : "Scan ID front"}</Text></Pressable>
         <Pressable onPress={() => captureImage(setIdBackPhoto, "National ID back")} style={styles.secondaryButton}><Ionicons name="scan-outline" color={colors.blue} size={18} /><Text style={styles.secondaryText}>{idBackPhoto ? "Rescan ID back" : "Scan ID back"}</Text></Pressable>
       </View>
       <View style={styles.documentGrid}>
+        {customerPhoto && <Image source={{ uri: customerPhoto }} style={styles.documentPreview} />}
         {idFrontPhoto && <Image source={{ uri: idFrontPhoto }} style={styles.documentPreview} />}
         {idBackPhoto && <Image source={{ uri: idBackPhoto }} style={styles.documentPreview} />}
       </View>
@@ -915,7 +922,7 @@ function DepositPrompt({ customer, visible, onCancel, onSubmit }) {
 
   useEffect(() => {
     setAmount(customer?.amount ? String(customer.amount) : "");
-    setPhone(customer?.phone || "");
+    setPhone(customer?.payerPhone || customer?.phone || "");
   }, [customer]);
 
   function submit() {
@@ -934,7 +941,7 @@ function DepositPrompt({ customer, visible, onCancel, onSubmit }) {
         <Text style={styles.depositModalTitle}>Customer deposit</Text>
         <Text style={styles.depositModalText}>{customer ? `Send STK push to ${customer.name}. Deposit is deducted from ${money(customer.payableAmount)} total payable.` : "Send STK push to customer."}</Text>
         <Field label="Deposit amount" value={amount} onChangeText={setAmount} keyboardType="numeric" />
-        <Field label="Customer phone number" value={phone} onChangeText={setPhone} keyboardType="phone-pad" />
+        <Field label="Payment phone number" value={phone} onChangeText={setPhone} keyboardType="phone-pad" />
         <Pressable onPress={submit} style={styles.primaryButton}><Ionicons name="paper-plane-outline" size={18} color={colors.white} /><Text style={styles.primaryText}>Send STK push</Text></Pressable>
         <Pressable onPress={onCancel} style={styles.modalCancel}><Text style={styles.modalCancelText}>Cancel</Text></Pressable>
       </View>
@@ -1077,9 +1084,14 @@ function AgentApp({ agent, onLogout }) {
     setDepositCustomerId(id);
   }
 
-  function sendDepositPrompt(id, depositAmount, payerPhone) {
+  async function sendDepositPrompt(id, depositAmount, payerPhone) {
     const customer = customers.find(item => item.id === id);
     if (!customer) return;
+    try {
+      await authApi.updatePaymentPhone(agent.accessToken, id, payerPhone);
+    } catch (error) {
+      return Alert.alert("Payment phone not saved", error instanceof Error ? error.message : "Try again before sending the payment prompt.");
+    }
     const receipt = `STK${Math.floor(100000 + Math.random() * 899999)}`;
     setDepositCustomerId(null);
     setCustomers(current => current.map(item => item.id === id ? { ...item, amount: depositAmount, payment: "Processing", balance: Number(item.payableAmount || 0), payerPhone, receipt } : item));

@@ -81,6 +81,7 @@ const navigation = [
   { label: "Commissions", icon: BadgeDollarSign, key: "Commissions", section: "FINANCE" },
   { label: "Customer accounts", icon: Users, key: "Customer Accounts", section: "ADMIN" },
   { label: "Account approvals", icon: ShieldCheck, key: "Users", section: "ADMIN" },
+  { label: "Staff accounts", icon: Users, key: "Staff Accounts", section: "ADMIN" },
   { label: "Alerts", icon: Bell, key: "Alerts", section: "ADMIN" },
   { label: "Reports", icon: BarChart3, key: "Reports", section: "ADMIN" },
   { label: "Settings", icon: Settings, key: "Settings", section: "SYSTEM" },

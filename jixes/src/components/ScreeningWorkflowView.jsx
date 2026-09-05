@@ -38,7 +38,7 @@ export default function ScreeningWorkflowView() {
   const [applications, setApplications] = useState([]);
   const [agents, setAgents] = useState([]);
   const [query, setQuery] = useState("");
-  const [status, setStatus] = useState("");
+  const [status, setStatus] = useState("pending");
   const [selected, setSelected] = useState(null);
   const [message, setMessage] = useState("");
   const load = async () => {

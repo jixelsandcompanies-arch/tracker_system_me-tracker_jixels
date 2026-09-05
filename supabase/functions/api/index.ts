@@ -421,11 +421,19 @@ Deno.serve(async (request) => {
     if (managerError || !manager || !adminRoles.has(manager.role)) return fail("Administrator approval permission is required.", 403, "FORBIDDEN");
 
     if (request.method === "GET") {
-      const { data: accounts, error } = await admin
+      const directory = url.searchParams.get("status") === "directory";
+      const requestedStatus = url.searchParams.get("status")?.trim().toLowerCase();
+      if (requestedStatus && requestedStatus !== "directory" && !new Set(["pending", "approved", "rejected"]).has(requestedStatus)) {
+        return fail("Choose a valid account directory status.", 422, "INVALID_ACCOUNT_STATUS");
+      }
+      let accountsQuery = admin
         .from("profiles")
         .select("id,full_name,email,phone,role,account_status,created_at,updated_at")
-        .in("role", [...approvableStaffRoles])
-        .order("created_at", { ascending: false });
+        .in("role", [...approvableStaffRoles]);
+      accountsQuery = directory
+        ? accountsQuery.neq("account_status", "pending")
+        : accountsQuery.eq("account_status", requestedStatus || "pending");
+      const { data: accounts, error } = await accountsQuery.order("created_at", { ascending: false });
       if (error) {
         console.error("Account approvals query failed", error);
         return fail("Pending accounts could not be loaded.", 500, "ACCOUNT_APPROVAL_QUERY_FAILED");

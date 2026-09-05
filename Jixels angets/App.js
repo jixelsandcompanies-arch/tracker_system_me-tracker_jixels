@@ -251,7 +251,7 @@ function Splash({ label = "Loading Jixels Agents" }) {
   </View>;
 }
 
-function AgentLaunch({ name, returning = false, onComplete }) {
+function AgentLaunch({ name, returning = false, waiting = false, onComplete }) {
   const pulse = useRef(new Animated.Value(0)).current;
   const vehicle = useRef(new Animated.Value(0)).current;
   const dots = useRef(new Animated.Value(0)).current;
@@ -267,14 +267,14 @@ function AgentLaunch({ name, returning = false, onComplete }) {
     pulseLoop.start();
     vehicleLoop.start();
     dotLoop.start();
-    const countdown = setInterval(() => setSeconds(value => Math.max(0, value - 1)), 1000);
-    const timer = setTimeout(onComplete, GPS_LAUNCH_SECONDS * 1000);
+    const countdown = waiting ? null : setInterval(() => setSeconds(value => Math.max(0, value - 1)), 1000);
+    const timer = waiting ? null : setTimeout(onComplete, GPS_LAUNCH_SECONDS * 1000);
     return () => {
       pulseLoop.stop();
       vehicleLoop.stop();
       dotLoop.stop();
-      clearInterval(countdown);
-      clearTimeout(timer);
+      if (countdown) clearInterval(countdown);
+      if (timer) clearTimeout(timer);
     };
   }, [dots, onComplete, pulse, vehicle]);
 
@@ -299,7 +299,7 @@ function AgentLaunch({ name, returning = false, onComplete }) {
       </View>
       <Text style={styles.agentLaunchWelcome}>{returning ? "Welcome back" : "Welcome"}, {name || "Agent"}</Text>
       <Text style={styles.agentLaunchTitle}>Connecting to agent workspace</Text>
-      <Text style={styles.agentLaunchText}>Please wait while we securely prepare your field records. You will be redirected to the app in {seconds} second{seconds === 1 ? "" : "s"}.</Text>
+      <Text style={styles.agentLaunchText}>{waiting ? "Checking your approved account and preparing secure field access." : `Please wait while we securely prepare your field records. You will be redirected to the app in ${seconds} second${seconds === 1 ? "" : "s"}.`}</Text>
       <View style={styles.agentLaunchDots}>{[0, 1, 2].map(index => <Animated.View key={index} style={[styles.agentLaunchDot, dotStyle(index)]} />)}</View>
     </View>
   </View>;
@@ -383,17 +383,7 @@ function Login({ onLogin }) {
     }
   }
 
-  if (busy && mode === "login" && !resettingPassword) {
-    return <View style={styles.authLoadingPage}>
-      <StatusBar style="light" />
-      <View style={styles.authLoadingBrand}>
-        <Image source={require("./assets/jixels-logo.png")} resizeMode="contain" style={styles.authLogo} />
-        <Text style={styles.authTitle}>Signing you in</Text>
-        <Text style={styles.authText}>Preparing your secure agent dashboard.</Text>
-      </View>
-      <ActivitySkeleton screen="auth" />
-    </View>;
-  }
+  if (busy && mode === "login" && !resettingPassword) return <AgentLaunch name={name} returning waiting onComplete={() => {}} />;
 
   return <KeyboardAvoidingView
     behavior={Platform.OS === "ios" ? "padding" : "height"}

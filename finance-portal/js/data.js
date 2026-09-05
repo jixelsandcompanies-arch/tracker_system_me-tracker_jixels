@@ -1,7 +1,7 @@
 (function () {
   const SUPABASE_URL = "https://tpzebfvhvjsezynqgdns.supabase.co";
   const SUPABASE_KEY = "sb_publishable_IeSvEQI25WeymzwM-3j4VQ_a6a84vRO";
-  const emptyData = { accounts: [], payments: [], agents: [], alerts: [], auditLogs: [], notifications: [], settings: { workspaceName: "Jixels Finance", timezone: "Africa/Nairobi", currency: "KES", commissionRate: "5", dailyCollectionTarget: "18500", overdueGraceDays: "3", exportRetentionDays: "90", sessionTimeoutMinutes: "30", notifyPayments: true, notifyReconciliation: true, notifyCommissions: true } };
+  const emptyData = { accounts: [], payments: [], agents: [], customers: [], staff: [], alerts: [], auditLogs: [], notifications: [], settings: { workspaceName: "Jixels Finance", timezone: "Africa/Nairobi", currency: "KES", commissionRate: "5", dailyCollectionTarget: "18500", overdueGraceDays: "3", exportRetentionDays: "90", sessionTimeoutMinutes: "30", notifyPayments: true, notifyReconciliation: true, notifyCommissions: true } };
   let memoryData = JSON.parse(JSON.stringify(emptyData)); let accessToken = null;
   const tables = { accounts: "finance_accounts", payments: "finance_payments", agents: "finance_agents", alerts: "finance_alerts", auditLogs: "finance_audit_logs" };
   const clone = value => JSON.parse(JSON.stringify(value));
@@ -22,7 +22,19 @@
   }
   function saveData(data) { memoryData = { ...emptyData, ...clone(data) }; if (!accessToken) return; const jobs = Object.entries(tables).flatMap(([key, table]) => (memoryData[key] || []).map(item => request(`/rest/v1/${table}?on_conflict=external_id`, { method: "POST", headers: { Prefer: "resolution=merge-duplicates" }, body: JSON.stringify({ external_id: String(item.id || `${key}-${Date.now()}`), data: item, updated_at: new Date().toISOString() }) }))); jobs.push(request("/rest/v1/finance_settings?on_conflict=id", { method: "POST", headers: { Prefer: "resolution=merge-duplicates" }, body: JSON.stringify({ id: "default", data: memoryData.settings, updated_at: new Date().toISOString() }) })); Promise.all(jobs).catch(error => window.dispatchEvent(new CustomEvent("finance-sync-error", { detail: error.message })));
   }
-  async function hydrate(token) { accessToken = token; const rows = await Promise.all(Object.entries(tables).map(async ([key, table]) => [key, await request(`/rest/v1/${table}?select=external_id,data&order=updated_at.desc`)])); const settings = await request("/rest/v1/finance_settings?select=data&id=eq.default"); memoryData = { ...emptyData }; rows.forEach(([key, values]) => { memoryData[key] = (values || []).map(row => ({ ...(row.data || {}), id: row.data?.id || row.external_id })); }); if (settings?.[0]?.data) memoryData.settings = { ...emptyData.settings, ...settings[0].data }; return clone(memoryData); }
+  async function hydrate(token) {
+    accessToken = token;
+    const [rows, settings, customers, staff] = await Promise.all([
+      Promise.all(Object.entries(tables).map(async ([key, table]) => [key, await request(`/rest/v1/${table}?select=external_id,data&order=updated_at.desc`)])),
+      request("/rest/v1/finance_settings?select=data&id=eq.default"),
+      request("/rest/v1/customers?select=id,full_name,email,phone,status,created_at&order=created_at.desc"),
+      request("/rest/v1/profiles?select=id,full_name,email,phone,role,account_status&role=in.(agent,support_agent,finance,finance_officer,admin,super_admin)&order=full_name.asc")
+    ]);
+    memoryData = { ...emptyData, customers: customers || [], staff: staff || [] };
+    rows.forEach(([key, values]) => { memoryData[key] = (values || []).map(row => ({ ...(row.data || {}), id: row.data?.id || row.external_id })); });
+    if (settings?.[0]?.data) memoryData.settings = { ...emptyData.settings, ...settings[0].data };
+    return clone(memoryData);
+  }
   async function financeProfile(userId, token) {
     const previous = accessToken; accessToken = token;
     try {

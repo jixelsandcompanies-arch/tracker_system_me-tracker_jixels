@@ -9,7 +9,7 @@
   window.addEventListener("error", event => showFatalError(event.error || event.message));
   window.addEventListener("unhandledrejection", event => showFatalError(event.reason));
   try {
-  const { readData, saveData, registerFinanceUser, financeAccountStatus, authenticateFinanceUser, money } = window.FinanceStore;
+  const { readData, saveData, registerFinanceUser, financeAccountStatus, authenticateFinanceUser, hydrate, money } = window.FinanceStore;
   const root = document.getElementById("root");
   let data = readData();
   let page = "dashboard";
@@ -20,7 +20,6 @@
   let notificationsOpen = false;
   let loading = false;
   let loadingMode = "launch";
-  let launchSeconds = 7;
   let online = navigator.onLine;
   let session = null;
   let reconciliationMessage = "";
@@ -199,7 +198,7 @@
   }
 
   function accountsPage() {
-    return `<section class="page-stack"><div class="section-heading"><div><h2>Finance Accounts</h2><p>Review financing records and account status.</p></div></div><div class="card"><div class="card-header"><div><div class="card-title">Finance accounts</div><div class="card-subtitle">Customer financing records are created through the approved onboarding workflow.</div></div><div class="toolbar"><input id="account-search" placeholder="Search accounts" aria-label="Search accounts"><select id="account-filter" aria-label="Filter accounts by status"><option value="">All statuses</option><option>On Track</option><option>Overdue</option><option>Completed</option></select></div></div><div id="account-list">${accountTable(data.accounts, false)}</div></div></section>`;
+    return `<section class="page-stack"><div class="section-heading"><div><h2>Finance Accounts</h2><p>Review financing records and account status.</p></div></div><div class="card"><div class="card-header"><div><div class="card-title">Finance accounts</div><div class="card-subtitle">Customer financing records are created through the approved onboarding workflow.</div></div><div class="toolbar"><label class="table-search" for="account-search"><span aria-hidden="true">⌕</span><input id="account-search" placeholder="Search accounts" aria-label="Search accounts"></label><select id="account-filter" aria-label="Filter accounts by status"><option value="">All statuses</option><option>On Track</option><option>Overdue</option><option>Completed</option></select></div></div><div id="account-list">${accountTable(data.accounts, false)}</div></div></section>`;
   }
 
   function registrationDate(value) {
@@ -345,7 +344,7 @@
 
   function loadingView() {
     if (loadingMode === "page") return `<div class="finance-loading"><div class="finance-loading-brand"><strong>Jixels Finance</strong><small>Loading workspace records…</small></div><div class="finance-skeleton-heading skeleton"></div><div class="finance-skeleton-metrics">${Array.from({ length: 4 }, () => '<div class="skeleton"></div>').join("")}</div><div class="finance-skeleton-panel skeleton">${Array.from({ length: 5 }, () => '<span></span>').join("")}</div></div>`;
-    return `<div class="finance-launch"><div class="finance-launch-stage"><div class="finance-launch-ring">⌖</div><div class="finance-launch-road"></div><span class="launch-finance-car">🚗</span><span class="launch-finance-bike">🏍</span><span class="launch-finance-tuktuk">TUK</span></div><small>WELCOME TO JIXELS FINANCE</small><h1>Connecting your finance workspace</h1><p>Please wait while accounts, payments, and live tracker records are prepared. You will be redirected in <strong id="finance-launch-countdown">${launchSeconds}</strong> seconds.</p><div class="finance-launch-dots"><i></i><i></i><i></i></div></div>`;
+    return `<div class="finance-launch"><div class="finance-launch-stage"><div class="finance-launch-ring">⌖</div><div class="finance-launch-road"></div><span class="launch-finance-car">🚗</span><span class="launch-finance-bike">🏍</span><span class="launch-finance-tuktuk">TUK</span></div><small>WELCOME TO JIXELS FINANCE</small><h1>Opening your finance workspace</h1><p>Preparing your live accounts, payments, and tracker records.</p><div class="finance-launch-dots"><i></i><i></i><i></i></div></div>`;
   }
 
   function offlineView() {
@@ -443,18 +442,20 @@
     });
   }
 
-  function startWorkspaceLoading() {
-    loading = true; loadingMode = "launch"; launchSeconds = 1; render();
-    const launchCountdown = window.setInterval(() => {
-      launchSeconds = Math.max(launchSeconds - 1, 0);
-      const countdown = document.getElementById("finance-launch-countdown");
-      if (countdown) countdown.textContent = String(launchSeconds);
-      if (launchSeconds === 0) window.clearInterval(launchCountdown);
-    }, 1000);
-    window.setTimeout(() => {
-      window.clearInterval(launchCountdown); loadingMode = "page"; render();
-      window.setTimeout(() => { loading = false; render(); }, 200);
-    }, 800);
+  async function startWorkspaceLoading() {
+    loading = true; loadingMode = "launch"; render();
+    try {
+      await hydrate(session.accessToken);
+      data = readData();
+      loading = false;
+      render();
+    } catch (error) {
+      console.error("Finance workspace loading failed", error);
+      loading = false;
+      session = null;
+      root.innerHTML = loginView(safeLoginMessage(error));
+      bindLoginEvents();
+    }
   }
 
   function bindOfflineEvents() {

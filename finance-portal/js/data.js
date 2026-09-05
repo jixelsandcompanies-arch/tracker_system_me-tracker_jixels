@@ -82,7 +82,6 @@
     });
     const result = await response.json().catch(() => ({}));
     if (!response.ok || !result.accessToken || !result.user) throw portalError(result, "Incorrect email or password. Please check your details and try again.");
-    await hydrate(result.accessToken);
     return { id: result.user.id, name: result.user.name || result.user.email.split("@")[0], email: result.user.email, phone: result.user.phone || "", role: result.user.role, accessToken: result.accessToken };
   }
   const money = value => new Intl.NumberFormat("en-KE", { style: "currency", currency: "KES", maximumFractionDigits: 0 }).format(Number(value || 0));

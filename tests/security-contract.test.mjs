@@ -22,7 +22,7 @@ assert.match(payments, /stable payment idempotency key is required/, "M-Pesa mus
 assert.match(tracking, /socket\.on\("connect".*tracker:subscribe/, "tracker subscription must be connection-scoped");
 assert.match(app, /verifyApprovalCode\(\{ email: applicant\.email, code \}\)/, "approval code verification must be bound to the registered customer email");
 assert.match(apiFunction, /customer_approval_codes/, "approval codes must be stored server-side");
-assert.match(apiFunction, /sendCustomerApprovalPush\(admin, application\.customer_id, code/, "approval code delivery must use the customer app notification");
+assert.match(apiFunction, /sendCustomerApprovalPush\(admin, \[mobileProfile\.id, application\.customer_id\]\.filter\(Boolean\), code/, "approval code delivery must use the customer app notification for the mobile and onboarding profiles");
 
 const reportAction = app.match(/const action = \{[^;]+reportType: "payments"[^;]+\};/)?.[0] ?? "";
 assert.ok(reportAction, "payment report request must exist");

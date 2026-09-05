@@ -14,8 +14,6 @@ import { SafeAreaProvider, useSafeAreaInsets } from "react-native-safe-area-cont
 import { StatusBar } from "expo-status-bar";
 import { colors } from "./src/theme";
 import { useTracking } from "./src/hooks/useTracking";
-import { alerts as seedAlerts, bikes as allBikes, customer, money, payments as seedPayments } from "./src/customerData";
-import { config } from "./src/config";
 import { ApiError, apiRequest } from "./src/services/api";
 import { authApi } from "./src/services/auth";
 import { sessionStore } from "./src/services/session";
@@ -34,7 +32,10 @@ const STALE_MS = 2 * 60_000;
 const OFFLINE_MS = 10 * 60_000;
 const GPS_LAUNCH_SECONDS = 7;
 const ranges = ["Today", "Yesterday", "7 Days", "Custom"];
-const bikes = allBikes.filter(vehicle => vehicle.financeStatus !== "Completed");
+// Customer records are populated only after the authenticated API request.
+// This module-level list is read by existing screen components.
+let bikes = [];
+const money = value => `KES ${Number(value || 0).toLocaleString("en-KE")}`;
 const skeletonShimmer = new Animated.Value(0);
 const reportPeriods = [
   { key: "daily", label: "Daily", icon: "today-outline" },
@@ -46,11 +47,6 @@ const reportPeriods = [
 const nativeTap = () => Haptics.selectionAsync().catch(() => {});
 const nativeSuccess = () => Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
 
-function demoMpesaReceipt() {
-  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-  return Array.from({ length: 10 }, () => alphabet[Math.floor(Math.random() * alphabet.length)]).join("");
-}
-
 async function enableNotifications() {
   if (Platform.OS === "android") await Notifications.setNotificationChannelAsync("default", { name: "Jixels Customer Trackings", description: "Payment, tracker and account notifications from Jixels Customer Trackings", importance: Notifications.AndroidImportance.HIGH, vibrationPattern: [0, 250, 150, 250], lightColor: colors.green, sound: "default" });
   const current = await Notifications.getPermissionsAsync();
@@ -58,7 +54,7 @@ async function enableNotifications() {
 }
 
 async function customerPushToken() {
-  if (config.demoMode || Platform.OS === "web") return null;
+  if (Platform.OS === "web") return null;
   try {
     await enableNotifications();
     const permission = await Notifications.getPermissionsAsync();
@@ -121,7 +117,7 @@ function AuthScreen({ onAuthenticated, onPendingApproval, pendingEmail, approved
   const [mode, setMode] = useState("login");
   const [resettingPassword, setResettingPassword] = useState(false);
   const [name, setName] = useState("");
-  const [email, setEmail] = useState(() => config.demoMode ? customer.email : "");
+  const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
@@ -141,12 +137,12 @@ function AuthScreen({ onAuthenticated, onPendingApproval, pendingEmail, approved
     try {
       if (mode === "register") {
         const pushToken = await customerPushToken();
-        const application = config.demoMode ? { status: "pending" } : await authApi.register({ name: name.trim(), email: normalizedEmail, phone: phone.trim(), password, pushToken, platform: Platform.OS });
+        const application = await authApi.register({ name: name.trim(), email: normalizedEmail, phone: phone.trim(), password, pushToken, platform: Platform.OS });
         if (application?.status !== "pending" && application?.status !== "submitted") throw new Error("Registration was not accepted.");
         onPendingApproval({ name: name.trim(), email: normalizedEmail, phone: phone.trim() });
         return;
       }
-      const session = config.demoMode ? { accessToken: "demo-session", expiresAt: Date.now() + 60 * 60_000, user: { id: customer.id, name: customer.name, email: normalizedEmail, phone: customer.phone } } : await authApi.login(normalizedEmail, password);
+      const session = await authApi.login(normalizedEmail, password);
       if (!session?.accessToken || !session?.user) throw new Error("The backend returned an invalid session.");
       onAuthenticated(session);
     } catch (error) {
@@ -162,7 +158,7 @@ function AuthScreen({ onAuthenticated, onPendingApproval, pendingEmail, approved
     const normalizedEmail = normalizeEmail(email);
     if (!isValidEmail(normalizedEmail)) return Alert.alert("Enter your email", "Enter the valid email address registered on your account.");
     setBusy(true);
-    (config.demoMode ? Promise.resolve() : authApi.requestPasswordReset(normalizedEmail)).catch(() => {}).finally(() => {
+    authApi.requestPasswordReset(normalizedEmail).catch(() => {}).finally(() => {
       setBusy(false);
       setResettingPassword(false);
       Alert.alert("Check your email", "If an approved account exists, Jixels Customer Trackings will send a secure reset link. Open it and create a new password of at least 8 characters.");
@@ -183,7 +179,7 @@ function AuthScreen({ onAuthenticated, onPendingApproval, pendingEmail, approved
 
 function PendingApproval({ applicant, onEnterCode, onBackToLogin }) {
   useEffect(() => {
-    if (config.demoMode || !applicant?.email) return undefined;
+    if (!applicant?.email) return undefined;
     let active = true;
     let notified = false;
     const check = async () => {
@@ -236,12 +232,8 @@ function OtpVerification({ applicant, onVerified, onBack, initialGate = false, n
     if (initialGate && !identity) return Alert.alert("Enter your registered contact", "Enter the email address or Kenyan phone number that received this code.");
     setBusy(true);
     try {
-      if (config.demoMode) {
-        if (code !== "123456") throw new Error("Invalid or expired code");
-      } else {
-        if (!applicant?.email) throw new Error("Open the approval notification in your registered Jixels Customer app before entering the code.");
-        await authApi.verifyApprovalCode({ email: applicant.email, code });
-      }
+      if (!applicant?.email) throw new Error("Open the approval notification in your registered Jixels Customer app before entering the code.");
+      await authApi.verifyApprovalCode({ email: applicant.email, code });
       onVerified();
     } catch (cause) {
       Alert.alert("Code not verified", cause instanceof Error ? cause.message : "Request a new code and try again.");
@@ -287,7 +279,7 @@ function GpsLaunch({ name, returning, onComplete }) {
     const center = .25 + index;
     return { opacity: dots.interpolate({ inputRange: [0, center - .2, center, center + .45, 3], outputRange: [.25, .25, 1, .25, .25], extrapolate: "clamp" }), transform: [{ translateY: dots.interpolate({ inputRange: [0, center - .2, center, center + .45, 3], outputRange: [0, 0, -6, 0, 0], extrapolate: "clamp" }) }] };
   };
-  return <View style={styles.gpsLaunch}><StatusBar style="light" /><View style={styles.gpsActivity}><View style={styles.gpsStage}><Animated.View style={[styles.gpsRing, { opacity: pulse.interpolate({ inputRange: [0, 1], outputRange: [.65, 0] }), transform: [{ scale: pulse.interpolate({ inputRange: [0, 1], outputRange: [.7, 1.55] }) }] }]} /><View style={styles.gpsCore}><Ionicons name="location" size={42} color={colors.white} /></View><View style={styles.loadingRoad} /><Animated.View style={[styles.movingVehicle, styles.movingCar, { transform: [{ translateX: vehicle.interpolate({ inputRange: [0, 1], outputRange: [-70, 180] }) }] }]}><Ionicons name="car-sport" size={25} color={colors.white} /></Animated.View><Animated.View style={[styles.movingVehicle, styles.movingBike, { transform: [{ translateX: vehicle.interpolate({ inputRange: [0, 1], outputRange: [135, -135] }) }] }]}><MaterialCommunityIcons name="motorbike" size={27} color={colors.white} /></Animated.View><Animated.View style={[styles.movingVehicle, styles.movingTukTuk, { transform: [{ translateX: vehicle.interpolate({ inputRange: [0, 1], outputRange: [-180, 70] }) }] }]}><MaterialCommunityIcons name="rickshaw" size={25} color={colors.white} /></Animated.View></View><Text style={styles.gpsWelcome}>{returning ? "Welcome back" : "Welcome"}, {name || customer.name}</Text><Text style={styles.gpsTitle}>Connecting to your trackers</Text><Text style={styles.gpsText}>Please wait while we securely prepare your account. You will be redirected to the app in {seconds} second{seconds === 1 ? "" : "s"}.</Text><View style={styles.gpsDots}>{[0, 1, 2].map(index => <Animated.View key={index} style={[styles.gpsDot, dotStyle(index)]} />)}</View></View></View>;
+  return <View style={styles.gpsLaunch}><StatusBar style="light" /><View style={styles.gpsActivity}><View style={styles.gpsStage}><Animated.View style={[styles.gpsRing, { opacity: pulse.interpolate({ inputRange: [0, 1], outputRange: [.65, 0] }), transform: [{ scale: pulse.interpolate({ inputRange: [0, 1], outputRange: [.7, 1.55] }) }] }]} /><View style={styles.gpsCore}><Ionicons name="location" size={42} color={colors.white} /></View><View style={styles.loadingRoad} /><Animated.View style={[styles.movingVehicle, styles.movingCar, { transform: [{ translateX: vehicle.interpolate({ inputRange: [0, 1], outputRange: [-70, 180] }) }] }]}><Ionicons name="car-sport" size={25} color={colors.white} /></Animated.View><Animated.View style={[styles.movingVehicle, styles.movingBike, { transform: [{ translateX: vehicle.interpolate({ inputRange: [0, 1], outputRange: [135, -135] }) }] }]}><MaterialCommunityIcons name="motorbike" size={27} color={colors.white} /></Animated.View><Animated.View style={[styles.movingVehicle, styles.movingTukTuk, { transform: [{ translateX: vehicle.interpolate({ inputRange: [0, 1], outputRange: [-180, 70] }) }] }]}><MaterialCommunityIcons name="rickshaw" size={25} color={colors.white} /></Animated.View></View><Text style={styles.gpsWelcome}>{returning ? "Welcome back" : "Welcome"}, {name || "Customer"}</Text><Text style={styles.gpsTitle}>Connecting to your trackers</Text><Text style={styles.gpsText}>Please wait while we securely prepare your account. You will be redirected to the app in {seconds} second{seconds === 1 ? "" : "s"}.</Text><View style={styles.gpsDots}>{[0, 1, 2].map(index => <Animated.View key={index} style={[styles.gpsDot, dotStyle(index)]} />)}</View></View></View>;
 }
 
 function PermissionGate({ onComplete }) {
@@ -674,14 +666,16 @@ function CustomerApp({ session, onLogout }) {
   const [permissionBusy, setPermissionBusy] = useState(false);
   const screenMotion = useRef(new Animated.Value(1)).current;
   const navigationHistory = useRef([]);
-  const [selectedBike, setSelectedBike] = useState(bikes[0]);
-  const [monitoringVehicles, setMonitoringVehicles] = useState(bikes);
-  const [alerts, setAlerts] = useState(() => dedupeById(seedAlerts));
-  const [payments, setPayments] = useState(() => dedupeById(seedPayments));
-  const [monthlyProgress, setMonthlyProgress] = useState(() => Object.fromEntries(bikes.map(vehicle => [vehicle.id, vehicle.paidThisMonth ?? 0])));
-  const [financeBalances, setFinanceBalances] = useState(() => Object.fromEntries(bikes.map(vehicle => [vehicle.id, vehicle.balance])));
-  const [security, setSecurity] = useState(() => Object.fromEntries(bikes.map(vehicle => [vehicle.id, { monitoringArmed: vehicle.monitoringArmed ?? true, immobilized: vehicle.immobilized ?? false, tamperStatus: vehicle.tamperStatus ?? "secure" }])));
-  const [profile, setProfile] = useState(() => ({ ...customer, ...(session?.user ?? {}) }));
+  const [selectedBike, setSelectedBike] = useState(null);
+  const [monitoringVehicles, setMonitoringVehicles] = useState([]);
+  const [alerts, setAlerts] = useState([]);
+  const [payments, setPayments] = useState([]);
+  const [monthlyProgress, setMonthlyProgress] = useState({});
+  const [financeBalances, setFinanceBalances] = useState({});
+  const [security, setSecurity] = useState({});
+  const [profile, setProfile] = useState(() => ({ ...(session?.user ?? {}) }));
+  const [recordsLoading, setRecordsLoading] = useState(true);
+  const [recordsError, setRecordsError] = useState("");
   const { isOnline, checkConnectivity } = useConnectivity();
   const [offlineAcknowledged, setOfflineAcknowledged] = useState(false);
   const [syncQueue, setSyncQueue] = useState([]);
@@ -702,13 +696,80 @@ function CustomerApp({ session, onLogout }) {
       setPermissionAlertVisible(locationPermission.status !== "granted" || notificationPermission.status !== "granted");
     }).catch(() => setPermissionAlertVisible(true));
   }, []);
-  useEffect(() => { AsyncStorage.getItem("jixels:profile").then(value => { if (!value) return; const saved = JSON.parse(value); const legacyDemo = saved.name === "John Doe" || saved.email === "john.doe@example.com"; setProfile(current => legacyDemo ? { ...current, ...saved, name: customer.name, email: customer.email, phone: customer.phone } : { ...current, ...saved }); }).catch(() => {}).finally(() => setProfileHydrated(true)); }, []);
+  useEffect(() => {
+    let active = true;
+    const loadCustomerRecords = async () => {
+      setRecordsLoading(true);
+      setRecordsError("");
+      try {
+        const [overviewResult, paymentsResult, alertsResult] = await Promise.allSettled([
+          customerApi.getOverview(session.accessToken),
+          customerApi.getPayments(session.accessToken),
+          customerApi.getAlerts(session.accessToken),
+        ]);
+        if (!active) return;
+        if (overviewResult.status !== "fulfilled") throw overviewResult.reason;
+        const overview = overviewResult.value || {};
+        bikes = (overview.vehicles || []).map((vehicle) => ({
+          id: vehicle.id,
+          registration: vehicle.registration || vehicle.identifier || "",
+          model: vehicle.model || "",
+          type: vehicle.vehicle_type || vehicle.product_type || "motorcycle",
+          tracker: vehicle.tracker || vehicle.tracker_imei || "",
+          status: vehicle.status || "unknown",
+          financeStatus: vehicle.finance_status || "",
+          total: Number(vehicle.total || vehicle.payable_amount || 0),
+          paid: Number(vehicle.paid || 0),
+          balance: Number(vehicle.balance || vehicle.outstanding || 0),
+          monthlyPayment: Number(vehicle.monthly_payment || vehicle.monthly_service_amount || 0),
+          paidThisMonth: Number(vehicle.paid_this_month || 0),
+          nextPayment: vehicle.next_payment || "",
+          monitoringArmed: Boolean(vehicle.monitoring_armed),
+          immobilized: Boolean(vehicle.immobilized),
+          tamperStatus: vehicle.tamper_status || "unknown",
+        }));
+        const firstVehicle = bikes[0] || null;
+        setSelectedBike((current) => bikes.find((vehicle) => vehicle.id === current?.id) || firstVehicle);
+        setMonitoringVehicles(bikes);
+        setFinanceBalances(Object.fromEntries(bikes.map((vehicle) => [vehicle.id, vehicle.balance])));
+        setMonthlyProgress(Object.fromEntries(bikes.map((vehicle) => [vehicle.id, vehicle.paidThisMonth])));
+        setSecurity(Object.fromEntries(bikes.map((vehicle) => [vehicle.id, {
+          monitoringArmed: vehicle.monitoringArmed,
+          immobilized: vehicle.immobilized,
+          tamperStatus: vehicle.tamperStatus,
+        }])));
+        setProfile((current) => ({
+          ...current,
+          ...(overview.profile ? {
+            name: overview.profile.full_name || current.name || "",
+            phone: overview.profile.phone || current.phone || "",
+            photoUri: overview.profile.avatar_url || current.photoUri || null,
+          } : {}),
+        }));
+        if (paymentsResult.status === "fulfilled") {
+          const records = paymentsResult.value?.payments ?? paymentsResult.value;
+          setPayments(Array.isArray(records) ? dedupeById(records) : []);
+        }
+        if (alertsResult.status === "fulfilled") {
+          const records = alertsResult.value?.alerts ?? alertsResult.value;
+          setAlerts(Array.isArray(records) ? dedupeById(records) : []);
+        }
+      } catch (error) {
+        if (active) setRecordsError(error instanceof Error ? error.message : "Your account records could not be loaded.");
+      } finally {
+        if (active) setRecordsLoading(false);
+      }
+    };
+    loadCustomerRecords();
+    return () => { active = false; };
+  }, [session.accessToken]);
+  useEffect(() => { AsyncStorage.getItem("jixels:profile").then(value => { if (value) setProfile(current => ({ ...current, ...JSON.parse(value) })); }).catch(() => {}).finally(() => setProfileHydrated(true)); }, []);
   useEffect(() => { if (profileHydrated) AsyncStorage.setItem("jixels:profile", JSON.stringify(profile)).catch(() => {}); }, [profile, profileHydrated]);
   useEffect(() => { AsyncStorage.getItem("jixels:sync-queue").then(value => value && setSyncQueue(dedupeById(JSON.parse(value)))).catch(() => {}).finally(() => setQueueHydrated(true)); }, []);
   useEffect(() => { if (queueHydrated) AsyncStorage.setItem("jixels:sync-queue", JSON.stringify(syncQueue)).catch(() => {}); }, [queueHydrated, syncQueue]);
   useEffect(() => () => { paymentTimers.current.forEach(clearTimeout); paymentTimers.current.clear(); }, []);
   useEffect(() => {
-    if (config.demoMode || !isOnline || !session?.accessToken) return undefined;
+    if (!isOnline || !session?.accessToken) return undefined;
     let active = true;
     const refreshSecurity = async () => {
       let vehiclesToCheck = bikes;
@@ -771,7 +832,7 @@ function CustomerApp({ session, onLogout }) {
       if (content.data?.inAppRecorded) return;
       const eventId = content.data?.eventId ?? content.data?.mpesaReceiptNumber ?? notification.request.identifier;
       setAlerts(current => upsertById(current, { id: eventId, type: content.data?.type ?? "tracker", icon: content.data?.type === "payment" ? "checkmark-circle-outline" : "notifications-outline", title: content.title ?? "Jixels update", message: content.body ?? "You have a new account update.", age: "now", unread: true }));
-      if (!config.demoMode && content.data?.type === "payment" && session?.accessToken) {
+      if (content.data?.type === "payment" && session?.accessToken) {
         customerApi.getPayments(session.accessToken).then(response => {
           const serverPayments = response?.payments ?? response;
           if (Array.isArray(serverPayments)) setPayments(dedupeById(serverPayments));
@@ -842,11 +903,6 @@ function CustomerApp({ session, onLogout }) {
       return false;
     }
     try {
-      if (config.demoMode) {
-        const demoBody = reportType === "routes" ? `Jixels Customer Trackings route report\nVehicle: ${reportBike.registration}\nPeriod: ${reportPeriod}\nDate: ${routeDate}\nDistance: 18.4 km\nStops: 3\nLast recorded position: Nairobi, Kenya\nCustomer: ${profile.name}` : `Jixels Customer Trackings payment report\nPeriod: ${reportPeriod}\nCustomer: ${profile.name}\nMonthly instalment: KES 700`;
-        await FileSystem.writeAsStringAsync(fileUri, demoBody);
-        return { uri: fileUri, name: fileName };
-      }
       const response = await customerApi.generateReport(session.accessToken, action);
       const reportUrl = response?.downloadUrl ?? response?.pdfUrl ?? response?.url ?? response?.documentUrl;
       if (!reportUrl) throw new ApiError("The report service did not return a PDF download link.", 502, "MISSING_REPORT_URL");
@@ -859,7 +915,7 @@ function CustomerApp({ session, onLogout }) {
   };
   const updateMonitoring = async (vehicle, armed) => {
     try {
-      if (!config.demoMode) await trackingApi.setMonitoring(vehicle.id, armed, session.accessToken);
+      await trackingApi.setMonitoring(vehicle.id, armed, session.accessToken);
       setSecurity(current => ({ ...current, [vehicle.id]: { ...current[vehicle.id], monitoringArmed: armed } }));
       setAlerts(current => upsertById(current, { id: `monitoring-${vehicle.id}-${Date.now()}`, type: "tracker", icon: armed ? "shield-checkmark-outline" : "shield-outline", title: armed ? "Vehicle monitoring armed" : "Vehicle monitoring disarmed", message: `${vehicle.registration}: ${armed ? "movement and tamper alerts are active" : "movement alerts paused; GPS remains online"}.`, age: "now", unread: true }));
       return true;
@@ -868,52 +924,25 @@ function CustomerApp({ session, onLogout }) {
   const updateImmobilizer = async (vehicle, immobilized) => {
     if (!isOnline) { Alert.alert("You are offline", "A secure immobilizer command requires a live tracker connection."); return false; }
     try {
-      if (!config.demoMode) await trackingApi.setImmobilizer(vehicle.id, immobilized, session.accessToken);
+      await trackingApi.setImmobilizer(vehicle.id, immobilized, session.accessToken);
       setSecurity(current => ({ ...current, [vehicle.id]: { ...current[vehicle.id], immobilized } }));
       setAlerts(current => upsertById(current, { id: `immobilizer-${vehicle.id}-${Date.now()}`, type: "tracker", icon: immobilized ? "lock-closed-outline" : "lock-open-outline", title: immobilized ? "Vehicle immobilized" : "Engine start allowed", message: `${vehicle.registration}: ${immobilized ? "engine start is blocked after stationary confirmation" : "immobilizer released"}.`, age: "now", unread: true }));
       return true;
     } catch (error) { Alert.alert("Command failed", error instanceof ApiError ? error.message : "The bike did not confirm the command."); return false; }
   };
   const addPayment = async (amount, payerPhone, idempotencyKey) => {
-    const currentFinanceBalance = financeBalances[selectedBike.id] ?? selectedBike.balance;
-    if (!config.demoMode) {
-      try {
-        const response = await paymentsApi.requestMpesa(session.accessToken, { vehicleId: selectedBike.id, amount, phone: payerPhone, idempotencyKey });
-        const payment = response?.payment ?? response ?? {};
-        const requestId = payment.id ?? payment.requestId ?? payment.checkoutRequestId;
-        if (!requestId) throw new ApiError("The payment service returned an invalid response.", 502, "INVALID_PAYMENT_RESPONSE");
-        setPayments(current => upsertById(current, { id: requestId, bikeId: selectedBike.id, registration: selectedBike.registration, date: "Today", amount, payerPhone, method: "M-Pesa", status: payment.status ?? "Processing", mpesaReceiptNumber: payment.mpesaReceiptNumber ?? "Pending", notificationMessage: "M-Pesa request sent. Confirm the prompt on the selected phone." }));
-        Alert.alert("M-Pesa request sent", "Complete the prompt on the selected phone. Jixels will notify you after M-Pesa confirms the payment.");
-        return true;
-      } catch (error) {
-        Alert.alert("Payment request failed", error instanceof ApiError ? error.message : "The M-Pesa request could not be sent. Please try again.");
-        return false;
-      }
+    try {
+      const response = await paymentsApi.requestMpesa(session.accessToken, { vehicleId: selectedBike.id, amount, phone: payerPhone, idempotencyKey });
+      const payment = response?.payment ?? response ?? {};
+      const requestId = payment.id ?? payment.requestId ?? payment.checkoutRequestId;
+      if (!requestId) throw new ApiError("The payment service returned an invalid response.", 502, "INVALID_PAYMENT_RESPONSE");
+      setPayments(current => upsertById(current, { id: requestId, bikeId: selectedBike.id, registration: selectedBike.registration, date: "Today", amount, payerPhone, method: "M-Pesa", status: payment.status ?? "Processing", mpesaReceiptNumber: payment.mpesaReceiptNumber ?? "Pending", notificationMessage: "M-Pesa request sent. Confirm the prompt on the selected phone." }));
+      Alert.alert("M-Pesa request sent", "Complete the prompt on the selected phone. Jixels will notify you after M-Pesa confirms the payment.");
+      return true;
+    } catch (error) {
+      Alert.alert("Payment request failed", error instanceof ApiError ? error.message : "The M-Pesa request could not be sent. Please try again.");
+      return false;
     }
-    const mpesaReceiptNumber = demoMpesaReceipt();
-    const remainingBalance = Math.max(0, currentFinanceBalance - amount);
-    const configuredTarget = Number(selectedBike.monthlyPayment);
-    const monthlyTarget = Number.isFinite(configuredTarget) && configuredTarget > 0 ? configuredTarget : null;
-    const paidBefore = monthlyProgress[selectedBike.id] ?? selectedBike.paidThisMonth ?? 0;
-    const paidThisMonth = paidBefore + amount;
-    const monthlyRemaining = monthlyTarget ? Math.max(0, monthlyTarget - paidThisMonth) : null;
-    const monthlyComplete = monthlyTarget ? monthlyRemaining === 0 : false;
-    const receipt = { id: mpesaReceiptNumber, mpesaReceiptNumber, bikeId: selectedBike.id, registration: selectedBike.registration, date: "Today", amount, payerPhone, method: "M-Pesa", status: "Processing" };
-    setPayments(current => upsertById(current, receipt));
-    const confirmationTimer = setTimeout(() => {
-      paymentTimers.current.delete(confirmationTimer);
-      setFinanceBalances(current => ({ ...current, [selectedBike.id]: remainingBalance }));
-      if (monthlyTarget) setMonthlyProgress(current => ({ ...current, [selectedBike.id]: monthlyComplete ? 0 : paidThisMonth }));
-      setSelectedBike(current => current.id === selectedBike.id ? { ...current, balance: remainingBalance, nextPayment: monthlyTarget ? (monthlyComplete ? "Agreed instalment completed" : `${money(monthlyRemaining)} remaining`) : current.nextPayment } : current);
-      const paymentMessage = monthlyTarget ? (monthlyComplete ? `${money(amount)} received for ${selectedBike.registration}. Your agreed instalment of ${money(monthlyTarget)} is fully paid. Vehicle finance balance: ${money(remainingBalance)}. Receipt ${mpesaReceiptNumber}.` : `${money(amount)} received for ${selectedBike.registration}. ${money(monthlyRemaining)} remains toward your agreed ${money(monthlyTarget)} instalment. Vehicle finance balance: ${money(remainingBalance)}. Receipt ${mpesaReceiptNumber}.`) : `${money(amount)} received for ${selectedBike.registration}. Vehicle finance balance: ${money(remainingBalance)}. Receipt ${mpesaReceiptNumber}.`;
-      const confirmedReceipt = { ...receipt, status: "Confirmed", monthlyTarget, monthlyRemaining, monthlyComplete, remainingBalance, notificationMessage: paymentMessage };
-      setPayments(current => current.map(payment => payment.id === receipt.id ? confirmedReceipt : payment));
-      setAlerts(current => upsertById(current, { id: `payment-${mpesaReceiptNumber}`, type: "receipt", icon: "checkmark-circle-outline", title: monthlyComplete ? "Agreed instalment completed" : "Payment confirmed", message: paymentMessage, age: "now", unread: true }));
-      setPaymentReceipt(confirmedReceipt);
-      Notifications.scheduleNotificationAsync({ content: { title: monthlyComplete ? "Agreed instalment completed" : "Payment confirmed", subtitle: "Jixels Customer Trackings", body: paymentMessage, sound: "default", data: { screen: "history", type: "payment", inAppRecorded: true, mpesaReceiptNumber, vehicleId: selectedBike.id, remainingBalance, monthlyRemaining } }, trigger: null }).catch(() => {});
-    }, 1800);
-    paymentTimers.current.add(confirmationTimer);
-    return true;
   };
   const refreshable = { onRefresh: refreshApp };
   const acceptPermissions = async () => {
@@ -928,6 +957,8 @@ function CustomerApp({ session, onLogout }) {
       setPermissionBusy(false);
     }
   };
+  if (recordsLoading) return <View style={[styles.appShell, { paddingTop: insets.top }]}><StatusBar style="light" /><ActivitySkeleton screen="dashboard" /></View>;
+  if (!selectedBike) return <View style={[styles.appShell, { paddingTop: insets.top }]}><StatusBar style="light" /><PageHeader title="Dashboard" subtitle="Your Jixels account" expanded={drawerExpanded} onToggle={() => setDrawerExpanded(value => !value)} unread={0} onAlerts={() => {}} profile={profile} /><View style={styles.emptyAlerts}><Ionicons name="car-outline" size={34} color={colors.gray} /><Text style={styles.stateMessage}>{recordsError || "No tracker or vehicle is assigned to this account."}</Text></View></View>;
   if (!isOnline && !offlineAcknowledged) return <OfflineGate onContinue={() => setOfflineAcknowledged(true)} onRetry={() => checkConnectivity().catch(() => {})} />;
   return <View style={[styles.appShell, { paddingTop: insets.top, paddingBottom: Math.max(insets.bottom, 22) }]}><StatusBar style="light" /><View style={[styles.main, darkMode && styles.darkPage]}>{!isOnline && <View style={styles.offlineBanner}><Ionicons name="cloud-offline-outline" size={14} color={colors.white} /><Text style={styles.offlineBannerText}>Offline • {syncQueue.length} waiting to sync</Text></View>}<PageHeader dark={darkMode} title={title} subtitle={subtitles[screen]} expanded={drawerExpanded} onToggle={() => setDrawerExpanded(v => !v)} unread={unread} onAlerts={() => navigate("alerts")} profile={profile} /><Animated.View style={[styles.screen, { opacity: screenMotion, transform: [{ translateX: screenMotion.interpolate({ inputRange: [0, 1], outputRange: [12, 0] }) }] }]}>{booting ? <ActivitySkeleton screen={screen} /> : <>{screen === "dashboard" && <Dashboard darkMode={darkMode} selectedBike={selectedBike} onSelectBike={setSelectedBike} navigate={navigate} totalPaid={totalPaid} profile={profile} {...refreshable} />}{screen === "bikes" && <BikesScreen selectedBike={selectedBike} onSelectBike={setSelectedBike} navigate={navigate} {...refreshable} />}{screen === "tracking" && (selectedBike ? <TrackingScreen selectedBike={selectedBike} onSelectBike={setSelectedBike} accessToken={session?.accessToken} /> : <PhoneLocationTrackingScreen />)}{screen === "monitoring" && <MonitoringScreen selectedBike={selectedBike} vehicles={monitoringVehicles} onSelectBike={setSelectedBike} security={security} onMonitoringChange={updateMonitoring} onImmobilizerChange={updateImmobilizer} isOnline={isOnline} {...refreshable} />}{screen === "payments" && <PaymentScreen selectedBike={paymentSelectedBike} paymentVehicles={paymentVehicles} onSelectBike={setSelectedBike} onPaid={addPayment} registeredPhone={profile.phone} isOnline={isOnline} {...refreshable} />}{screen === "history" && <HistoryScreen darkMode={darkMode} payments={payments} deletePayments={ids => setPayments(current => current.filter(payment => !ids.includes(payment.id)))} {...refreshable} />}{screen === "reports" && <ReportsScreen profile={profile} selectedBike={selectedBike} vehicles={bikes} onSelectBike={setSelectedBike} onGenerate={generateReport} isOnline={isOnline} {...refreshable} />}{screen === "alerts" && <AlertsScreen darkMode={darkMode} alerts={alerts} markAllRead={() => setAlerts(current => current.map(a => ({ ...a, unread: false })))} markAlertRead={id => setAlerts(current => current.map(a => a.id === id ? { ...a, unread: false } : a))} deleteAlerts={ids => setAlerts(current => current.filter(alert => !ids.includes(alert.id)))} {...refreshable} />}{screen === "settings" && <SettingsScreen profile={profile} onSave={setProfile} {...refreshable} />}</>}</Animated.View></View>{permissionAlertVisible && <View pointerEvents="box-none" style={styles.dashboardPermissionWrap}><View style={styles.dashboardPermissionAlert}><View style={styles.dashboardPermissionIcon}><Ionicons name="shield-checkmark" size={25} color={colors.white} /></View><View style={styles.dashboardPermissionBody}><Text style={styles.dashboardPermissionTitle}>Allow Jixels access</Text><Text style={styles.dashboardPermissionText}>Enable device location for the live map and notifications for tracker and payment alerts.</Text></View><View style={styles.dashboardPermissionActions}><Pressable disabled={permissionBusy} onPress={() => setPermissionAlertVisible(false)} style={styles.permissionCancelButton}><Text style={styles.permissionCancelText}>Cancel</Text></Pressable><Pressable disabled={permissionBusy} onPress={acceptPermissions} style={styles.permissionAcceptButton}>{permissionBusy ? <ActivityIndicator color={colors.white} size="small" /> : <Text style={styles.permissionAcceptText}>Accept</Text>}</Pressable></View></View></View>}{drawerExpanded && <><Pressable accessibilityLabel="Close menu" onPress={() => setDrawerExpanded(false)} style={styles.drawerBackdrop} /><Drawer topInset={0} bottomInset={Math.max(insets.bottom, 28)} expanded active={screen} unread={unread} onToggle={() => setDrawerExpanded(false)} onSelect={navigate} onLogout={onLogout} /></>}<PaymentSuccess receipt={paymentReceipt} onClose={() => setPaymentReceipt(null)} /></View>;
 }
@@ -937,7 +968,7 @@ export default function App() {
   const [applicant, setApplicant] = useState(null);
   const [approvalCode, setApprovalCode] = useState("");
   const [approvedEmail, setApprovedEmail] = useState(null);
-  const [displayName, setDisplayName] = useState(customer.name);
+  const [displayName, setDisplayName] = useState("");
   const [loginCount, setLoginCount] = useState(0);
   const [session, setSession] = useState(null);
   useEffect(() => {
@@ -955,7 +986,7 @@ export default function App() {
   }, []);
   const authenticate = async (nextSession) => {
     setSession(nextSession);
-    setDisplayName(nextSession?.user?.name || customer.name);
+    setDisplayName(nextSession?.user?.name || "");
     await sessionStore.set(nextSession).catch(() => {});
     setPhase("gps");
   };

@@ -1,7 +1,9 @@
 (function () {
   const SUPABASE_URL = "https://tpzebfvhvjsezynqgdns.supabase.co";
   const SUPABASE_KEY = "sb_publishable_IeSvEQI25WeymzwM-3j4VQ_a6a84vRO";
-  const emptyData = { accounts: [], payments: [], agents: [], alerts: [], auditLogs: [], notifications: [], settings: { workspaceName: "Jixels Finance", timezone: "Africa/Nairobi", currency: "KES", commissionRate: "5", dailyCollectionTarget: "18500", overdueGraceDays: "3", exportRetentionDays: "90", sessionTimeoutMinutes: "30", notifyPayments: true, notifyReconciliation: true, notifyCommissions: true } };
+  // Never manufacture finance settings or operational records in the browser.
+  // Settings are empty until an authorized Finance user saves them to Supabase.
+  const emptyData = { accounts: [], payments: [], agents: [], alerts: [], auditLogs: [], notifications: [], settings: { workspaceName: "", timezone: "", currency: "", commissionRate: "", dailyCollectionTarget: "", overdueGraceDays: "", exportRetentionDays: "", sessionTimeoutMinutes: "", notifyPayments: false, notifyReconciliation: false, notifyCommissions: false } };
   let memoryData = JSON.parse(JSON.stringify(emptyData)); let accessToken = null;
   const tables = { accounts: "finance_accounts", payments: "finance_payments", agents: "finance_agents", alerts: "finance_alerts", auditLogs: "finance_audit_logs" };
   const clone = value => JSON.parse(JSON.stringify(value));

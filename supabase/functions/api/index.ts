@@ -195,6 +195,30 @@ const financeRoles = new Set(["finance", "finance_officer", "admin", "super_admi
 const adminRoles = new Set(["admin", "super_admin", "operations_manager"]);
 const approvableStaffRoles = new Set(["agent", "support_agent", "finance", "finance_officer"]);
 const approvedStatuses = new Set(["active", "approved"]);
+const LOGIN_LOCK_MESSAGE = "Too many failed sign-in attempts. Please try again in 15 minutes.";
+
+async function loginAttemptKey(email: string) {
+  return sha256(`jixels-login:${email}`);
+}
+
+async function getLoginLock(admin: ReturnType<typeof createClient>, accountKey: string) {
+  const { data, error } = await admin.rpc("get_login_lock", { p_account_key: accountKey });
+  if (error) {
+    console.error("Login lock lookup failed", error);
+    return { error: true, locked: false };
+  }
+  return { error: false, locked: Boolean(data) };
+}
+
+async function recordLoginFailure(admin: ReturnType<typeof createClient>, accountKey: string) {
+  const { data, error } = await admin.rpc("record_login_failure", { p_account_key: accountKey });
+  if (error) {
+    console.error("Login failure recording failed", error);
+    return { error: true, locked: false };
+  }
+  const state = Array.isArray(data) ? data[0] : data;
+  return { error: false, locked: Boolean(state?.locked_until) };
+}
 
 async function portalSignIn(
   client: ReturnType<typeof createClient>,
@@ -202,11 +226,25 @@ async function portalSignIn(
   body: Record<string, unknown>,
   allowedRoles: Set<string>,
 ) {
+  const email = String(body.email ?? "").trim().toLowerCase();
+  const accountKey = await loginAttemptKey(email);
+  const currentLock = await getLoginLock(admin, accountKey);
+  if (currentLock.error) return fail("Sign-in is temporarily unavailable. Please try again in a few moments.", 503, "LOGIN_SECURITY_UNAVAILABLE");
+  if (currentLock.locked) return fail(LOGIN_LOCK_MESSAGE, 429, "LOGIN_TEMPORARILY_LOCKED");
+
   const { data, error } = await client.auth.signInWithPassword({
-    email: String(body.email ?? "").trim().toLowerCase(),
+    email,
     password: String(body.password ?? ""),
   });
-  if (error || !data.session || !data.user) return fail("Incorrect email or password.", 401, "INVALID_CREDENTIALS");
+  if (error || !data.session || !data.user) {
+    const failure = await recordLoginFailure(admin, accountKey);
+    if (failure.error) return fail("Sign-in is temporarily unavailable. Please try again in a few moments.", 503, "LOGIN_SECURITY_UNAVAILABLE");
+    if (failure.locked) return fail(LOGIN_LOCK_MESSAGE, 429, "LOGIN_TEMPORARILY_LOCKED");
+    return fail("Incorrect email or password.", 401, "INVALID_CREDENTIALS");
+  }
+
+  const { error: clearFailureError } = await admin.rpc("clear_login_failures", { p_account_key: accountKey });
+  if (clearFailureError) console.error("Login failure reset failed", clearFailureError);
 
   const { data: profile, error: profileError } = await admin
     .from("profiles")

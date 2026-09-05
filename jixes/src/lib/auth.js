@@ -1,16 +1,13 @@
 const SESSION_TTL = 8 * 60 * 60 * 1000;
 const INACTIVITY_LIMIT = 30 * 60 * 1000;
-const MAX_FAILED_ATTEMPTS = 3;
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
 const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
 let activeSession = null;
-const failedAttempts = new Map();
-const blockedAccounts = new Set();
 const SESSION_KEY = "jixels.admin.session.v1";
 
 function safeMessage(status, message = "") {
   if (status === 401 || status === 400) return "Incorrect email or password. Please check your details and try again.";
-  if (status === 429) return "Too many requests. Please wait and try again.";
+  if (status === 429) return message || "Too many requests. Please wait and try again.";
   if (status === 403 && message) return message;
   return "Authentication temporarily unavailable. Please try again in a few moments.";
 }
@@ -37,30 +34,7 @@ export function getSession() {
   return activeSession;
 }
 
-function normalizedLogin(email) {
-  return email.trim().toLowerCase();
-}
-
-function registerFailedAttempt(email) {
-  const key = normalizedLogin(email);
-  const attempts = (failedAttempts.get(key) || 0) + 1;
-  failedAttempts.set(key, attempts);
-  if (attempts >= MAX_FAILED_ATTEMPTS) {
-    blockedAccounts.add(key);
-    return "Your account has been temporarily locked because of too many failed login attempts. Please contact an administrator or use the account recovery option.";
-  }
-  const remaining = MAX_FAILED_ATTEMPTS + 1 - attempts;
-  return `Incorrect email or password. Please check your details and try again. ${remaining} attempt${remaining === 1 ? "" : "s"} remaining before the account is blocked.`;
-}
-
-function clearFailedAttempts(email) {
-  const key = normalizedLogin(email);
-  failedAttempts.delete(key);
-  blockedAccounts.delete(key);
-}
-
 export async function signIn(email, password) {
-  if (blockedAccounts.has(normalizedLogin(email))) return { error: "Your account has been temporarily locked because of too many failed login attempts. Please contact an administrator or use the account recovery option." };
   if (supabaseUrl && supabaseKey) {
     try {
       const response = await fetch(`${supabaseUrl}/functions/v1/api/v1/admin/auth/login`, {
@@ -69,9 +43,6 @@ export async function signIn(email, password) {
         body: JSON.stringify({ email: email.trim(), password })
       });
       if (!response.ok) {
-        // Only rejected credentials count toward lockout. Network, schema and
-        // server errors must never lock a legitimate staff account.
-        if (response.status === 400 || response.status === 401) return { error: registerFailedAttempt(email) };
         const payload = await response.json().catch(() => ({}));
         console.error("Admin sign-in failed", response.status, payload.message || "");
         return { error: safeMessage(response.status, payload.message) };
@@ -81,7 +52,6 @@ export async function signIn(email, password) {
       const expiresAt = Date.parse(result.expiresAt || "") || Date.now() + SESSION_TTL;
       const session = { userId: result.user.id, email: result.user.email || email, name: result.user.name || "Administrator", role: result.user.role, accessToken: result.accessToken, refreshToken: result.refreshToken || null, expiresAt, lastActivity: Date.now() };
       persistSession(session);
-      clearFailedAttempts(email);
       return { data: session };
     } catch (error) {
       console.error("Admin authentication service failure", error);

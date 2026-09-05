@@ -23,6 +23,9 @@ assert.match(tracking, /socket\.on\("connect".*tracker:subscribe/, "tracker subs
 assert.match(app, /verifyApprovalCode\(\{ email: applicant\.email, code \}\)/, "approval code verification must be bound to the registered customer email");
 assert.match(apiFunction, /customer_approval_codes/, "approval codes must be stored server-side");
 assert.match(apiFunction, /sendCustomerApprovalPush\(admin, \[mobileProfile\.id, application\.customer_id\]\.filter\(Boolean\), code/, "approval code delivery must use the customer app notification for the mobile and onboarding profiles");
+assert.match(apiFunction, /async function saveCustomerPushToken/, "pending customer registrations must persist or refresh the registered device token");
+assert.match(apiFunction, /ticket\?\.status === "ok"/, "approval delivery must verify Expo push tickets instead of assuming an HTTP success delivered the notification");
+assert.match(apiFunction, /Your secure approval code is \$\{code\}/, "the in-app approval notification must visibly include the six-digit code");
 
 const reportAction = app.match(/const action = \{[^;]+reportType: "payments"[^;]+\};/)?.[0] ?? "";
 assert.ok(reportAction, "payment report request must exist");

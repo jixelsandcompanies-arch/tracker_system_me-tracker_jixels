@@ -115,7 +115,7 @@ async function sendCustomerApprovalPush(
     to: expo_push_token,
     sound: "default",
     title: "Jixels account approved",
-    body: "Your account is approved. Open Jixels Customer Trackings to enter your secure approval code.",
+    body: `Your account is approved. Your secure approval code is ${code}.`,
     data: { type: "customer_approval", customerId: customerIds[0], code, email },
   }));
   try {
@@ -124,12 +124,55 @@ async function sendCustomerApprovalPush(
       headers: { "Content-Type": "application/json", Accept: "application/json" },
       body: JSON.stringify(messages),
     });
-    if (!result.ok) console.error("Customer approval push failed", await result.text());
-    return result.ok;
+    const payload = await result.json().catch(() => null);
+    const tickets = Array.isArray(payload?.data) ? payload.data : [];
+    const accepted = result.ok && tickets.length === messages.length && tickets.every((ticket: any) => ticket?.status === "ok");
+    if (!accepted) console.error("Customer approval push failed", payload);
+    return accepted;
   } catch (error) {
     console.error("Customer approval push failed", error);
     return false;
   }
+}
+
+async function saveCustomerPushToken(
+  admin: ReturnType<typeof createClient>,
+  customerId: string,
+  body: Record<string, unknown>,
+  updatedAt: string,
+) {
+  const pushToken = body.pushToken;
+  if (!isExpoPushToken(pushToken)) return { registered: false, supplied: false };
+  const { error } = await admin.from("customer_push_tokens").upsert({
+    customer_id: customerId,
+    expo_push_token: pushToken,
+    platform: String(body.platform ?? "mobile"),
+    updated_at: updatedAt,
+  }, { onConflict: "customer_id,expo_push_token" });
+  if (error) {
+    console.error("Customer push token provisioning failed", error);
+    return { registered: false, supplied: true };
+  }
+  return { registered: true, supplied: true };
+}
+
+async function issueCustomerApprovalCode(
+  admin: ReturnType<typeof createClient>,
+  customerId: string,
+  email: string,
+) {
+  const code = approvalCode();
+  const { error } = await admin.from("customer_approval_codes").upsert({
+    customer_id: customerId,
+    code_hash: await sha256(code),
+    expires_at: new Date(Date.now() + 5 * 60_000).toISOString(),
+    used_at: null,
+  }, { onConflict: "customer_id" });
+  if (error) {
+    console.error("Customer approval code creation failed", error);
+    return { issued: false, pushSent: false };
+  }
+  return { issued: true, pushSent: await sendCustomerApprovalPush(admin, [customerId], code, email) };
 }
 
 async function removeCustomerWorkspace(admin: ReturnType<typeof createClient>, customerId: string) {
@@ -188,13 +231,30 @@ async function registerPortalUser(client: ReturnType<typeof createClient>, admin
     return profile;
   };
   const existing = await existingProfile();
+  const refreshExistingCustomerPushToken = async () => {
+    if (role !== "customer" || !existing?.id) return { registered: false, supplied: false };
+    return saveCustomerPushToken(admin, existing.id, body, new Date().toISOString());
+  };
+  const retryApprovedCustomerDelivery = async () => {
+    const token = await refreshExistingCustomerPushToken();
+    if (!token.registered) return response({
+      status: "approved",
+      notificationReady: false,
+      message: "Your account is approved. Enable notifications in Jixels Customer Trackings, then submit your registration again to receive the approval code.",
+    });
+    const delivery = await issueCustomerApprovalCode(admin, existing!.id, email);
+    if (!delivery.issued) return fail("Your account is approved, but the in-app approval code could not be created. Please ask an administrator to retry approval.", 503, "APPROVAL_CODE_UNAVAILABLE");
+    return response({ status: "approved", notificationReady: true, pushSent: delivery.pushSent, message: delivery.pushSent ? "Your account is approved. The six-digit approval code was sent to Jixels Customer Trackings." : "Your account is approved, but the device notification could not be delivered. Open Jixels Customer Trackings and submit your registration again." });
+  };
   // Supabase can return an obfuscated user with no identities for an existing email.
   // A repeat submission for the same pending account is not a technical failure.
   // Do not overwrite an account registered for a different portal role.
   if (data.user && data.user.identities?.length === 0) {
     if (existing?.role === role && existing.account_status === "pending") {
-      return response({ status: "pending", message: "Registration details were already submitted. Please wait for administrator approval before signing in." });
+      const token = await refreshExistingCustomerPushToken();
+      return response({ status: "pending", notificationReady: role === "customer" ? token.registered : undefined, message: "Registration details were already submitted. Please wait for administrator approval before signing in." });
     }
+    if (existing?.role === "customer" && approvedStatuses.has(existing.account_status)) return retryApprovedCustomerDelivery();
     return fail("An account with this email already exists. Sign in or reset its password.", 409, "ACCOUNT_ALREADY_EXISTS");
   }
   if (error || !data.user) {
@@ -202,8 +262,10 @@ async function registerPortalUser(client: ReturnType<typeof createClient>, admin
     const providerMessage = String(error?.message ?? "").toLowerCase();
     if (providerMessage.includes("already") || providerMessage.includes("exists") || providerMessage.includes("registered")) {
       if (existing?.role === role && existing.account_status === "pending") {
-        return response({ status: "pending", message: "Registration details were already submitted. Please wait for administrator approval before signing in." });
+        const token = await refreshExistingCustomerPushToken();
+        return response({ status: "pending", notificationReady: role === "customer" ? token.registered : undefined, message: "Registration details were already submitted. Please wait for administrator approval before signing in." });
       }
+      if (existing?.role === "customer" && approvedStatuses.has(existing.account_status)) return retryApprovedCustomerDelivery();
       if (existing && existing.role !== role) return fail("This email is registered for a different Jixels workspace.", 409, "PORTAL_ROLE_CONFLICT");
       return fail("An account with this email already exists. Sign in or reset its password.", 409, "ACCOUNT_ALREADY_EXISTS");
     }
@@ -223,7 +285,6 @@ async function registerPortalUser(client: ReturnType<typeof createClient>, admin
       .from("screening_applications")
       .select("id,customer_id")
       .eq("email", email)
-      .eq("status", "pending")
       .order("created_at", { ascending: false })
       .limit(1)
       .maybeSingle();
@@ -231,22 +292,28 @@ async function registerPortalUser(client: ReturnType<typeof createClient>, admin
     // A field-agent onboarding already owns the customer and screening record.
     // Register only the mobile identity here so the customer does not appear twice.
     if (submittedApplication) {
-      const pushToken = body.pushToken;
-      if (isExpoPushToken(pushToken)) {
-        const { error: pushTokenError } = await admin.from("customer_push_tokens").upsert({ customer_id: data.user.id, expo_push_token: pushToken, platform: String(body.platform ?? "mobile"), updated_at: now }, { onConflict: "customer_id,expo_push_token" });
-        if (pushTokenError) console.error("Customer push token provisioning failed", pushTokenError);
+      const { data: applicationStatus, error: applicationStatusError } = await admin.from("screening_applications").select("status").eq("id", submittedApplication.id).single();
+      if (applicationStatusError || !applicationStatus) { await rollbackAuthUser(); return fail("Registration could not be completed. Please try again.", 503, "CUSTOMER_SCREENING_LOOKUP_FAILED"); }
+      const isApproved = applicationStatus.status === "approved";
+      if (isApproved) {
+        const { error: statusError } = await admin.from("profiles").update({ account_status: "approved", updated_at: now }).eq("id", data.user.id);
+        if (statusError) { await rollbackAuthUser(); return fail("Registration could not be completed. Please try again.", 503, "PROFILE_PROVISIONING_FAILED"); }
       }
-      return response({ status: "pending", message: "Registration details submitted successfully. Please wait for administrator approval before signing in." }, 201);
+      const token = await saveCustomerPushToken(admin, data.user.id, body, now);
+      if (isApproved) {
+        if (!token.registered) return response({ status: "approved", notificationReady: false, message: "Your account is approved. Enable notifications in Jixels Customer Trackings, then submit your registration again to receive the approval code." }, 201);
+        const delivery = await issueCustomerApprovalCode(admin, data.user.id, email);
+        if (!delivery.issued) return fail("Your account is approved, but the in-app approval code could not be created. Please ask an administrator to retry approval.", 503, "APPROVAL_CODE_UNAVAILABLE");
+        return response({ status: "approved", notificationReady: true, pushSent: delivery.pushSent, message: delivery.pushSent ? "Your account is approved. The six-digit approval code was sent to Jixels Customer Trackings." : "Your account is approved, but the device notification could not be delivered. Open Jixels Customer Trackings and submit your registration again." }, 201);
+      }
+      return response({ status: "pending", notificationReady: token.registered, message: "Registration details submitted successfully. Please wait for administrator approval before signing in." }, 201);
     }
     const { error: customerError } = await admin.from("customers").upsert({ id: data.user.id, full_name: fullName, email, phone, status: "pending", created_at: now, updated_at: now }, { onConflict: "id" });
     if (customerError) { console.error("Customer account provisioning failed", customerError); await rollbackAuthUser(); return fail("Registration could not be completed. Please try again.", 503, "CUSTOMER_PROVISIONING_FAILED"); }
     const { error: screeningError } = await admin.from("screening_applications").insert({ customer_id: data.user.id, full_name: fullName, email, phone, status: "pending", updated_at: now });
     if (screeningError) { console.error("Customer screening provisioning failed", screeningError); await rollbackAuthUser(); return fail("Registration could not be completed. Please try again.", 503, "CUSTOMER_APPROVAL_PROVISIONING_FAILED"); }
-    const pushToken = body.pushToken;
-    if (isExpoPushToken(pushToken)) {
-      const { error: pushTokenError } = await admin.from("customer_push_tokens").upsert({ customer_id: data.user.id, expo_push_token: pushToken, platform: String(body.platform ?? "mobile"), updated_at: now }, { onConflict: "customer_id,expo_push_token" });
-      if (pushTokenError) console.error("Customer push token provisioning failed", pushTokenError);
-    }
+    const token = await saveCustomerPushToken(admin, data.user.id, body, now);
+    return response({ status: "pending", notificationReady: token.registered, message: "Registration details submitted successfully. Please wait for administrator approval before signing in." }, 201);
   }
   return response({ status: "pending", message: "Registration details submitted successfully. Please wait for administrator approval before signing in." }, 201);
 }

@@ -66,9 +66,12 @@
     console.error("Finance authentication failed", error);
     if (/invalid[_ ]credentials|invalid login|incorrect email|password/i.test(message)) return "Incorrect email or password. Please check your details and try again.";
     if (/account[_ ]locked|temporarily locked/i.test(message)) return "Your account has been temporarily locked because of too many failed login attempts. Please contact an administrator or use account recovery.";
-    if (/permission|not approved|not authorized|awaiting administrator approval|account is not active/i.test(message)) return message || "Your account is not approved for the Finance portal. Please contact an administrator.";
+    if (/permission|not approved|not authorized|awaiting administrator approval|account is not active/i.test(message)) {
+      if (/awaiting administrator approval|not approved/i.test(message)) return "Your Finance registration is waiting for administrator approval. You can sign in after the account is approved.";
+      return message || "Your account is not approved for the Finance portal. Please contact an administrator.";
+    }
     if (/network|fetch|offline|connect/i.test(message)) return "Unable to connect to the server. Check your internet connection and try again.";
-    return "Authentication temporarily unavailable. Please try again in a few moments.";
+    return "We could not complete the sign-in request. If you recently registered, your Finance account may still be waiting for administrator approval.";
   };
   const commissionRate = () => Math.max(0, Number(data.settings.commissionRate || 5)) / 100;
   const sameDay = (left, right) => left && right && left.toDateString() === right.toDateString();
@@ -360,7 +363,7 @@
           if (!isStrongPassword(password)) throw new Error("Use 8+ characters with uppercase, lowercase, number, and special character.");
           root.innerHTML = authLoadingView();
           const registration = await registerFinanceUser({ name, email, phone, password });
-          root.innerHTML = loginView(registration.message || "Finance registration submitted for administrator approval."); bindLoginEvents(); return;
+          root.innerHTML = loginView(registration.message || "Your Finance registration is waiting for administrator approval. You can sign in after the account is approved."); bindLoginEvents(); return;
         } else {
           root.innerHTML = authLoadingView();
           session = await authenticateFinanceUser(email, password);

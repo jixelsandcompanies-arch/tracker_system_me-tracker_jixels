@@ -115,8 +115,13 @@ async function portalSignIn(
     console.error("Profile load failed after sign-in", profileError);
     return fail("Your account profile could not be loaded. Please contact an administrator.", 503, "PROFILE_UNAVAILABLE");
   }
-  if (!allowedRoles.has(profile.role) || !approvedStatuses.has(profile.account_status)) {
+  if (!allowedRoles.has(profile.role)) {
     return fail("You don't have permission to access this portal.", 403, "PORTAL_ACCESS_DENIED");
+  }
+  if (!approvedStatuses.has(profile.account_status)) {
+    if (profile.account_status === "pending") return fail("Your registration is awaiting administrator approval. You can sign in once the account is approved.", 403, "ACCOUNT_PENDING_APPROVAL");
+    if (profile.account_status === "rejected" || profile.account_status === "suspended") return fail("This account is not active. Please contact Jixels support.", 403, "ACCOUNT_INACTIVE");
+    return fail("Your account is not active. Please contact Jixels support.", 403, "ACCOUNT_INACTIVE");
   }
   return response({
     accessToken: data.session.access_token,

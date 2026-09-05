@@ -4,6 +4,8 @@
   const emptyData = { accounts: [], payments: [], agents: [], customers: [], staff: [], alerts: [], auditLogs: [], notifications: [], settings: { workspaceName: "Jixels Finance", timezone: "Africa/Nairobi", currency: "KES", commissionRate: "5", dailyCollectionTarget: "18500", overdueGraceDays: "3", exportRetentionDays: "90", sessionTimeoutMinutes: "30", notifyPayments: true, notifyReconciliation: true, notifyCommissions: true } };
   let memoryData = JSON.parse(JSON.stringify(emptyData)); let accessToken = null;
   const tables = { accounts: "finance_accounts", payments: "finance_payments", agents: "finance_agents", alerts: "finance_alerts", auditLogs: "finance_audit_logs" };
+  const dashboardTables = { accounts: tables.accounts, payments: tables.payments };
+  const supplementalTables = { agents: tables.agents, alerts: tables.alerts, auditLogs: tables.auditLogs };
   const clone = value => JSON.parse(JSON.stringify(value));
   function readData() { return { ...emptyData, ...clone(memoryData) }; }
   function safeError(status) {
@@ -41,18 +43,32 @@
     if (JSON.stringify(previousData.settings) !== JSON.stringify(nextData.settings)) jobs.push(request("/rest/v1/finance_settings?on_conflict=id", { method: "POST", headers: { Prefer: "resolution=merge-duplicates" }, body: JSON.stringify({ id: "default", data: nextData.settings, updated_at: new Date().toISOString() }) }));
     return Promise.all(jobs).catch(error => { window.dispatchEvent(new CustomEvent("finance-sync-error", { detail: error.message })); return null; });
   }
+  async function loadStoredTables(tableMap) {
+    return Promise.all(Object.entries(tableMap).map(async ([key, table]) => [key, await request(`/rest/v1/${table}?select=external_id,data&order=updated_at.desc`)]));
+  }
+  function applyStoredTables(rows) {
+    rows.forEach(([key, values]) => { memoryData[key] = (values || []).map(row => ({ ...(row.data || {}), id: row.data?.id || row.external_id })); });
+  }
   async function hydrate(token) {
     accessToken = token;
-    const [rows, settings, customers, staff] = await Promise.all([
-      Promise.all(Object.entries(tables).map(async ([key, table]) => [key, await request(`/rest/v1/${table}?select=external_id,data&order=updated_at.desc`)])),
-      request("/rest/v1/finance_settings?select=data&id=eq.default"),
+    const [rows, settings] = await Promise.all([
+      loadStoredTables(dashboardTables),
+      request("/rest/v1/finance_settings?select=data&id=eq.default")
+    ]);
+    memoryData = clone(emptyData);
+    applyStoredTables(rows);
+    if (settings?.[0]?.data) memoryData.settings = { ...emptyData.settings, ...settings[0].data };
+    return clone(memoryData);
+  }
+  async function hydrateSupplementary() {
+    const [rows, customers, staff] = await Promise.all([
+      loadStoredTables(supplementalTables),
       request("/rest/v1/customers?select=id,full_name,email,phone,status,created_at&order=created_at.desc"),
       request("/rest/v1/profiles?select=id,full_name,email,phone,role,account_status&role=in.(agent,support_agent,finance,finance_officer,admin,super_admin)&order=full_name.asc")
     ]);
-    const nonCustomerAccountIds = new Set((staff || []).filter((profile) => profile.role !== "customer").map((profile) => profile.id));
-    memoryData = { ...emptyData, customers: (customers || []).filter((customer) => !nonCustomerAccountIds.has(customer.id)), staff: staff || [] };
-    rows.forEach(([key, values]) => { memoryData[key] = (values || []).map(row => ({ ...(row.data || {}), id: row.data?.id || row.external_id })); });
-    if (settings?.[0]?.data) memoryData.settings = { ...emptyData.settings, ...settings[0].data };
+    const nonCustomerAccountIds = new Set((staff || []).filter(profile => profile.role !== "customer").map(profile => profile.id));
+    memoryData = { ...memoryData, customers: (customers || []).filter(customer => !nonCustomerAccountIds.has(customer.id)), staff: staff || [] };
+    applyStoredTables(rows);
     return clone(memoryData);
   }
   async function financeProfile(userId, token) {
@@ -85,5 +101,5 @@
     return { id: result.user.id, name: result.user.name || result.user.email.split("@")[0], email: result.user.email, phone: result.user.phone || "", role: result.user.role, accessToken: result.accessToken };
   }
   const money = value => new Intl.NumberFormat("en-KE", { style: "currency", currency: "KES", maximumFractionDigits: 0 }).format(Number(value || 0));
-  window.FinanceStore = { emptyData, readData, saveData, registerFinanceUser, financeAccountStatus, authenticateFinanceUser, hydrate, money };
+  window.FinanceStore = { emptyData, readData, saveData, registerFinanceUser, financeAccountStatus, authenticateFinanceUser, hydrate, hydrateSupplementary, money };
 })();

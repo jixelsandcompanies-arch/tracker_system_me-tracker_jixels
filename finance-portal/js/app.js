@@ -9,7 +9,7 @@
   window.addEventListener("error", event => showFatalError(event.error || event.message));
   window.addEventListener("unhandledrejection", event => showFatalError(event.reason));
   try {
-  const { readData, saveData, registerFinanceUser, financeAccountStatus, authenticateFinanceUser, hydrate, money } = window.FinanceStore;
+  const { readData, saveData, registerFinanceUser, financeAccountStatus, authenticateFinanceUser, hydrate, hydrateSupplementary, money } = window.FinanceStore;
   const root = document.getElementById("root");
   let data = readData();
   let page = "dashboard";
@@ -449,6 +449,11 @@
       data = readData();
       loading = false;
       render();
+      hydrateSupplementary().then(records => {
+        if (!session) return;
+        data = records;
+        render();
+      }).catch(error => console.error("Finance supplementary data loading failed", error));
     } catch (error) {
       console.error("Finance workspace loading failed", error);
       loading = false;
@@ -463,8 +468,7 @@
   }
 
   function openPage(nextPage) {
-    page = nextPage; sidebarOpen = false; if (window.innerWidth > 760) sidebarCollapsed = true; loading = true; loadingMode = "page"; render();
-    window.setTimeout(() => { loading = false; render(); }, 320);
+    page = nextPage; sidebarOpen = false; if (window.innerWidth > 760) sidebarCollapsed = true; render();
   }
 
   function updateAccountList() {

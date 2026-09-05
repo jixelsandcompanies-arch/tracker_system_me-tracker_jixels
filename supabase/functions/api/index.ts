@@ -165,6 +165,7 @@ const customerRoles = new Set(["customer"]);
 const agentRoles = new Set(["agent", "support_agent"]);
 const financeRoles = new Set(["finance", "finance_officer", "admin", "super_admin"]);
 const adminRoles = new Set(["admin", "super_admin", "operations_manager"]);
+const approvableStaffRoles = new Set(["agent", "support_agent", "finance", "finance_officer"]);
 const approvedStatuses = new Set(["active", "approved"]);
 
 async function portalSignIn(
@@ -385,6 +386,53 @@ Deno.serve(async (request) => {
   const { data: identity } = await client.auth.getUser();
   const user = identity.user;
   if (!user) return fail("Authentication is required.", 401, "UNAUTHORIZED");
+
+  const accountApprovalMatch = route.match(/^\/v1\/admin\/account-approvals\/([^/]+)$/);
+  if ((route === "/v1/admin/account-approvals" && request.method === "GET") || (accountApprovalMatch && request.method === "POST")) {
+    const { data: manager, error: managerError } = await admin.from("profiles").select("role").eq("id", user.id).maybeSingle();
+    if (managerError || !manager || !adminRoles.has(manager.role)) return fail("Administrator approval permission is required.", 403, "FORBIDDEN");
+
+    if (request.method === "GET") {
+      const { data: accounts, error } = await admin
+        .from("profiles")
+        .select("id,full_name,email,phone,role,account_status,created_at,updated_at")
+        .in("role", [...approvableStaffRoles])
+        .order("created_at", { ascending: false });
+      if (error) {
+        console.error("Account approvals query failed", error);
+        return fail("Pending accounts could not be loaded.", 500, "ACCOUNT_APPROVAL_QUERY_FAILED");
+      }
+      return response({ accounts: accounts ?? [] });
+    }
+
+    const accountId = decodeURIComponent(accountApprovalMatch![1]);
+    const nextStatus = String(body.status ?? "").trim().toLowerCase();
+    if (!new Set(["approved", "rejected"]).has(nextStatus)) return fail("Choose approved or rejected for the account decision.", 422, "INVALID_ACCOUNT_STATUS");
+    const { data: account, error: accountError } = await admin
+      .from("profiles")
+      .select("id,full_name,email,phone,role,account_status")
+      .eq("id", accountId)
+      .maybeSingle();
+    if (accountError || !account || !approvableStaffRoles.has(account.role)) return fail("Pending staff account not found.", 404, "ACCOUNT_NOT_FOUND");
+    const { data: updated, error: updateError } = await admin
+      .from("profiles")
+      .update({ account_status: nextStatus, updated_at: new Date().toISOString() })
+      .eq("id", account.id)
+      .select("id,full_name,email,phone,role,account_status,created_at,updated_at")
+      .single();
+    if (updateError) {
+      console.error("Account approval update failed", updateError);
+      return fail("The account decision could not be saved.", 500, "ACCOUNT_APPROVAL_UPDATE_FAILED");
+    }
+    const { error: auditError } = await admin.from("audit_logs").insert({
+      actor_id: user.id,
+      action: nextStatus === "approved" ? "approved staff account" : "rejected staff account",
+      resource: "profiles",
+      detail: { account_id: account.id, email: account.email, role: account.role, previous_status: account.account_status, next_status: nextStatus },
+    });
+    if (auditError) console.error("Account approval audit write failed", auditError);
+    return response({ account: updated, message: nextStatus === "approved" ? "Account approved. The user can now sign in." : "Account rejected. The user cannot access the portal." });
+  }
 
   const deleteMatch = route.match(/^\/v1\/admin\/users\/([^/]+)$/);
   if (deleteMatch && request.method === "DELETE") {

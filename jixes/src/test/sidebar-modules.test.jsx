@@ -7,7 +7,7 @@ describe("sidebar modules", () => {
   afterEach(cleanup);
   it.each(modules)("renders %s without a crash", (title) => {
     render(<EnhancedModuleView title={title} setShowAdd={() => {}} />);
-    const heading = title === "Customer Accounts" ? "Customer accounts" : title === "Products" ? "Product inventory" : title === "Screening" ? "Screening applications" : title === "Payments" ? "Payment records" : title === "Users" ? "Staff accounts" : title;
+    const heading = title === "Customer Accounts" ? "Customer accounts" : title === "Products" ? "Product inventory" : title === "Screening" ? "Screening applications" : title === "Payments" ? "Payment records" : title === "Users" ? "Account approvals" : title;
     expect(screen.getByRole("heading", { name: new RegExp(heading, "i") })).toBeInTheDocument();
   });
 });

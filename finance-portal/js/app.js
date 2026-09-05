@@ -72,7 +72,15 @@
       return message || "Your account is not approved for the Finance portal. Please contact an administrator.";
     }
     if (/network|fetch|offline|connect/i.test(message)) return "Unable to connect to the server. Check your internet connection and try again.";
-    return "Finance account not found. Please register a Finance account before signing in.";
+    return "We could not complete sign-in. Please try again or contact an administrator.";
+  };
+  const safeRegistrationMessage = error => {
+    const message = String(error?.message || "");
+    console.error("Finance registration failed", error);
+    if (error?.code === "ACCOUNT_ALREADY_EXISTS" || /already exists|already registered/i.test(message)) return "A Finance account already exists for this email. Sign in after approval, or reset its password.";
+    if (/strong password|password/i.test(message)) return "Use a stronger password that meets the password requirements.";
+    if (/network|fetch|offline|connect/i.test(message)) return "Unable to submit registration. Check your internet connection and try again.";
+    return message || "Registration was not submitted. Please correct the details and try again.";
   };
   const commissionRate = () => Math.max(0, Number(data.settings.commissionRate || 5)) / 100;
   const sameDay = (left, right) => left && right && left.toDateString() === right.toDateString();
@@ -131,6 +139,19 @@
   function loginView(message = "") {
     const registering = authMode === "register";
     return `<main class="login-screen"><section class="login-shell"><div class="login-story"><div class="login-brand"><img src="./assets/jixels-form-ni-tenje.svg" alt="Jixels Form Ni Tenje"></div><div class="login-story-copy"><span class="login-kicker"><i></i> FINANCE OPERATIONS PLATFORM</span><h1>Every payment.<br>One clear view.</h1><p>Manage financed accounts, collections, overdue balances, reconciliation, and reports from one secure workspace.</p><div class="login-feature-grid"><div><span>↗</span><strong>Live finance</strong><small>Collections and account health</small></div><div><span>✓</span><strong>Controlled access</strong><small>Protected finance workspace</small></div></div></div><div class="login-system-status"><span><i></i> Systems operational</span><small>Secure Jixels workspace</small></div></div><div class="login-form-panel"><form class="login-card" id="login-form"><div class="login-form-mark">✓</div><div class="eyebrow">FINANCE WORKSPACE</div><h2>${registering ? "Register finance user" : "Welcome back"}</h2><p>${registering ? "Create a finance user before accessing payment and account records." : "Enter your registered finance user details."}</p><div class="login-tabs"><button type="button" data-auth-mode="login" class="${!registering ? "active" : ""}">Login</button><button type="button" data-auth-mode="register" class="${registering ? "active" : ""}">Register</button></div>${registering ? '<label>Full name<input name="name" placeholder="Full name" autocomplete="name" required></label><label>Phone number<input name="phone" placeholder="07++++++++++" autocomplete="tel" required></label>' : ""}<label>Email address<input name="email" type="email" placeholder="you@jixels.com" autocomplete="email" required></label><label>Password${passwordInput("password", registering ? "new-password" : "current-password", "Enter your password")}</label>${registering ? `<label>Confirm password${passwordInput("confirm", "new-password", "Repeat your password")}</label>` : ""}${message ? `<div class="login-error">! ${escapeHtml(message)}</div>` : ""}<button class="button button-primary login-button">${registering ? "Create finance user" : "Sign in securely"} <span>↗</span></button><small class="login-security-note">✓ Protected financial access</small></form><footer class="login-panel-footer">© 2026 Jixels Technologies</footer></div></section></main>`;
+  }
+
+  function registrationPendingView() {
+    return `<main class="login-screen"><section class="login-shell"><div class="login-story"><div class="login-brand"><img src="./assets/jixels-form-ni-tenje.svg" alt="Jixels Form Ni Tenje"></div><div class="login-story-copy"><span class="login-kicker"><i></i> FINANCE OPERATIONS PLATFORM</span><h1>Registration<br>received.</h1><p>Your Finance account is protected until a Jixels administrator reviews and approves it.</p></div><div class="login-system-status"><span><i></i> Registration submitted</span><small>Administrator review required</small></div></div><div class="login-form-panel"><section class="login-card" aria-live="polite"><div class="login-form-mark">✓</div><div class="eyebrow">FINANCE ACCOUNT</div><h2>Awaiting approval</h2><p>Registration details submitted successfully. Your account is awaiting approval from a Jixels administrator.</p><p>You will be able to sign in with your registered email and password after approval.</p><button class="button button-primary login-button" type="button" data-return-login>Return to sign in <span>↗</span></button></section><footer class="login-panel-footer">© 2026 Jixels Technologies</footer></div></section></main>`;
+  }
+
+  function showRegistrationPending() {
+    root.innerHTML = registrationPendingView();
+    document.querySelector("[data-return-login]")?.addEventListener("click", () => {
+      authMode = "login";
+      root.innerHTML = loginView();
+      bindLoginEvents();
+    });
   }
 
   function authLoadingView() {
@@ -365,7 +386,8 @@
           const submit = event.currentTarget.querySelector("button[type=submit]");
           if (submit) { submit.disabled = true; submit.textContent = "Submitting registration..."; }
           const registration = await registerFinanceUser({ name, email, phone, password });
-          root.innerHTML = loginView(registration.message || "Registration details submitted successfully. Please wait for administrator approval before signing in."); bindLoginEvents(); return;
+          if (!registration.pending) throw new Error("Registration was not submitted. Please try again.");
+          showRegistrationPending(); return;
         } else {
           const submit = event.currentTarget.querySelector("button[type=submit]");
           if (submit) { submit.disabled = true; submit.textContent = "Checking Finance account..."; }
@@ -381,7 +403,7 @@
         }
         startWorkspaceLoading();
       } catch (error) {
-        root.innerHTML = loginView(safeLoginMessage(error));
+        root.innerHTML = loginView(authMode === "register" ? safeRegistrationMessage(error) : safeLoginMessage(error));
         bindLoginEvents();
       }
     });

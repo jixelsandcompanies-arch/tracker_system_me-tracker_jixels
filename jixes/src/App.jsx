@@ -13,6 +13,7 @@ import {
   BadgeDollarSign,
   Bike,
   CarFront,
+  TramFront,
   Bell,
   ClipboardList,
   CreditCard,
@@ -176,7 +177,7 @@ function useHorizontalTableScroll() {
 }
 
 function WorkspaceSkeleton() {
-  return <div className="admin-gps-launch" aria-label="Connecting admin workspace" aria-busy="true"><div className="admin-gps-stage"><div className="admin-gps-ring"><MapPin size={38}/></div><div className="admin-launch-road"/><span className="admin-moving-car"><CarFront size={24}/></span><span className="admin-moving-bike"><Bike size={24}/></span><span className="admin-moving-tuktuk">TUK</span></div><small>WELCOME TO JIXELS ADMIN</small><h1>Connecting to your trackers</h1><p>Please wait while we securely prepare customers, trackers, payments, and operations.</p><div className="admin-launch-dots"><i/><i/><i/></div></div>;
+  return <div className="admin-gps-launch" aria-label="Connecting admin workspace" aria-busy="true"><div className="admin-gps-stage"><div className="admin-gps-ring"><MapPin size={38}/></div><div className="admin-launch-road"/><span className="admin-moving-car"><CarFront size={24}/></span><span className="admin-moving-bike"><Bike size={24}/></span><span className="admin-moving-tuktuk"><TramFront size={24}/></span></div><small>WELCOME TO JIXELS ADMIN</small><h1>Connecting to your trackers</h1><p>Please wait while we securely prepare customers, trackers, payments, and operations.</p><div className="admin-launch-dots"><i/><i/><i/></div></div>;
 }
 
 function DashboardSkeleton() {

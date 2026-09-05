@@ -42,7 +42,10 @@
     settings: icon('<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.2h-4V21a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9A1.7 1.7 0 0 0 3 14H2.8v-4H3a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7 7 4.2l.1.1A1.7 1.7 0 0 0 9 4.6 1.7 1.7 0 0 0 10 3V2.8h4V3a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2v4H21a1.7 1.7 0 0 0-1.6 1Z"/>'),
     eye: icon('<path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z"/><circle cx="12" cy="12" r="3"/>'),
     audit: icon('<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>'),
-    logout: icon('<path d="M10 5H5v14h5M14 8l4 4-4 4M18 12H9"/>')
+    logout: icon('<path d="M10 5H5v14h5M14 8l4 4-4 4M18 12H9"/>'),
+    launchCar: icon('<path d="M4 16h16l-1.8-5.4A2 2 0 0 0 16.3 9H7.7a2 2 0 0 0-1.9 1.6L4 16Z"/><path d="M3 16h18v3H3zM7 19v2M17 19v2M7.5 13h.01M16.5 13h.01"/>'),
+    launchBike: icon('<circle cx="6" cy="17" r="3"/><circle cx="18" cy="17" r="3"/><path d="M6 17l4-8h3l2 8M10 9l-2-3h3M13 9l3-2M10 17h6"/>'),
+    launchTuktuk: icon('<path d="M5 18V9l4-4h6l4 4v9H5Z"/><path d="M9 18V11h6v7M5 14h14M7 18v2M17 18v2M7 10h2M15 10h2"/>')
   };
   const navigation = [
     ["dashboard", icons.dashboard, "Dashboard"], ["customers", icons.accounts, "Customers"], ["accounts", icons.accounts, "Accounts"], ["commissions", icons.commissions, "Commissions"],
@@ -169,7 +172,7 @@
     const registering = authMode === "register";
     const title = registering ? "Submitting registration" : "Signing you in";
     const detail = registering ? "Creating your finance profile and sending it for administrator approval." : "Checking your finance access and loading secure workspace records.";
-    return `<main class="finance-launch finance-auth-loading" aria-live="polite"><div class="finance-launch-stage"><div class="finance-launch-ring">⌖</div><div class="finance-launch-road"></div><span class="launch-finance-car">◼</span><span class="launch-finance-bike">●</span><span class="launch-finance-tuktuk">JX</span></div><small>WELCOME TO JIXELS FINANCE</small><h1>${title}</h1><p>${detail}</p><div class="finance-launch-dots" aria-label="Loading"><i></i><i></i><i></i></div></main>`;
+    return `<main class="finance-launch finance-auth-loading" aria-live="polite"><div class="finance-launch-stage"><div class="finance-launch-ring">⌖</div><div class="finance-launch-road"></div><span class="launch-finance-car">${icons.launchCar}</span><span class="launch-finance-bike">${icons.launchBike}</span><span class="launch-finance-tuktuk">${icons.launchTuktuk}</span></div><small>WELCOME TO JIXELS FINANCE</small><h1>${title}</h1><p>${detail}</p><div class="finance-launch-dots" aria-label="Loading"><i></i><i></i><i></i></div></main>`;
   }
 
   function accountTable(accounts, allowRemove) {
@@ -344,7 +347,7 @@
 
   function loadingView() {
     if (loadingMode === "page") return `<div class="finance-loading"><div class="finance-loading-brand"><strong>Jixels Finance</strong><small>Loading workspace records…</small></div><div class="finance-skeleton-heading skeleton"></div><div class="finance-skeleton-metrics">${Array.from({ length: 4 }, () => '<div class="skeleton"></div>').join("")}</div><div class="finance-skeleton-panel skeleton">${Array.from({ length: 5 }, () => '<span></span>').join("")}</div></div>`;
-    return `<div class="finance-launch"><div class="finance-launch-stage"><div class="finance-launch-ring">⌖</div><div class="finance-launch-road"></div><span class="launch-finance-car">🚗</span><span class="launch-finance-bike">🏍</span><span class="launch-finance-tuktuk">TUK</span></div><small>WELCOME TO JIXELS FINANCE</small><h1>Opening your finance workspace</h1><p>Preparing your live accounts, payments, and tracker records.</p><div class="finance-launch-dots"><i></i><i></i><i></i></div></div>`;
+    return `<div class="finance-launch"><div class="finance-launch-stage"><div class="finance-launch-ring">⌖</div><div class="finance-launch-road"></div><span class="launch-finance-car">${icons.launchCar}</span><span class="launch-finance-bike">${icons.launchBike}</span><span class="launch-finance-tuktuk">${icons.launchTuktuk}</span></div><small>WELCOME TO JIXELS FINANCE</small><h1>Opening your finance workspace</h1><p>Preparing your live accounts, payments, and tracker records.</p><div class="finance-launch-dots"><i></i><i></i><i></i></div></div>`;
   }
 
   function offlineView() {

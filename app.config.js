@@ -20,6 +20,7 @@ export default {
     android: {
       package: "com.jixelstechnologies.customer",
       versionCode: 1,
+      softwareKeyboardLayoutMode: "resize",
 
       adaptiveIcon: {
         foregroundImage: "./assets/jixels-app-icon.png",

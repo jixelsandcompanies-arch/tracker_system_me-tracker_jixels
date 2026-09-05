@@ -710,21 +710,29 @@ Deno.serve(async (request) => {
     if (managerError || !manager || !adminRoles.has(manager.role)) return fail("Administrator permission is required to delete an account.", 403, "FORBIDDEN");
     if (targetId === user.id) return fail("You cannot delete the account currently signed in to Admin.", 422, "CANNOT_DELETE_SELF");
     try {
-      const { data: customer, error: customerError } = await admin.from("customers").select("email").eq("id", targetId).maybeSingle();
-      if (customerError) throw customerError;
-      const { data: mobileProfile, error: mobileProfileError } = customer?.email
-        ? await admin.from("profiles").select("id").eq("email", customer.email.toLowerCase()).maybeSingle()
-        : { data: null, error: null };
-      if (mobileProfileError) throw mobileProfileError;
-      await removeCustomerWorkspace(admin, targetId);
-      const { data: profile, error: profileError } = await admin.from("profiles").select("id").eq("id", targetId).maybeSingle();
-      if (profileError) throw profileError;
-      if (profile) {
-        const { error: deleteError } = await admin.auth.admin.deleteUser(targetId);
-        if (deleteError) throw deleteError;
-      }
-      if (mobileProfile && mobileProfile.id !== targetId) {
-        const { error: deleteError } = await admin.auth.admin.deleteUser(mobileProfile.id);
+      const [{ data: targetProfile, error: targetProfileError }, { data: directCustomer, error: directCustomerError }] = await Promise.all([
+        admin.from("profiles").select("id,email,role").eq("id", targetId).maybeSingle(),
+        admin.from("customers").select("id,email").eq("id", targetId).maybeSingle(),
+      ]);
+      if (targetProfileError || directCustomerError) throw targetProfileError ?? directCustomerError;
+      const email = (directCustomer?.email ?? targetProfile?.email ?? "").trim().toLowerCase();
+      const { data: matchingCustomers, error: matchingCustomersError } = email
+        ? await admin.from("customers").select("id").eq("email", email)
+        : { data: [], error: null };
+      if (matchingCustomersError) throw matchingCustomersError;
+      const customerIds = new Set([directCustomer?.id, ...(matchingCustomers ?? []).map((customer) => customer.id)].filter(Boolean));
+      for (const customerId of customerIds) await removeCustomerWorkspace(admin, customerId);
+
+      const { data: matchingProfiles, error: matchingProfilesError } = email
+        ? await admin.from("profiles").select("id,role").eq("email", email)
+        : { data: [], error: null };
+      if (matchingProfilesError) throw matchingProfilesError;
+      const profileIds = new Set([
+        targetProfile?.id,
+        ...(matchingProfiles ?? []).filter((profile) => profile.role === "customer").map((profile) => profile.id),
+      ].filter(Boolean));
+      for (const profileId of profileIds) {
+        const { error: deleteError } = await admin.auth.admin.deleteUser(profileId);
         if (deleteError) throw deleteError;
       }
       return response({ deleted: true, message: "The account and its linked workspace records were permanently deleted." });
@@ -860,10 +868,12 @@ Deno.serve(async (request) => {
   }
 
   if (route === "/v1/customer/overview" && request.method === "GET") {
-    const [{ data: profile }, { data: vehicles }] = await Promise.all([
+    const [{ data: profile, error: profileError }, { data: vehicles, error: vehiclesError }] = await Promise.all([
       client.from("profiles").select("full_name,phone,avatar_url").single(),
       client.from("vehicles").select("id,registration,model,vehicle_type,monitoring_armed,immobilized"),
     ]);
+    if (profileError || !profile) return fail("This customer account is no longer available.", 404, "ACCOUNT_NOT_FOUND");
+    if (vehiclesError) return fail("Customer vehicles could not be loaded.", 503, "CUSTOMER_RECORDS_UNAVAILABLE");
     return response({ profile, vehicles: vehicles ?? [] });
   }
   if (route === "/v1/customer/payments/mpesa" && request.method === "POST") {

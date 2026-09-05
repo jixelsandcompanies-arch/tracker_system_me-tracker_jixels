@@ -698,8 +698,19 @@ function CustomerApp({ session, onLogout }) {
   }, []);
   useEffect(() => {
     let active = true;
-    const loadCustomerRecords = async () => {
-      setRecordsLoading(true);
+    const clearCustomerRecords = () => {
+      bikes = [];
+      setSelectedBike(null);
+      setMonitoringVehicles([]);
+      setPayments([]);
+      setAlerts([]);
+      setMonthlyProgress({});
+      setFinanceBalances({});
+      setSecurity({});
+      setPaymentReceipt(null);
+    };
+    const loadCustomerRecords = async (showLoading = true) => {
+      if (showLoading) setRecordsLoading(true);
       setRecordsError("");
       try {
         const [overviewResult, paymentsResult, alertsResult] = await Promise.allSettled([
@@ -755,14 +766,27 @@ function CustomerApp({ session, onLogout }) {
           setAlerts(Array.isArray(records) ? dedupeById(records) : []);
         }
       } catch (error) {
-        if (active) setRecordsError(error instanceof Error ? error.message : "Your account records could not be loaded.");
+        if (!active) return;
+        const accountRemoved = error instanceof ApiError && [401, 403, 404].includes(error.status);
+        if (accountRemoved) {
+          clearCustomerRecords();
+          await AsyncStorage.multiRemove(["jixels:profile", "jixels:sync-queue"]).catch(() => {});
+          Alert.alert("Account removed", "This customer account was removed by Jixels administration.");
+          onLogout();
+          return;
+        }
+        setRecordsError(error instanceof Error ? error.message : "Your account records could not be loaded.");
       } finally {
         if (active) setRecordsLoading(false);
       }
     };
     loadCustomerRecords();
-    return () => { active = false; };
-  }, [session.accessToken]);
+    const refreshTimer = setInterval(() => loadCustomerRecords(false), 15_000);
+    const appStateSubscription = AppState.addEventListener("change", state => {
+      if (state === "active") loadCustomerRecords(false);
+    });
+    return () => { active = false; clearInterval(refreshTimer); appStateSubscription.remove(); };
+  }, [onLogout, session.accessToken]);
   useEffect(() => { AsyncStorage.getItem("jixels:profile").then(value => { if (value) setProfile(current => ({ ...current, ...JSON.parse(value) })); }).catch(() => {}).finally(() => setProfileHydrated(true)); }, []);
   useEffect(() => { if (profileHydrated) AsyncStorage.setItem("jixels:profile", JSON.stringify(profile)).catch(() => {}); }, [profile, profileHydrated]);
   useEffect(() => { AsyncStorage.getItem("jixels:sync-queue").then(value => value && setSyncQueue(dedupeById(JSON.parse(value)))).catch(() => {}).finally(() => setQueueHydrated(true)); }, []);

@@ -11,6 +11,7 @@ const apiFunction = read("supabase/functions/api/index.ts");
 const financeApp = read("finance-portal/js/app.js");
 const financeData = read("finance-portal/js/data.js");
 const agentAuth = read("Jixels angets/src/services/auth.js");
+const agentApp = read("Jixels angets/App.js");
 const agentEas = JSON.parse(read("Jixels angets/eas.json"));
 const eas = JSON.parse(read("eas.json"));
 
@@ -42,6 +43,11 @@ assert.match(apiFunction, /route === "\/v1\/auth\/account-status"/, "customer ac
 assert.match(apiFunction, /resetPasswordForEmail/, "password reset must use Supabase Auth");
 assert.match(agentAuth, /\/v1\/agent\/auth\/login/, "agent app login must use the shared agent auth route");
 assert.match(agentAuth, /\/v1\/agent\/auth\/register/, "agent app registration must use the shared agent auth route");
+assert.match(apiFunction, /matchingCustomers.*\.eq\("email", email\)/s, "admin deletion must resolve agent-onboarded customer records by registered email");
+assert.match(apiFunction, /removeCustomerWorkspace\(admin, customerId\)/, "admin deletion must remove every linked customer workspace");
+assert.match(app, /Account removed/, "the customer app must clear and exit when its deleted account is no longer available");
+assert.match(agentApp, /setInterval\(\(\) => refresh\(\{ showSpinner: false \}\), 15_000\)/, "the agent app must promptly refresh live customer records after admin deletion");
+assert.match(agentApp, /setCustomers\(\[\]\)/, "the agent app must clear customer records when its access is revoked");
 assert.match(financeApp, /commissionRules\(\)/, "Finance commission calculations must use saved rules");
 assert.match(financeData, /saleCommission: ""/, "Finance must not invent a sale commission default");
 assert.doesNotMatch(financeApp, /SALE_COMMISSION|MONTHLY_CUSTOMER_COMMISSION|KES 500 per sale|KES 50 per customer/, "Finance must not contain fixed commission values");

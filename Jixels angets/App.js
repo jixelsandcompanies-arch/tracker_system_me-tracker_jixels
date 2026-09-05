@@ -1026,14 +1026,23 @@ function AgentApp({ agent, onLogout }) {
         ]);
         setCustomers(customerResult.customers || []);
         setAssignedVehicles(normalizeAssignedVehicles({ ...agent, assignedVehicles: assignmentResult.assignments || [] }));
-      } catch (error) { console.warn("Agent customer refresh failed", error); }
+      } catch (error) {
+        console.warn("Agent customer refresh failed", error);
+        if (error instanceof ApiError && [401, 403, 404].includes(error.status)) {
+          setCustomers([]);
+          setAssignedVehicles([]);
+          setDepositCustomerId(null);
+          onLogout();
+          return;
+        }
+      }
     }
     if (showSpinner) setTimeout(() => setRefreshing(false), 450);
-  }, [agent]);
+  }, [agent, onLogout]);
 
   useEffect(() => {
     refresh();
-    const assignmentSync = setInterval(() => refresh({ showSpinner: false }), 60_000);
+    const assignmentSync = setInterval(() => refresh({ showSpinner: false }), 15_000);
     if (Platform.OS === "android") {
       Notifications.setNotificationChannelAsync("agent", {
         name: "Jixels Agent Trackings",

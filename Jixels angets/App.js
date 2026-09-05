@@ -506,9 +506,9 @@ function QuickMenu({ active, navigate }) {
 }
 
 function Dashboard({ customers, navigate, isOnline, compact, onRefresh, refreshing, darkMode = false }) {
-  const paid = customers.filter(c => c.payment === "Paid");
   const pendingInstall = customers.filter(c => c.install !== "Complete").length;
   const soldTrackers = customers.filter(customer => Boolean(customer.vehicleId) && customer.tracker !== "Pending").length;
+  const earnedCommission = customers.reduce((sum, customer) => sum + Number(customer.commission || 0), 0);
   const alerts = customers.filter(c => c.payment !== "Paid" || c.install !== "Complete").length;
   const selectedOperation = pendingInstall > 0 ? {
     title: "Install tracker",
@@ -526,7 +526,7 @@ function Dashboard({ customers, navigate, isOnline, compact, onRefresh, refreshi
   const stats = [
     { label: "Customers", value: customers.length, icon: <Ionicons name="people" color={colors.blue} size={22} /> },
     { label: "Sold trackers", value: soldTrackers, icon: <MaterialCommunityIcons name="tag-check-outline" color={colors.orange} size={22} /> },
-    { label: "Commissions earned", value: money(paid.reduce((sum, c) => sum + (c.commission || 0), 0)), icon: <Ionicons name="wallet" color={colors.green} size={22} /> },
+    { label: "Commissions earned", value: money(earnedCommission), icon: <Ionicons name="wallet" color={colors.green} size={22} /> },
     { label: "Alerts", value: alerts, icon: <Ionicons name="notifications" color={colors.red} size={22} /> }
   ];
   return <ScrollView style={darkMode && styles.darkPage} contentContainerStyle={styles.page} refreshControl={pullRefresh(onRefresh, refreshing)}>

@@ -95,7 +95,8 @@
   };
 
   const paintLoadingFrame = () => new Promise(resolve => window.requestAnimationFrame(() => window.requestAnimationFrame(resolve)));
-  const commissionRate = () => Math.max(0, Number(data.settings.commissionRate || 5)) / 100;
+  const SALE_COMMISSION = 500;
+  const MONTHLY_CUSTOMER_COMMISSION = 50;
   const sameDay = (left, right) => left && right && left.toDateString() === right.toDateString();
   const parseDate = value => {
     const date = value ? new Date(value) : null;
@@ -111,21 +112,23 @@
     });
   };
   const sum = (items, key) => items.reduce((total, item) => total + Number(item[key] || 0), 0);
-  const agentName = payment => payment.agent || data.agents.find(agent => agent.code === payment.agentCode)?.name || "Unassigned agent";
-  const agentCode = payment => payment.agentCode || data.agents.find(agent => agent.name === payment.agent)?.code || "No code";
-  const paymentCustomerKey = payment => `${payment.customer || "Unlinked"}|${payment.phone || ""}`;
   const commissionRows = () => {
     const map = new Map();
-    data.agents.forEach(agent => map.set(agent.code, { agent: agent.name, code: agent.code, phone: agent.phone, customers: new Map(), payments: [], total: 0 }));
-    data.payments.forEach(payment => {
-      const code = agentCode(payment);
-      if (!map.has(code)) map.set(code, { agent: agentName(payment), code, phone: "", customers: new Map(), payments: [], total: 0 });
-      const row = map.get(code);
-      row.customers.set(paymentCustomerKey(payment), { name: payment.customer || "Unlinked", phone: payment.phone || "", product: payment.product || payment.account || "" });
-      row.payments.push(payment);
-      row.total += Number(payment.amount || 0);
+    data.accounts.filter(account => account.agentId || account.agentCode).forEach(account => {
+      const key = String(account.agentId || account.agentCode);
+      if (!map.has(key)) map.set(key, { agent: account.agent || "Unassigned agent", code: account.agentCode || key, phone: "", customers: new Map(), sales: [], saleValue: 0 });
+      const row = map.get(key);
+      const customerKey = String(account.customerId || account.customer || account.id);
+      row.customers.set(customerKey, { name: account.customer || "Unlinked", phone: account.phone || "", product: account.bike || "No tracker" });
+      row.sales.push(account);
+      row.saleValue += Number(account.total || 0);
     });
-    return [...map.values()].map(row => ({ ...row, customerList: [...row.customers.values()], sold: row.payments.filter(payment => Number(payment.amount || 0) > 0).length, commission: row.total * commissionRate() }));
+    return [...map.values()].map(row => {
+      const customerList = [...row.customers.values()];
+      const saleCommission = row.sales.length * SALE_COMMISSION;
+      const monthlyCommission = customerList.length * MONTHLY_CUSTOMER_COMMISSION;
+      return { ...row, total: row.saleValue, customerList, sold: row.sales.length, saleCommission, monthlyCommission, commission: saleCommission + monthlyCommission };
+    });
   };
   const collectionsGraph = () => {
     const today = new Date();
@@ -191,7 +194,7 @@
       ["Collections", money(collections), "Total money received from customers", "blue"],
       ["Outstanding Balance", money(outstanding), "Total amount customers still owe", "orange"],
       ["Overdue Accounts", overdue.length, "Accounts with overdue payments", "red"],
-      ["Commissions", money(commissionRows().reduce((sum, row) => sum + row.commission, 0)), "Agent earnings from tracker sales", "green"],
+      ["Commissions", money(commissionRows().reduce((sum, row) => sum + row.commission, 0)), "KES 500 per sale plus KES 50 per customer this month", "green"],
       ["Due Today", money(sum(data.accounts.filter(account => account.status !== "Completed"), "dailyTarget")), "Total payments expected today", "orange"],
       ["Payments Today", money(sum(todayPayments, "amount")), "Total money actually received today", "green"],
       ["Tracker Sales", money(trackerSalesTotal), "Total value of trackers sold to all customers", "red"],
@@ -228,7 +231,7 @@
     const rows = commissionRows();
     const totals = rows.reduce((sum, row) => ({ paid: sum.paid + row.total, commission: sum.commission + row.commission, customers: sum.customers + row.customerList.length, sold: sum.sold + row.sold }), { paid: 0, commission: 0, customers: 0, sold: 0 });
     const body = rows.map(row => `<tr><td><strong>${escapeHtml(row.agent)}</strong><small>${escapeHtml(row.phone || "No phone")}</small></td><td>${escapeHtml(row.code)}</td><td>${row.customerList.length}</td><td>${row.sold}</td><td>${money(row.total)}</td><td><strong>${money(row.commission)}</strong></td><td>${row.customerList.map(customer => `<span>${escapeHtml(customer.name)} - ${escapeHtml(customer.product || "No tracker")}</span>`).join("") || "<span>No customer sales yet</span>"}</td><td><div class="commission-actions"><button class="commission-action view" type="button" data-view-agent="${escapeHtml(row.code)}">View customers</button><button class="commission-action pay" type="button" data-pay-commission="${escapeHtml(row.code)}" ${row.commission ? "" : "disabled"}>Pay commission</button><button class="commission-action remove" type="button" data-delete-agent="${escapeHtml(row.code)}">Delete</button></div></td></tr>`).join("");
-    return `<section class="commission-workspace"><div class="section-heading"><div><div class="eyebrow"><i></i> AGENT SALES</div><h2>Commissions</h2><p>Each agent can see commission earned from customers they sold trackers to.</p></div></div><div class="metrics">${metric("Commission due", money(totals.commission), `${data.settings.commissionRate}% of paid tracker sales`, "green")}${metric("Sales payments", money(totals.paid), "Money paid by sold customers", "blue")}${metric("Customers sold to", totals.customers, "Linked customer records", "orange")}${metric("Sold trackers", totals.sold, "Paid tracker/product sales", "blue")}</div><section class="card commission-panel"><div class="card-header commission-card-header"><div><div class="card-title">Agent commission register</div><div class="card-subtitle">Payments group by agent name and agent code.</div></div><label class="commission-search"><span aria-hidden="true">⌕</span><input id="commission-search" placeholder="Search agents, code, customers" aria-label="Search commission register"></label></div><div class="table-wrap commission-table-wrap"><table class="commission-table"><thead><tr><th>Agent</th><th>Code</th><th>Customers</th><th>Sold trackers</th><th>Sales paid</th><th>Commission</th><th>Customers / trackers</th><th>Actions</th></tr></thead><tbody>${body}</tbody></table></div></section></section>`;
+    return `<section class="commission-workspace"><div class="section-heading"><div><div class="eyebrow"><i></i> AGENT SALES</div><h2>Commissions</h2><p>KES 500 is earned once for each approved tracker sale. KES 50 is earned for each approved customer this month.</p></div></div><div class="metrics">${metric("Commission due", money(totals.commission), "KES 500 per sale + KES 50 per customer", "green")}${metric("Tracker sales", money(totals.paid), "Value of approved tracker sales", "blue")}${metric("Customers sold to", totals.customers, "Approved customer records", "orange")}${metric("Sold trackers", totals.sold, "Approved tracker sales", "blue")}</div><section class="card commission-panel"><div class="card-header commission-card-header"><div><div class="card-title">Agent commission register</div><div class="card-subtitle">Commission is calculated from approved tracker sales and active customers.</div></div><label class="commission-search"><span aria-hidden="true">⌕</span><input id="commission-search" placeholder="Search agents, code, customers" aria-label="Search commission register"></label></div><div class="table-wrap commission-table-wrap"><table class="commission-table"><thead><tr><th>Agent</th><th>Code</th><th>Customers</th><th>Sold trackers</th><th>Tracker sale value</th><th>Commission</th><th>Customers / trackers</th><th>Actions</th></tr></thead><tbody>${body}</tbody></table></div></section></section>`;
   }
 
   function paymentRecords(query = "") {

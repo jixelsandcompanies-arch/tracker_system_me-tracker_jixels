@@ -567,7 +567,7 @@ Deno.serve(async (request) => {
     if (request.method === "GET") {
       const { data: applications, error } = await admin.from("screening_applications").select("id,customer_id,full_name,phone,national_id,tracker_identifier,deposit_amount,status,created_at,bikes(id,identifier,model,payable_amount,trackers(identifier))").eq("installer_agent_id", user.id).order("created_at", { ascending: false });
       if (error) return fail("Agent customers could not be loaded.", 503, "CUSTOMERS_UNAVAILABLE");
-      return response({ customers: (applications ?? []).map((item: any) => ({ id: item.customer_id ?? item.id, vehicleId: item.bikes?.id ?? "", name: item.full_name, phone: item.phone ?? "", idNumber: item.national_id ?? "", bike: item.bikes?.identifier ?? "Pending assignment", vehicleModel: item.bikes?.model ?? "Assigned bike", tracker: item.tracker_identifier ?? item.bikes?.trackers?.[0]?.identifier ?? "Pending", kyc: "Submitted", install: "Pending", payment: Number(item.deposit_amount ?? 0) > 0 ? "Deposit Paid" : "Pending", payableAmount: Number(item.bikes?.payable_amount ?? 0), amount: Number(item.deposit_amount ?? 0), balance: Math.max(0, Number(item.bikes?.payable_amount ?? 0) - Number(item.deposit_amount ?? 0)), commission: 0, receipt: "", date: item.created_at?.slice(0, 10) ?? "", screeningStatus: item.status })) });
+      return response({ customers: (applications ?? []).map((item: any) => ({ id: item.customer_id ?? item.id, vehicleId: item.bikes?.id ?? "", name: item.full_name, phone: item.phone ?? "", idNumber: item.national_id ?? "", bike: item.bikes?.identifier ?? "Pending assignment", vehicleModel: item.bikes?.model ?? "Assigned bike", tracker: item.tracker_identifier ?? item.bikes?.trackers?.[0]?.identifier ?? "Pending", kyc: item.status === "approved" ? "Approved" : "Submitted", install: "Pending", payment: Number(item.deposit_amount ?? 0) > 0 ? "Deposit Paid" : "Pending", payableAmount: Number(item.bikes?.payable_amount ?? 0), amount: Number(item.deposit_amount ?? 0), balance: Math.max(0, Number(item.bikes?.payable_amount ?? 0) - Number(item.deposit_amount ?? 0)), commission: item.status === "approved" ? 550 : 0, receipt: "", date: item.created_at?.slice(0, 10) ?? "", screeningStatus: item.status })) });
     }
     const name = String(body.name ?? "").trim();
     const phone = String(body.phone ?? "").trim();
@@ -577,8 +577,9 @@ Deno.serve(async (request) => {
     const depositAmount = Number(body.depositAmount ?? 0);
     if (!name || !phone || !nationalId || !bikeId) return fail("Enter the customer name, phone number, national ID, and assigned bike.", 422, "INVALID_CUSTOMER_REGISTRATION");
     if (!Number.isFinite(depositAmount) || depositAmount < 0) return fail("Enter a valid customer deposit amount.", 422, "INVALID_DEPOSIT");
-    const { data: bike, error: bikeError } = await admin.from("bikes").select("id,identifier,model,payable_amount,status,trackers(identifier)").eq("id", bikeId).eq("assigned_agent_id", user.id).maybeSingle();
+    const { data: bike, error: bikeError } = await admin.from("bikes").select("id,identifier,model,payable_amount,status,customer_id,trackers(identifier)").eq("id", bikeId).eq("assigned_agent_id", user.id).maybeSingle();
     if (bikeError || !bike) return fail("This bike is not assigned to your agent account.", 403, "BIKE_NOT_ASSIGNED");
+    if (bike.customer_id || ["pending", "sold"].includes(String(bike.status).toLowerCase())) return fail("This tracker is already linked to another customer sale.", 409, "TRACKER_ALREADY_SOLD");
     if (depositAmount > Number(bike.payable_amount ?? 0)) return fail("The deposit cannot be higher than the total payable amount.", 422, "INVALID_DEPOSIT");
     const now = new Date().toISOString();
     const { data: customer, error: customerError } = await admin.from("customers").insert({ full_name: name, phone, national_id: nationalId, address: location || null, status: "pending", created_at: now, updated_at: now }).select("id").single();
@@ -587,6 +588,12 @@ Deno.serve(async (request) => {
     if (applicationError) {
       await admin.from("customers").delete().eq("id", customer.id);
       return fail("Customer screening could not be submitted.", 503, "SCREENING_REGISTRATION_FAILED");
+    }
+    const { error: reservationError } = await admin.from("bikes").update({ customer_id: customer.id, status: "pending", updated_at: now }).eq("id", bike.id).eq("assigned_agent_id", user.id).is("customer_id", null);
+    if (reservationError) {
+      await admin.from("screening_applications").delete().eq("customer_id", customer.id);
+      await admin.from("customers").delete().eq("id", customer.id);
+      return fail("The tracker could not be reserved for this customer.", 503, "TRACKER_RESERVATION_FAILED");
     }
     return response({ customer: { id: customer.id, vehicleId: bike.id, name, phone, idNumber: nationalId, location: location || "Field location", bike: bike.identifier, vehicleModel: bike.model, tracker: bike.trackers?.[0]?.identifier ?? "Pending", kyc: "Submitted", install: "Pending", payment: depositAmount > 0 ? "Deposit Paid" : "Pending", payableAmount: Number(bike.payable_amount ?? 0), amount: depositAmount, balance: Math.max(0, Number(bike.payable_amount ?? 0) - depositAmount), commission: 0, receipt: "", date: now.slice(0, 10), screeningStatus: "pending" } }, 201);
   }

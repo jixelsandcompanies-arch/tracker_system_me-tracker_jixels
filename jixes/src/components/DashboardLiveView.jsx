@@ -17,7 +17,8 @@ export default function DashboardLiveView() {
 
   const customers = records.customers?.count || 0;
   const products = records.bikes?.count || 0;
-  const trackers = records.trackers?.data || [];
+  const productIds = new Set((records.bikes?.data || []).map((product) => product.id));
+  const trackers = (records.trackers?.data || []).filter((tracker) => tracker.bike_id && productIds.has(tracker.bike_id));
   const payments = records.payments?.data || [];
   const accounts = records.finance_accounts?.data || [];
   const screening = records.screening_applications?.data || [];

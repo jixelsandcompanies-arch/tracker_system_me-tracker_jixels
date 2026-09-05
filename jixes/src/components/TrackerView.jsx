@@ -32,7 +32,8 @@ export default function TrackerView() {
   const trackerStatus = (tracker) => tracker.operational_status === "immobilized" ? "immobilized" : tracker.is_online ? "online" : "offline";
   const trackerCondition = (tracker) => tracker.device_condition || "normal";
   const productFor = (tracker) => products.find((product) => product.id === tracker.bike_id);
-  const rows = trackers.filter((tracker) => {
+  const linkedTrackers = trackers.filter((tracker) => productFor(tracker));
+  const rows = linkedTrackers.filter((tracker) => {
     const text = `${productFor(tracker)?.identifier || "Unlinked"} ${tracker.identifier}`.toLowerCase();
     return text.includes(query.trim().toLowerCase()) && (!status || status === trackerStatus(tracker));
   });
@@ -54,7 +55,7 @@ export default function TrackerView() {
 
   useEffect(() => {
     if (!showAll || !allMapHost.current || !window.L) return;
-    const located = trackers.filter((tracker) => tracker.latitude != null && tracker.longitude != null);
+    const located = linkedTrackers.filter((tracker) => tracker.latitude != null && tracker.longitude != null);
     allMap.current?.remove();
     allMap.current = window.L.map(allMapHost.current, { dragging: true, touchZoom: true, scrollWheelZoom: true, worldCopyJump: true }).setView([-1.286389, 36.817223], 7);
     allMap.current.dragging.enable();
@@ -70,7 +71,7 @@ export default function TrackerView() {
     if (points.length) allMap.current.fitBounds(points, { padding: [35, 35], maxZoom: 15 });
     setTimeout(() => allMap.current?.invalidateSize(), 0);
     return () => { allMap.current?.remove(); allMap.current = null; };
-  }, [showAll, trackers, products]);
+  }, [showAll, linkedTrackers, products]);
 
   return <>
     <section className="panel module-table">
@@ -80,6 +81,6 @@ export default function TrackerView() {
       <div className="table-wrap"><table><thead><tr><th>Product</th><th>Tracker code</th><th>Last seen</th><th>Status</th><th>Condition</th><th>Action</th></tr></thead><tbody>{rows.map((tracker) => <tr key={tracker.id} className="tracker-row"><td><strong>{productFor(tracker)?.identifier || "Unlinked"}</strong></td><td>{tracker.identifier}</td><td>{tracker.last_seen_at ? new Date(tracker.last_seen_at).toLocaleString() : "Never"}</td><td>{capitalize(trackerStatus(tracker))}</td><td><span className={`tracker-condition ${trackerCondition(tracker)}`}>{capitalize(trackerCondition(tracker))}</span></td><td><button className="button secondary" onClick={() => setSelected(tracker)}><MapPin size={14}/> View location</button></td></tr>)}</tbody></table></div>
     </section>
     {selected && <div className="detail-backdrop" onClick={() => setSelected(null)}><aside className="detail-drawer tracker-location-drawer" onClick={(event) => event.stopPropagation()}><div className="detail-heading"><div><span className="eyebrow">LIVE DEVICE LOCATION</span><h2>{selected.identifier}</h2></div><button className="icon-btn" onClick={() => setSelected(null)}><X size={18}/></button></div>{selected.latitude != null && selected.longitude != null ? <><div ref={singleMapHost} className="tracker-location-map"/><div className="tracker-location-facts"><p><b>Status</b><span className={`map-state ${trackerStatus(selected)}`}>{capitalize(trackerStatus(selected))}</span></p><p><b>Condition</b>{capitalize(trackerCondition(selected))}</p><p><b>Linked product</b>{productFor(selected)?.identifier || "Unlinked"}</p><p><b>Last seen</b>{selected.last_seen_at ? new Date(selected.last_seen_at).toLocaleString() : "Never"}</p><p><b>Coordinates</b>{Number(selected.latitude).toFixed(6)}, {Number(selected.longitude).toFixed(6)}</p></div><a className="button primary tracker-route" target="_blank" rel="noreferrer" href={`https://www.openstreetmap.org/?mlat=${selected.latitude}&mlon=${selected.longitude}#map=17/${selected.latitude}/${selected.longitude}`}><MapPin size={15}/> Open live route <ExternalLink size={14}/></a></> : <div className="empty-state"><MapPin size={22}/><strong>No live location yet</strong><span>This tracker has not sent GPS coordinates.</span></div>}</aside></div>}
-    {showAll && <div className="detail-backdrop" onClick={() => setShowAll(false)}><aside className="detail-drawer all-trackers-drawer" onClick={(event) => event.stopPropagation()}><div className="detail-heading"><div><span className="eyebrow">LIVE FLEET MAP</span><h2>All GPS trackers</h2><p>{trackers.filter((tracker) => tracker.latitude != null && tracker.longitude != null).length} trackers with location</p></div><button className="icon-btn" onClick={() => setShowAll(false)}><X size={18}/></button></div><div ref={allMapHost} className="all-trackers-map"/></aside></div>}
+    {showAll && <div className="detail-backdrop" onClick={() => setShowAll(false)}><aside className="detail-drawer all-trackers-drawer" onClick={(event) => event.stopPropagation()}><div className="detail-heading"><div><span className="eyebrow">LIVE FLEET MAP</span><h2>All GPS trackers</h2><p>{linkedTrackers.filter((tracker) => tracker.latitude != null && tracker.longitude != null).length} trackers with location</p></div><button className="icon-btn" onClick={() => setShowAll(false)}><X size={18}/></button></div><div ref={allMapHost} className="all-trackers-map"/></aside></div>}
   </>;
 }

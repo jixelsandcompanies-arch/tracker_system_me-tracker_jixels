@@ -8,7 +8,11 @@ export default function LiveMapView() {
   const [filter, setFilter] = useState("all"); const [search, setSearch] = useState(""); const [selected, setSelected] = useState(null); const [playback, setPlayback] = useState(false); const [step, setStep] = useState(0); const [message, setMessage] = useState(""); const [recenterRequest, setRecenterRequest] = useState(0);
   const load = async () => { if (!hasSupabaseConfig) return setMessage("Connect Supabase to load live device locations."); const [t, b, c, h] = await Promise.all([listRecords("trackers", { pageSize: 500 }), listRecords("bikes", { pageSize: 500 }), listRecords("customers", { pageSize: 500 }), listRecords("tracker_heartbeats", { pageSize: 1000, order: "received_at" })]); const error = t.error || b.error || c.error || h.error; if (error) return setMessage(error.message); setTrackers(t.data); setBikes(b.data); setCustomers(c.data); setHeartbeats(h.data); setMessage(""); };
   useEffect(() => { load(); const off = ["trackers", "tracker_heartbeats"].map(table => subscribeToTable(table, load)); return () => off.forEach(fn => fn()); }, []);
-  const located = useMemo(() => trackers.filter(t => t.latitude != null && t.longitude != null), [trackers]);
+  const linkedTrackers = useMemo(() => {
+    const productIds = new Set(bikes.map((bike) => bike.id));
+    return trackers.filter((tracker) => tracker.bike_id && productIds.has(tracker.bike_id));
+  }, [trackers, bikes]);
+  const located = useMemo(() => linkedTrackers.filter(t => t.latitude != null && t.longitude != null), [linkedTrackers]);
   const rows = useMemo(() => located.filter(t => (filter === "all" || filter === (t.is_online ? "online" : "offline")) && `${t.identifier} ${bikes.find(b => b.id === t.bike_id)?.identifier || ""}`.toLowerCase().includes(search.toLowerCase())), [located, filter, search, bikes]);
   const history = useMemo(() => selected ? heartbeats.filter(h => h.tracker_id === selected.id).sort((a,b) => new Date(a.received_at) - new Date(b.received_at)) : [], [heartbeats, selected]);
   const focus = (tracker) => { setSelected(tracker); setPlayback(false); setStep(0); map.current?.setView([Number(tracker.latitude), Number(tracker.longitude)], 18); };

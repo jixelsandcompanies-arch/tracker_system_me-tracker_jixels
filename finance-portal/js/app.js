@@ -439,7 +439,7 @@
   }
 
   function startWorkspaceLoading() {
-    loading = true; loadingMode = "launch"; launchSeconds = 7; render();
+    loading = true; loadingMode = "launch"; launchSeconds = 1; render();
     const launchCountdown = window.setInterval(() => {
       launchSeconds = Math.max(launchSeconds - 1, 0);
       const countdown = document.getElementById("finance-launch-countdown");
@@ -448,8 +448,8 @@
     }, 1000);
     window.setTimeout(() => {
       window.clearInterval(launchCountdown); loadingMode = "page"; render();
-      window.setTimeout(() => { loading = false; render(); }, 1200);
-    }, 7_000);
+      window.setTimeout(() => { loading = false; render(); }, 200);
+    }, 800);
   }
 
   function bindOfflineEvents() {

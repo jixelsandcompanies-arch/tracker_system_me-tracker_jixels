@@ -8,9 +8,10 @@ const failedAttempts = new Map();
 const blockedAccounts = new Set();
 const SESSION_KEY = "jixels.admin.session.v1";
 
-function safeMessage(status) {
+function safeMessage(status, message = "") {
   if (status === 401 || status === 400) return "Incorrect email or password. Please check your details and try again.";
   if (status === 429) return "Too many requests. Please wait and try again.";
+  if (status === 403 && message) return message;
   return "Authentication temporarily unavailable. Please try again in a few moments.";
 }
 
@@ -71,8 +72,9 @@ export async function signIn(email, password) {
         // Only rejected credentials count toward lockout. Network, schema and
         // server errors must never lock a legitimate staff account.
         if (response.status === 400 || response.status === 401) return { error: registerFailedAttempt(email) };
-        console.error("Admin sign-in failed", response.status, await response.text().catch(() => ""));
-        return { error: safeMessage(response.status) };
+        const payload = await response.json().catch(() => ({}));
+        console.error("Admin sign-in failed", response.status, payload.message || "");
+        return { error: safeMessage(response.status, payload.message) };
       }
       const result = await response.json();
       if (!result?.accessToken || !result?.user) return { error: "Authentication temporarily unavailable. Please try again in a few moments." };

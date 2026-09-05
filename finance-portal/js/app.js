@@ -66,7 +66,7 @@
     console.error("Finance authentication failed", error);
     if (/invalid[_ ]credentials|invalid login|incorrect email|password/i.test(message)) return "Incorrect email or password. Please check your details and try again.";
     if (/account[_ ]locked|temporarily locked/i.test(message)) return "Your account has been temporarily locked because of too many failed login attempts. Please contact an administrator or use account recovery.";
-    if (/permission|not approved|not authorized/i.test(message)) return "Your account is not approved for the Finance portal. Please contact an administrator.";
+    if (/permission|not approved|not authorized|awaiting administrator approval|account is not active/i.test(message)) return message || "Your account is not approved for the Finance portal. Please contact an administrator.";
     if (/network|fetch|offline|connect/i.test(message)) return "Unable to connect to the server. Check your internet connection and try again.";
     return "Authentication temporarily unavailable. Please try again in a few moments.";
   };

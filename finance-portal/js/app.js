@@ -83,6 +83,13 @@
     if (/network|fetch|offline|connect/i.test(message)) return "Unable to submit registration. Check your internet connection and try again.";
     return message || "Registration was not submitted. Please correct the details and try again.";
   };
+
+  const setAuthButtonLoading = (button, label) => {
+    if (!button) return;
+    button.disabled = true;
+    button.classList.add("is-loading");
+    button.innerHTML = `<i class="button-spinner" aria-hidden="true"></i><span>${label}</span><span aria-hidden="true">↗</span>`;
+  };
   const commissionRate = () => Math.max(0, Number(data.settings.commissionRate || 5)) / 100;
   const sameDay = (left, right) => left && right && left.toDateString() === right.toDateString();
   const parseDate = value => {
@@ -406,13 +413,13 @@
           if (password !== confirm) throw new Error("Passwords do not match.");
           if (!isStrongPassword(password)) throw new Error("Use 8+ characters with uppercase, lowercase, number, and special character.");
           const submit = event.currentTarget.querySelector("button[type=submit]");
-          if (submit) { submit.disabled = true; submit.textContent = "Submitting registration..."; }
+          setAuthButtonLoading(submit, "Creating account...");
           const registration = await registerFinanceUser({ name, email, phone, password });
           if (!registration.pending) throw new Error("Registration was not submitted. Please try again.");
           showRegistrationPending(); return;
         } else {
           const submit = event.currentTarget.querySelector("button[type=submit]");
-          if (submit) { submit.disabled = true; submit.textContent = "Checking Finance account..."; }
+          setAuthButtonLoading(submit, "Signing in...");
           const account = await financeAccountStatus(email);
           if (!account.exists) {
             const error = new Error("Finance account not found.");

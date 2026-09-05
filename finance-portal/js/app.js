@@ -45,7 +45,10 @@
     logout: icon('<path d="M10 5H5v14h5M14 8l4 4-4 4M18 12H9"/>')
   };
   const navigation = [
-    ["dashboard", icons.dashboard, "Dashboard"], ["customers", icons.accounts, "Customers"], ["staff", icons.commissions, "Staff"], ["accounts", icons.accounts, "Accounts"], ["payments", icons.payments, "Payments"]
+    ["dashboard", icons.dashboard, "Dashboard"], ["customers", icons.accounts, "Customers"], ["staff", icons.commissions, "Staff"], ["accounts", icons.accounts, "Accounts"], ["commissions", icons.commissions, "Commissions"],
+    ["payments", icons.payments, "Payments"], ["overdue", icons.overdue, "Overdue"],
+    ["reconciliation", icons.reconciliation, "Reconciliation"], ["reports", icons.reports, "Reports"],
+    ["alerts", icons.alerts, "Alerts"], ["settings", icons.settings, "Settings"], ["audit", icons.audit, "Audit Logs"]
   ];
 
   const escapeHtml = value => String(value || "").replace(/[&<>'"]/g, char => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" })[char]);

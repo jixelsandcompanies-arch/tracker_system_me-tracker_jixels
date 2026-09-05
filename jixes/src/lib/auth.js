@@ -17,7 +17,7 @@ function safeMessage(status) {
 function restoreSession() {
   try {
     const stored = JSON.parse(sessionStorage.getItem(SESSION_KEY) || "null");
-    if (stored?.accessToken && stored?.expiresAt > Date.now()) return stored;
+    if (stored?.accessToken && stored?.refreshToken && stored?.expiresAt > Date.now()) return stored;
   } catch (error) { console.error("Could not restore admin session", error); }
   return null;
 }
@@ -29,7 +29,7 @@ function persistSession(session) {
 
 export function getSession() {
   if (!activeSession) activeSession = restoreSession();
-  if (!activeSession || Date.now() > activeSession.expiresAt || Date.now() - activeSession.lastActivity > INACTIVITY_LIMIT) {
+  if (!activeSession || !activeSession.refreshToken || Date.now() > activeSession.expiresAt || Date.now() - activeSession.lastActivity > INACTIVITY_LIMIT) {
     signOut();
     return null;
   }
@@ -77,7 +77,7 @@ export async function signIn(email, password) {
       const result = await response.json();
       if (!result?.accessToken || !result?.user) return { error: "Authentication temporarily unavailable. Please try again in a few moments." };
       const expiresAt = Date.parse(result.expiresAt || "") || Date.now() + SESSION_TTL;
-      const session = { userId: result.user.id, email: result.user.email || email, name: result.user.name || "Administrator", role: result.user.role, accessToken: result.accessToken, refreshToken: null, expiresAt, lastActivity: Date.now() };
+      const session = { userId: result.user.id, email: result.user.email || email, name: result.user.name || "Administrator", role: result.user.role, accessToken: result.accessToken, refreshToken: result.refreshToken || null, expiresAt, lastActivity: Date.now() };
       persistSession(session);
       clearFailedAttempts(email);
       return { data: session };

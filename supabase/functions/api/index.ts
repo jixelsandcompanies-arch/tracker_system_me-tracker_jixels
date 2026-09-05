@@ -120,6 +120,7 @@ async function portalSignIn(
   }
   return response({
     accessToken: data.session.access_token,
+    refreshToken: data.session.refresh_token,
     expiresAt: new Date(data.session.expires_at! * 1000).toISOString(),
     user: { id: data.user.id, email: data.user.email, name: profile.full_name, phone: profile.phone, role: profile.role },
   });
@@ -252,7 +253,7 @@ Deno.serve(async (request) => {
       ? await client.auth.verifyOtp({ email: identifier.toLowerCase(), token: code, type: "email" })
       : await client.auth.verifyOtp({ phone: identifier.replace(/\s/g, ""), token: code, type: "sms" });
     if (error || !data.session || !data.user) return fail(error?.message ?? "The code is invalid or expired.", 401, "OTP_INVALID_OR_EXPIRED");
-    return response({ verified: true, accessToken: data.session.access_token, expiresAt: new Date(data.session.expires_at! * 1000).toISOString(), user: { id: data.user.id, email: data.user.email, phone: data.user.phone } });
+    return response({ verified: true, accessToken: data.session.access_token, refreshToken: data.session.refresh_token, expiresAt: new Date(data.session.expires_at! * 1000).toISOString(), user: { id: data.user.id, email: data.user.email, phone: data.user.phone } });
   }
 
   if (route === "/v1/mpesa/c2b/register" && request.method === "POST") {

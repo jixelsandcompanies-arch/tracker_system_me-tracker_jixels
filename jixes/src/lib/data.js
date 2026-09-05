@@ -15,7 +15,13 @@ function reportNetworkError(error) {
 async function client() {
   if (!supabase) return null;
   const session = getSession();
-  if (session?.accessToken && session?.refreshToken) await supabase.auth.setSession({ access_token: session.accessToken, refresh_token: session.refreshToken });
+  // The shared login endpoint returns the full Supabase session. Applying it
+  // before every query prevents the PostgREST client from falling back to the
+  // anonymous key after a page refresh.
+  if (session?.accessToken && session?.refreshToken) {
+    const { error } = await supabase.auth.setSession({ access_token: session.accessToken, refresh_token: session.refreshToken });
+    if (error) throw error;
+  }
   if (session?.accessToken) supabase.realtime.setAuth(session.accessToken);
   return supabase;
 }

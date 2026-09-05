@@ -12,6 +12,7 @@ describe("authenticated admin workspace", () => {
       name: "Admin User",
       role: "super_admin",
       accessToken: "test-token",
+      refreshToken: "test-refresh-token",
       expiresAt: Date.now() + 60 * 60 * 1000,
       lastActivity: Date.now(),
     }));

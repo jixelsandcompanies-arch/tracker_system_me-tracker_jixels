@@ -186,7 +186,7 @@
     const outstanding = data.accounts.reduce((total, account) => total + Number(account.balance || Math.max(Number(account.total || 0) - Number(account.paid || 0), 0)), 0);
     const todayPayments = paymentsToday();
     const monthPayments = paymentsThisMonth();
-    const unpaidInvoices = data.payments.filter(payment => ["Pending", "Failed"].includes(payment.status)).length + data.accounts.filter(account => account.status !== "Completed" && Number(account.balance || 0) > 0).length;
+    const trackerSalesTotal = data.accounts.reduce((total, account) => total + Number(account.total || 0), 0);
     const overview = [
       ["Collections", money(collections), "Total money received from customers", "blue"],
       ["Outstanding Balance", money(outstanding), "Total amount customers still owe", "orange"],
@@ -194,7 +194,7 @@
       ["Commissions", money(commissionRows().reduce((sum, row) => sum + row.commission, 0)), "Agent earnings from tracker sales", "green"],
       ["Due Today", money(sum(data.accounts.filter(account => account.status !== "Completed"), "dailyTarget")), "Total payments expected today", "orange"],
       ["Payments Today", money(sum(todayPayments, "amount")), "Total money actually received today", "green"],
-      ["Unpaid Invoices", unpaidInvoices, "Tracker/service invoices awaiting payment", "red"],
+      ["Tracker Sales", money(trackerSalesTotal), "Total value of trackers sold to all customers", "red"],
       ["Monthly Revenue", money(sum(monthPayments, "amount")), "Total revenue collected this month", "blue"]
     ];
     return `<section><div class="section-heading"><div><div class="eyebrow"><i></i> FINANCE OPERATIONS</div><h2>Finance Overview</h2><p>Collections, balances, and account health at a glance.</p></div><span class="live-status"><i></i> Live workspace</span></div><div class="metrics">${overview.map(item => metric(...item)).join("")}</div><div class="dashboard-grid"><div class="card collections-card"><div class="card-header"><div><div class="card-title">Collections performance</div><div class="card-subtitle">Daily customer collections for the last seven days</div></div></div><div class="card-body">${collectionsGraph()}</div></div><div class="card"><div class="card-header"><div><div class="card-title">Overdue accounts</div><div class="card-subtitle">Accounts requiring collection attention</div></div></div>${overdue.length ? accountTable(overdue.slice(0, 5), false) : empty("No overdue accounts", "Overdue records will show here.")}</div></div></section>`;

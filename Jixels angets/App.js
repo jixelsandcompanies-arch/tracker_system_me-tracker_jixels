@@ -1,6 +1,7 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
+  AppState,
   Alert,
   Animated,
   BackHandler,
@@ -140,6 +141,7 @@ function displayNameFromEmail(email) {
 function normalizeAgentSession(session, fallbackEmail) {
   const user = session?.user || {};
   return {
+    id: user.id || user.agentCode || user.code || "",
     name: user.name || user.fullName || user.full_name || displayNameFromEmail(fallbackEmail),
     email: user.email || fallbackEmail,
     phone: user.phone || user.phoneNumber || "",
@@ -506,6 +508,7 @@ function QuickMenu({ active, navigate }) {
 function Dashboard({ customers, navigate, isOnline, compact, onRefresh, refreshing, darkMode = false }) {
   const paid = customers.filter(c => c.payment === "Paid");
   const pendingInstall = customers.filter(c => c.install !== "Complete").length;
+  const soldTrackers = customers.filter(customer => Boolean(customer.vehicleId) && customer.tracker !== "Pending").length;
   const alerts = customers.filter(c => c.payment !== "Paid" || c.install !== "Complete").length;
   const selectedOperation = pendingInstall > 0 ? {
     title: "Install tracker",
@@ -522,7 +525,7 @@ function Dashboard({ customers, navigate, isOnline, compact, onRefresh, refreshi
   };
   const stats = [
     { label: "Customers", value: customers.length, icon: <Ionicons name="people" color={colors.blue} size={22} /> },
-    { label: "Install pending", value: pendingInstall, icon: <MaterialCommunityIcons name="tools" color={colors.orange} size={22} /> },
+    { label: "Sold trackers", value: soldTrackers, icon: <MaterialCommunityIcons name="tag-check-outline" color={colors.orange} size={22} /> },
     { label: "Commissions earned", value: money(paid.reduce((sum, c) => sum + (c.commission || 0), 0)), icon: <Ionicons name="wallet" color={colors.green} size={22} /> },
     { label: "Alerts", value: alerts, icon: <Ionicons name="notifications" color={colors.red} size={22} /> }
   ];
@@ -584,7 +587,6 @@ function Onboarding({ addCustomer, navigate, assignedVehicles, accessToken, onRe
   const [selectedVehicleId, setSelectedVehicleId] = useState(assignedVehicles[0]?.id || "");
   const [vehiclePickerOpen, setVehiclePickerOpen] = useState(false);
   const [vehicleSearch, setVehicleSearch] = useState("");
-  const [passportPhoto, setPassportPhoto] = useState(null);
   const [idFrontPhoto, setIdFrontPhoto] = useState(null);
   const [idBackPhoto, setIdBackPhoto] = useState(null);
   const [saving, setSaving] = useState(false);
@@ -596,12 +598,6 @@ function Onboarding({ addCustomer, navigate, assignedVehicles, accessToken, onRe
     if (!permission.granted) return Alert.alert("Camera permission", `Allow camera access to capture ${label}.`);
     const result = await ImagePicker.launchCameraAsync({ quality: 0.55, allowsEditing: false });
     if (!result.canceled) setImage(result.assets[0].uri);
-  }
-
-  async function captureId() {
-    if (!idFrontPhoto) return captureImage(setIdFrontPhoto, "ID front side");
-    if (!idBackPhoto) return captureImage(setIdBackPhoto, "ID back side");
-    Alert.alert("ID captured", "Both front and back side of the customer ID are saved.");
   }
 
   async function save() {
@@ -622,7 +618,6 @@ function Onboarding({ addCustomer, navigate, assignedVehicles, accessToken, onRe
     } finally { setSaving(false); }
   }
 
-  const idButtonText = !idFrontPhoto ? "Capture ID front" : !idBackPhoto ? "Capture ID back" : "ID captured";
   return <ScrollView style={darkMode && styles.darkPage} contentContainerStyle={styles.page} refreshControl={pullRefresh(onRefresh, refreshing)} keyboardShouldPersistTaps="handled">
     <Text style={[styles.sectionTitle, darkMode && styles.darkText]}>Customer onboarding</Text>
     <View style={[styles.formCard, darkMode && styles.darkCard]}>
@@ -645,11 +640,10 @@ function Onboarding({ addCustomer, navigate, assignedVehicles, accessToken, onRe
       {selectedVehicle && <View style={styles.agreedPaymentNote}><Text style={styles.microLabel}>TOTAL PAYABLE</Text><Text style={styles.agreedPaymentValue}>{money(selectedVehicle.payableAmount)}</Text></View>}
       <Field label="Deposit amount to prompt" value={form.depositAmount} onChangeText={depositAmount => setForm({ ...form, depositAmount })} keyboardType="numeric" />
       <View style={styles.captureRow}>
-        <Pressable onPress={() => captureImage(setPassportPhoto, "passport photo")} style={styles.secondaryButton}><Ionicons name="camera-outline" color={colors.blue} size={18} /><Text style={styles.secondaryText}>{passportPhoto ? "Passport saved" : "Passport photo"}</Text></Pressable>
-        <Pressable onPress={captureId} style={styles.secondaryButton}><Ionicons name="id-card-outline" color={colors.blue} size={18} /><Text style={styles.secondaryText}>{idButtonText}</Text></Pressable>
+        <Pressable onPress={() => captureImage(setIdFrontPhoto, "National ID front")} style={styles.secondaryButton}><Ionicons name="scan-outline" color={colors.blue} size={18} /><Text style={styles.secondaryText}>{idFrontPhoto ? "Rescan ID front" : "Scan ID front"}</Text></Pressable>
+        <Pressable onPress={() => captureImage(setIdBackPhoto, "National ID back")} style={styles.secondaryButton}><Ionicons name="scan-outline" color={colors.blue} size={18} /><Text style={styles.secondaryText}>{idBackPhoto ? "Rescan ID back" : "Scan ID back"}</Text></Pressable>
       </View>
       <View style={styles.documentGrid}>
-        {passportPhoto && <Image source={{ uri: passportPhoto }} style={styles.documentPreview} />}
         {idFrontPhoto && <Image source={{ uri: idFrontPhoto }} style={styles.documentPreview} />}
         {idBackPhoto && <Image source={{ uri: idBackPhoto }} style={styles.documentPreview} />}
       </View>
@@ -964,7 +958,7 @@ function AgentApp({ agent, onLogout }) {
   const [screen, setScreen] = useState("dashboard");
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [customers, setCustomers] = useState(initialCustomers);
-  const [assignedVehicles] = useState(() => normalizeAssignedVehicles(agent));
+  const [assignedVehicles, setAssignedVehicles] = useState(() => normalizeAssignedVehicles(agent));
   const [refreshing, setRefreshing] = useState(false);
   const [isOnline, setIsOnline] = useState(true);
   const [depositCustomerId, setDepositCustomerId] = useState(null);
@@ -988,7 +982,7 @@ function AgentApp({ agent, onLogout }) {
   const soldVehicleIds = useMemo(() => new Set(customers.map(customer => customer.vehicleId).filter(Boolean)), [customers]);
   const availableAssignedVehicles = useMemo(() => assignedVehicles.filter(vehicle => !soldVehicleIds.has(vehicle.id)), [assignedVehicles, soldVehicleIds]);
 
-  function navigate(nextScreen) {
+  const navigate = useCallback((nextScreen) => {
     if (nextScreen === screen) {
       setDrawerOpen(false);
       return;
@@ -997,9 +991,9 @@ function AgentApp({ agent, onLogout }) {
     navigationHistory.current.push(screen);
     setScreen(nextScreen);
     setDrawerOpen(false);
-  }
+  }, [screen]);
 
-  function goBack() {
+  const goBack = useCallback(() => {
     if (drawerOpen) {
       setDrawerOpen(false);
       return true;
@@ -1011,30 +1005,43 @@ function AgentApp({ agent, onLogout }) {
       return true;
     }
     return true;
-  }
+  }, [drawerOpen]);
 
-  async function refresh() {
-    setRefreshing(true);
+  const refresh = useCallback(async ({ showSpinner = true } = {}) => {
+    if (showSpinner) setRefreshing(true);
     const net = await Network.getNetworkStateAsync().catch(() => ({ isConnected: true }));
     setIsOnline(Boolean(net.isConnected));
     if (agent.accessToken && net.isConnected) {
       try {
-        const result = await authApi.listCustomers(agent.accessToken);
-        setCustomers(result.customers || []);
+        const [customerResult, assignmentResult] = await Promise.all([
+          authApi.listCustomers(agent.accessToken),
+          authApi.listAssignments(agent.accessToken)
+        ]);
+        setCustomers(customerResult.customers || []);
+        setAssignedVehicles(normalizeAssignedVehicles({ ...agent, assignedVehicles: assignmentResult.assignments || [] }));
       } catch (error) { console.warn("Agent customer refresh failed", error); }
     }
-    setTimeout(() => setRefreshing(false), 450);
-  }
+    if (showSpinner) setTimeout(() => setRefreshing(false), 450);
+  }, [agent]);
 
   useEffect(() => {
     refresh();
+    const assignmentSync = setInterval(() => refresh({ showSpinner: false }), 60_000);
     if (Platform.OS === "android") {
       Notifications.setNotificationChannelAsync("agent", {
         name: "Jixels Agent Trackings",
         importance: Notifications.AndroidImportance.HIGH
       }).catch(() => {});
     }
-  }, []);
+    return () => clearInterval(assignmentSync);
+  }, [refresh]);
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener("change", state => {
+      if (state === "active") refresh({ showSpinner: false });
+    });
+    return () => subscription.remove();
+  }, [refresh]);
 
   useEffect(() => {
     if (Platform.OS === "android") {
@@ -1042,7 +1049,7 @@ function AgentApp({ agent, onLogout }) {
       return () => subscription.remove();
     }
     return undefined;
-  }, [drawerOpen, screen]);
+  }, [goBack]);
 
   function addCustomer(customer) {
     setCustomers(current => [customer, ...current]);

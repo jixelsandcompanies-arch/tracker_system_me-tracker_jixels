@@ -591,6 +591,36 @@ Deno.serve(async (request) => {
     return response({ customer: { id: customer.id, vehicleId: bike.id, name, phone, idNumber: nationalId, location: location || "Field location", bike: bike.identifier, vehicleModel: bike.model, tracker: bike.trackers?.[0]?.identifier ?? "Pending", kyc: "Submitted", install: "Pending", payment: depositAmount > 0 ? "Deposit Paid" : "Pending", payableAmount: Number(bike.payable_amount ?? 0), amount: depositAmount, balance: Math.max(0, Number(bike.payable_amount ?? 0) - depositAmount), commission: 0, receipt: "", date: now.slice(0, 10), screeningStatus: "pending" } }, 201);
   }
 
+  if (route === "/v1/agent/assignments" && request.method === "GET") {
+    const { data: agentProfile, error: agentError } = await admin
+      .from("profiles")
+      .select("role,account_status")
+      .eq("id", user.id)
+      .maybeSingle();
+    if (agentError || !agentProfile || !agentRoles.has(agentProfile.role)) return fail("This account does not have permission to view assigned trackers.", 403, "PORTAL_ACCESS_DENIED");
+    if (!approvedStatuses.has(agentProfile.account_status)) return fail("Your agent account is awaiting administrator approval.", 403, "ACCOUNT_PENDING_APPROVAL");
+
+    const { data: bikes, error } = await admin
+      .from("bikes")
+      .select("id,identifier,model,product_type,payable_amount,status,assigned_agent_id,trackers(identifier)")
+      .eq("assigned_agent_id", user.id)
+      .order("created_at", { ascending: false });
+    if (error) {
+      console.error("Agent assignment load failed", error);
+      return fail("Assigned trackers could not be loaded.", 503, "ASSIGNMENTS_UNAVAILABLE");
+    }
+    return response({ assignments: (bikes ?? []).map((bike: any) => ({
+      id: bike.id,
+      registration: bike.identifier,
+      model: bike.model,
+      product_type: bike.product_type,
+      payable_amount: bike.payable_amount,
+      status: bike.status,
+      assigned_agent_id: bike.assigned_agent_id,
+      tracker: bike.trackers?.[0]?.identifier ?? "Pending",
+    })) });
+  }
+
   if (route === "/v1/customer/overview" && request.method === "GET") {
     const [{ data: profile }, { data: vehicles }] = await Promise.all([
       client.from("profiles").select("full_name,phone,avatar_url").single(),

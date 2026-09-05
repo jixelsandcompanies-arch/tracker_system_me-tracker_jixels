@@ -52,11 +52,11 @@ import "./styles/errors.css";
 class AppErrorBoundary extends React.Component {
   constructor(props) {
     super(props);
-    this.state = { hasError: false };
+    this.state = { error: null };
   }
 
-  static getDerivedStateFromError() {
-    return { hasError: true };
+  static getDerivedStateFromError(error) {
+    return { error };
   }
 
   componentDidCatch(error) {
@@ -64,8 +64,9 @@ class AppErrorBoundary extends React.Component {
   }
 
   render() {
-    if (!this.state.hasError) return this.props.children;
-    return <main className="app-error"><span className="brand-mark"><Zap size={17} fill="currentColor" /></span><h1>Something went wrong</h1><p>The workspace could not load this view. Your session is still protected.</p><button className="button primary" onClick={() => window.location.reload()}>Reload workspace</button></main>;
+    if (!this.state.error) return this.props.children;
+    const detail = this.state.error instanceof Error ? this.state.error.message : "Unexpected workspace error";
+    return <main className="app-error"><span className="brand-mark"><Zap size={17} fill="currentColor" /></span><h1>Something went wrong</h1><p>The workspace could not load this view. Your session is still protected.</p><code className="error-reference">{detail}</code><button className="button primary" onClick={() => window.location.reload()}>Reload workspace</button><button className="button secondary" onClick={() => { signOut(); window.location.reload(); }}>Sign out and retry</button></main>;
   }
 }
 
@@ -295,6 +296,8 @@ function AppContent() {
   if (!systemOnline && !offlineAcknowledged) return <OfflineGate onRetry={() => setSystemOnline(navigator.onLine)} onContinue={() => setOfflineAcknowledged(true)}/>;
   if (workspaceLoading === "animation") return <WorkspaceSkeleton/>;
   if (workspaceLoading === "skeleton") return <DashboardSkeleton/>;
+  const sessionName = typeof session.name === "string" && session.name.trim() ? session.name.trim() : "Administrator";
+  const sessionRole = typeof session.role === "string" ? session.role : "";
 
   function choosePage(label) {
     setActive(label);
@@ -325,7 +328,7 @@ function AppContent() {
       <aside className={`sidebar ${sidebarOpen ? "is-open" : ""} ${sidebarCollapsed ? "is-collapsed" : ""}`}>
         <div className="sidebar-header"><button className="sidebar-collapse icon-btn" onClick={() => window.innerWidth <= 760 ? setSidebarOpen(false) : setSidebarCollapsed((collapsed) => !collapsed)} aria-label={sidebarCollapsed ? "Expand navigation" : "Collapse navigation"}><Menu size={19}/></button><div className="brand"><img className="brand-logo" src="https://www.jixels.com/assets/jixels-logo-form-ni-tenje-cropped.jpeg" alt="Jixels Form Ni Tenje" /></div></div>
         <nav>
-          {navigation.filter((item) => canAccess(session.role, item.key)).map((item, index, visibleNavigation) => (
+          {navigation.filter((item) => canAccess(sessionRole, item.key)).map((item, index, visibleNavigation) => (
             <div key={item.section + item.label}>
               {(index === 0 || visibleNavigation[index - 1].section !== item.section) && <p className="nav-section">{item.section}</p>}
               <button className={`nav-item ${active === item.key ? "active" : ""}`} onClick={() => choosePage(item.key)} title={item.label} aria-label={item.label} data-tooltip={item.label}><item.icon size={17} strokeWidth={active === item.key ? 2.3 : 1.8} /><span>{item.label}</span>{item.count && <em>{item.count}</em>}{item.live && <i />}</button>
@@ -336,7 +339,7 @@ function AppContent() {
       </aside>
       {sidebarOpen && <button className="scrim" aria-label="Close menu" onClick={() => setSidebarOpen(false)} />}
       <main className="main-content" onPointerDown={() => { if (window.innerWidth > 760 && !sidebarCollapsed) setSidebarCollapsed(true); }}>
-        <header className="topbar"><button className="menu-button icon-btn" onClick={() => setSidebarOpen(true)} aria-label="Open navigation"><Menu size={20} /></button><div className="topbar-actions"><button className="icon-btn notification" onClick={() => setNotificationsOpen((open) => !open)} aria-label="Open notifications"><Bell size={18}/>{notifications.some((item) => item.unread) && <span/>}</button><div className="top-profile"><span className="user-avatar">{session.name?.slice(0, 2).toUpperCase()}</span><span><strong>{session.name}</strong><small>{session.role}</small></span></div></div>{notificationsOpen && <NotificationPanel notifications={notifications} onClose={() => setNotificationsOpen(false)} onRead={() => setNotifications((items) => items.map((item) => ({ ...item, unread: false })))} />}</header>
+        <header className="topbar"><button className="menu-button icon-btn" onClick={() => setSidebarOpen(true)} aria-label="Open navigation"><Menu size={20} /></button><div className="topbar-actions"><button className="icon-btn notification" onClick={() => setNotificationsOpen((open) => !open)} aria-label="Open notifications"><Bell size={18}/>{notifications.some((item) => item.unread) && <span/>}</button><div className="top-profile"><span className="user-avatar">{sessionName.slice(0, 2).toUpperCase()}</span><span><strong>{sessionName}</strong><small>{sessionRole || "Administrator"}</small></span></div></div>{notificationsOpen && <NotificationPanel notifications={notifications} onClose={() => setNotificationsOpen(false)} onRead={() => setNotifications((items) => items.map((item) => ({ ...item, unread: false })))} />}</header>
         <div className="page-content">
           {workspaceLoading ? <WorkspaceSkeleton/> : <>{active !== "Support Cases" && <section className="page-heading"><div><div className="eyebrow"><span className="pulse" />OPERATIONS</div><h1>{active === "Dashboard" ? "Dashboard Overview" : active === "Products" ? "Product Inventory" : active}</h1><p>{active === "Dashboard" ? "Fleet-wide numbers and system health, at a glance." : active === "Products" ? "Register products, link trackers, and allocate agents." : `${active} workspace.`}</p></div><div className="heading-actions">{hasSupabaseConfig && <span className="sync-status"><span />Live data</span>}</div></section>}<ModuleErrorBoundary module={active}>{active === "Dashboard" ? <DashboardLiveView /> : <EnhancedModuleView title={active} setShowAdd={setShowAdd} />}</ModuleErrorBoundary></>}
           <footer className="system-footer"><span><strong>JIXELS ADMIN</strong> · Form Ni Tenje · Operations workspace</span><span>© 2026 Jixels Technologies</span></footer>

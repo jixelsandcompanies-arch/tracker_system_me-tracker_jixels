@@ -2,7 +2,7 @@ export default {
   expo: {
     name: "Jixels Customer Trackings",
     slug: "jixels-customer-trackings",
-    version: "1.0.0",
+    version: "1.0.1",
     scheme: "jixelscustomertrackings",
 
     orientation: "portrait",
@@ -19,7 +19,7 @@ export default {
 
     android: {
       package: "com.jixelstechnologies.customer",
-      versionCode: 1,
+      versionCode: 3,
       softwareKeyboardLayoutMode: "resize",
 
       adaptiveIcon: {

@@ -73,7 +73,6 @@ class AppErrorBoundary extends React.Component {
 
 const navigation = [
   { label: "Dashboard", icon: LayoutDashboard, key: "Dashboard", section: "OVERVIEW" },
-  { label: "Customers", icon: Users, key: "Customers", section: "OPERATIONS" },
   { label: "Product inventory", icon: Bike, key: "Products", section: "OPERATIONS" },
   { label: "GPS Trackers", icon: Radio, key: "GPS Trackers", section: "OPERATIONS" },
   { label: "Screening", icon: ClipboardList, key: "Screening", section: "OPERATIONS" },
@@ -96,7 +95,8 @@ function loadNavigation(role) {
   const fallback = canAccess(role, "Dashboard") ? "Dashboard" : "Payments";
   try {
     const saved = JSON.parse(localStorage.getItem(ADMIN_NAVIGATION_KEY) || "{}");
-    const page = navigation.some((item) => item.key === saved.active) && canAccess(role, saved.active) ? saved.active : fallback;
+    const requested = saved.active === "Customers" ? "Customer Accounts" : saved.active;
+    const page = navigation.some((item) => item.key === requested) && canAccess(role, requested) ? requested : fallback;
     return { active: page, sidebarCollapsed: Boolean(saved.sidebarCollapsed) };
   } catch (error) {
     console.error("Could not restore admin navigation", error);

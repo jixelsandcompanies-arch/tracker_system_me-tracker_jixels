@@ -12,7 +12,7 @@ function Document({ src, label, fallback = "Not submitted" }) {
   return <article className="screening-document"><span>{label}</span>{src && !failed ? <img src={src} alt={label} onError={() => setFailed(true)}/> : <div><UserRound size={24}/><small>{failed ? "Image unavailable" : fallback}</small></div>}</article>;
 }
 
-function ReviewDrawer({ application, agents, onClose, onChanged }) {
+export function ScreeningReviewDrawer({ application, agents, onClose, onChanged }) {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [documents, setDocuments] = useState(null);
@@ -57,6 +57,8 @@ function ReviewDrawer({ application, agents, onClose, onChanged }) {
   };
   return <div className="detail-backdrop" onClick={onClose}><aside className="detail-drawer screening-review-drawer" onClick={(event) => event.stopPropagation()}><div className="detail-heading"><div><span className="eyebrow">CUSTOMER SCREENING</span><h2>{application.full_name}</h2><p>{applicationId(application)} · {statusLabel(application.status)}</p></div><button className="icon-btn" onClick={onClose}><X size={18}/></button></div><div className="screening-documents"><Document src={documentUrl("customer_photo_url")} label="Customer photo" fallback={documentsLoading ? "Loading image" : "Not submitted"}/><Document src={documentUrl("id_front_url")} label="National ID — front" fallback={documentsLoading ? "Loading image" : "Not submitted"}/><Document src={documentUrl("id_back_url")} label="National ID — back" fallback={documentsLoading ? "Loading image" : "Not submitted"}/></div><section className="screening-review-details"><h3>Customer details</h3><dl><div><dt>National ID</dt><dd>{application.national_id || "—"}</dd></div><div><dt>Phone</dt><dd>{application.phone || "—"}</dd></div><div><dt>Email</dt><dd>{application.email || "—"}</dd></div><div><dt>Location</dt><dd>{application.location || "—"}</dd></div></dl><h3>Product and account</h3><dl><div><dt>Product identity</dt><dd>{application.product_type || "Product"} | {application.product_identifier || "—"}</dd></div><div><dt>Make / Model</dt><dd>{application.product_model || "—"}</dd></div><div><dt>Agent</dt><dd>{agent}</dd></div><div><dt>Deposit</dt><dd>KES {Number(application.deposit_amount || 0).toLocaleString()}</dd></div><div><dt>Tracker / IMEI</dt><dd>{application.tracker_identifier || "—"}</dd></div><div><dt>Service plan</dt><dd>KES {Number(application.monthly_service_amount || 700).toLocaleString()} per month</dd></div></dl></section>{message && <div className="import-message">{message}</div>}<div className="detail-actions"><button className="button secondary" onClick={onClose}>Close</button>{application.status !== "suspended" && application.status !== "declined" && <button className="button secondary" disabled={busy} onClick={suspend}>Suspend</button>}{application.status === "approved" ? <button className="button danger" disabled={busy} onClick={remove}><Trash2 size={15}/>{busy ? "Deleting…" : "Delete customer"}</button> : <button className="button primary" disabled={busy} onClick={approve}><ShieldCheck size={15}/>{busy ? "Processing…" : "Approve customer"}</button>}</div></aside></div>;
 }
+
+const ReviewDrawer = ScreeningReviewDrawer;
 
 export default function ScreeningWorkflowView() {
   const [applications, setApplications] = useState([]);

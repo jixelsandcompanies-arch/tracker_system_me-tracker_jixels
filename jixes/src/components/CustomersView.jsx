@@ -19,6 +19,7 @@ import {
   updateRecord,
 } from "../lib/data";
 import { recordAudit } from "../lib/security";
+import { ScreeningReviewDrawer } from "./ScreeningWorkflowView";
 
 const fields = [
   "customer_code",
@@ -310,22 +311,26 @@ function CustomerDetails({ customer, onClose, onEdit }) {
 }
 export default function CustomersView({ approvalMode = false }) {
   const [customers, setCustomers] = useState([]),
+    [agents, setAgents] = useState([]),
+    [screeningApplications, setScreeningApplications] = useState([]),
     [message, setMessage] = useState(""),
     [search, setSearch] = useState(""),
     [editing, setEditing] = useState(undefined),
-    [selected, setSelected] = useState(undefined),
+    [selectedApplication, setSelectedApplication] = useState(undefined),
     [pendingDelete, setPendingDelete] = useState(undefined),
     [selectedIds, setSelectedIds] = useState([]);
   const fileRef = useRef(null);
   const load = async () => {
     if (!hasSupabaseConfig)
       return setMessage("Connect Supabase to view live records.");
-    const [result, profiles] = await Promise.all([
+    const [result, profiles, applications] = await Promise.all([
       listRecords("customers", { pageSize: 1000 }),
       listRecords("profiles", { pageSize: 1000 }),
+      listRecords("screening_applications", { pageSize: 1000 }),
     ]);
     if (result.error) return setMessage(result.error.message);
     if (profiles.error) return setMessage(profiles.error.message);
+    if (applications.error) return setMessage(applications.error.message);
     const nonCustomerAccountIds = new Set(
       (profiles.data || [])
         .filter((profile) => profile.role && profile.role !== "customer")
@@ -336,12 +341,26 @@ export default function CustomersView({ approvalMode = false }) {
         (customer) => !nonCustomerAccountIds.has(customer.id),
       ),
     );
+    setAgents(profiles.data || []);
+    setScreeningApplications(applications.data || []);
     setMessage("");
   };
   useEffect(() => {
     load();
-    return subscribeToTable("customers", load);
+    const unsubscribeCustomers = subscribeToTable("customers", load);
+    const unsubscribeApplications = subscribeToTable("screening_applications", load);
+    return () => {
+      unsubscribeCustomers();
+      unsubscribeApplications();
+    };
   }, []);
+  const applicationForCustomer = (customer) =>
+    screeningApplications
+      .filter((application) => application.customer_id === customer.id)
+      .sort(
+        (left, right) =>
+          new Date(right.created_at || 0) - new Date(left.created_at || 0),
+      )[0];
   const visible = customers.filter(
     (customer) =>
       customerState(customer.status) === "approved" &&
@@ -593,9 +612,12 @@ export default function CustomersView({ approvalMode = false }) {
                         <div className="account-actions">
                           <button
                             className="button secondary"
-                            onClick={() => setSelected(customer)}
+                            onClick={() =>
+                              setSelectedApplication(applicationForCustomer(customer))
+                            }
+                            disabled={!applicationForCustomer(customer)}
                           >
-                            <Eye size={14} /> View
+                            <Eye size={14} /> Open
                           </button>
                           <button
                             className="button secondary"
@@ -618,16 +640,16 @@ export default function CustomersView({ approvalMode = false }) {
             </div>
           </article>
         </section>
-        {selected && (
-          <CustomerDetails
-            customer={
-              customers.find((item) => item.id === selected.id) || selected
+        {selectedApplication && (
+          <ScreeningReviewDrawer
+            application={
+              screeningApplications.find(
+                (item) => item.id === selectedApplication.id,
+              ) || selectedApplication
             }
-            onClose={() => setSelected(undefined)}
-            onEdit={() => {
-              setEditing(selected);
-              setSelected(undefined);
-            }}
+            agents={agents}
+            onClose={() => setSelectedApplication(undefined)}
+            onChanged={load}
           />
         )}
         {editing && (
@@ -721,9 +743,12 @@ export default function CustomersView({ approvalMode = false }) {
                       <div className="account-actions">
                         <button
                           className="button secondary"
-                          onClick={() => setSelected(customer)}
+                          onClick={() =>
+                            setSelectedApplication(applicationForCustomer(customer))
+                          }
+                          disabled={!applicationForCustomer(customer)}
                         >
-                          <Eye size={14} /> View
+                          <Eye size={14} /> Open
                         </button>
                         <button
                           className="button danger"
@@ -740,16 +765,16 @@ export default function CustomersView({ approvalMode = false }) {
           </div>
         </article>
       </section>
-      {selected && (
-        <CustomerDetails
-          customer={
-            customers.find((item) => item.id === selected.id) || selected
+      {selectedApplication && (
+        <ScreeningReviewDrawer
+          application={
+            screeningApplications.find(
+              (item) => item.id === selectedApplication.id,
+            ) || selectedApplication
           }
-          onClose={() => setSelected(undefined)}
-          onEdit={() => {
-            setEditing(selected);
-            setSelected(undefined);
-          }}
+          agents={agents}
+          onClose={() => setSelectedApplication(undefined)}
+          onChanged={load}
         />
       )}
       {editing && (

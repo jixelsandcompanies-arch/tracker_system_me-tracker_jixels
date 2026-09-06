@@ -399,6 +399,29 @@ async function portalSignIn(
     if (profile.account_status === "rejected" || profile.account_status === "suspended") return fail("This account is not active. Please contact Jixels support.", 403, "ACCOUNT_INACTIVE");
     return fail("Your account is not active. Please contact Jixels support.", 403, "ACCOUNT_INACTIVE");
   }
+  if (profile.role === "customer") {
+    await saveCustomerPushToken(admin, data.user.id, body, new Date().toISOString());
+    const { data: pendingCode, error: pendingCodeError } = await admin
+      .from("customer_approval_codes")
+      .select("used_at")
+      .eq("customer_id", data.user.id)
+      .maybeSingle();
+    if (pendingCodeError) {
+      console.error("Customer approval code lookup failed", pendingCodeError);
+      return fail("Customer approval verification is temporarily unavailable.", 503, "APPROVAL_CODE_UNAVAILABLE");
+    }
+    if (pendingCode && !pendingCode.used_at) {
+      const delivery = await issueCustomerApprovalCode(admin, data.user.id, profile.email ?? email);
+      if (!delivery.issued) return fail("A secure approval code could not be created. Contact Jixels support.", 503, "APPROVAL_CODE_UNAVAILABLE");
+      return fail(
+        delivery.pushSent
+          ? "A fresh six-digit approval code was sent to this Jixels Customer app. Enter it to finish signing in."
+          : "Your account needs its six-digit approval code. Enable notifications in Jixels Customer Trackings, then sign in again.",
+        403,
+        "CUSTOMER_OTP_REQUIRED",
+      );
+    }
+  }
   let assignedVehicles: unknown[] = [];
   if (agentRoles.has(profile.role)) {
     const { data: bikes, error: bikesError } = await admin.from("bikes").select("id,identifier,model,product_type,payable_amount,status,assigned_agent_id,trackers(identifier)").eq("assigned_agent_id", data.user.id).order("created_at", { ascending: false });

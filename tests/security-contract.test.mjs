@@ -25,7 +25,8 @@ assert.match(payments, /stable payment idempotency key is required/, "M-Pesa mus
 assert.match(tracking, /socket\.on\("connect".*tracker:subscribe/, "tracker subscription must be connection-scoped");
 assert.match(app, /verifyApprovalCode\(\{ email: applicant\.email, code \}\)/, "approval code verification must be bound to the registered customer email");
 assert.match(apiFunction, /customer_approval_codes/, "approval codes must be stored server-side");
-assert.match(apiFunction, /sendCustomerApprovalPush\(admin, \[mobileProfile\.id, application\.customer_id\]\.filter\(Boolean\), code/, "approval code delivery must use the customer app notification for the mobile and onboarding profiles");
+assert.match(apiFunction, /issueCustomerApprovalCode\(admin, account\.id, account\.email/, "account approval must issue the customer app approval code");
+assert.match(apiFunction, /CUSTOMER_OTP_REQUIRED/, "customer access must remain blocked until the approval code is verified");
 assert.match(apiFunction, /async function saveCustomerPushToken/, "pending customer registrations must persist or refresh the registered device token");
 assert.match(apiFunction, /ticket\?\.status === "ok"/, "approval delivery must verify Expo push tickets instead of assuming an HTTP success delivered the notification");
 assert.match(apiFunction, /Your secure approval code is \$\{code\}/, "the in-app approval notification must visibly include the six-digit code");
@@ -46,7 +47,8 @@ assert.match(agentAuth, /\/v1\/agent\/auth\/register/, "agent app registration m
 assert.match(apiFunction, /matchingCustomers.*\.eq\("email", email\)/s, "admin deletion must resolve agent-onboarded customer records by registered email");
 assert.match(apiFunction, /removeCustomerWorkspace\(admin, customerId\)/, "admin deletion must remove every linked customer workspace");
 assert.match(app, /Account removed/, "the customer app must clear and exit when its deleted account is no longer available");
-assert.match(agentApp, /setInterval\(\(\) => refresh\(\{ showSpinner: false \}\), 15_000\)/, "the agent app must promptly refresh live customer records after admin deletion");
+assert.match(app, /setPhase\("gps"\)/, "a successful customer login must show the moving tracker activity screen before the dashboard");
+assert.match(agentApp, /setInterval\(\(\) => refresh\(\{ showSpinner: false \}\), 5_000\)/, "the agent app must promptly refresh live customer records after admin deletion");
 assert.match(agentApp, /setCustomers\(\[\]\)/, "the agent app must clear customer records when its access is revoked");
 assert.match(financeApp, /commissionRules\(\)/, "Finance commission calculations must use saved rules");
 assert.match(financeData, /saleCommission: ""/, "Finance must not invent a sale commission default");

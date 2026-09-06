@@ -142,12 +142,13 @@ function AuthScreen({ onAuthenticated, onPendingApproval, pendingEmail, approved
         onPendingApproval({ name: name.trim(), email: normalizedEmail, phone: phone.trim(), notificationReady: application?.notificationReady !== false });
         return;
       }
-      const session = await authApi.login(normalizedEmail, password);
+      const pushToken = await customerPushToken();
+      const session = await authApi.login(normalizedEmail, password, { pushToken, platform: Platform.OS });
       if (!session?.accessToken || !session?.user) throw new Error("The backend returned an invalid session.");
       onAuthenticated(session);
     } catch (error) {
       if (error instanceof ApiError && (error.status === 423 || error.code === "ACCOUNT_LOCKED")) Alert.alert("Account locked", "Two failed login attempts were detected. Contact your Jixels administrator to have the account opened.");
-      else if (error instanceof ApiError && error.code === "ACCOUNT_PENDING_APPROVAL") onPendingApproval({ name: name.trim(), email: normalizedEmail, phone: phone.trim() });
+      else if (error instanceof ApiError && ["ACCOUNT_PENDING_APPROVAL", "CUSTOMER_OTP_REQUIRED"].includes(error.code)) onPendingApproval({ name: name.trim(), email: normalizedEmail, phone: phone.trim() });
       else if (error instanceof ApiError && error.status === 401) Alert.alert("Login unsuccessful", error.details?.remainingAttempts === 1 ? "The email or password is incorrect. You have one attempt remaining before the account is locked." : "The email or password is incorrect.");
       else Alert.alert(mode === "register" ? "Registration unavailable" : "Unable to sign in", error instanceof Error ? error.message : "Check your connection and try again.");
     } finally {

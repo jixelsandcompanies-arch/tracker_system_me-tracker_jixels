@@ -1,8 +1,8 @@
 import { apiRequest } from "./api";
 
 export const authApi = {
-  async login(email, password) {
-    const response = await apiRequest("/v1/auth/login", { method: "POST", body: { email, password } });
+  async login(email, password, device = {}) {
+    const response = await apiRequest("/v1/auth/login", { method: "POST", body: { email, password, ...device } });
     const session = response?.session ?? response;
     if (!session?.accessToken || !session?.user || !session?.expiresAt) throw new Error("The login response did not contain a valid expiring session.");
     return session;

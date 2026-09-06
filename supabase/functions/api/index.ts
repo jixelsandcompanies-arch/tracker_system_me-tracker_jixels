@@ -313,24 +313,11 @@ async function registerPortalUser(client: ReturnType<typeof createClient>, admin
     if (submittedApplication) {
       const { data: applicationStatus, error: applicationStatusError } = await admin.from("screening_applications").select("status").eq("id", submittedApplication.id).single();
       if (applicationStatusError || !applicationStatus) { await rollbackAuthUser(); return fail("Registration could not be completed. Please try again.", 503, "CUSTOMER_SCREENING_LOOKUP_FAILED"); }
-      const isApproved = applicationStatus.status === "approved";
-      if (isApproved) {
-        const { error: statusError } = await admin.from("profiles").update({ account_status: "approved", updated_at: now }).eq("id", data.user.id);
-        if (statusError) { await rollbackAuthUser(); return fail("Registration could not be completed. Please try again.", 503, "PROFILE_PROVISIONING_FAILED"); }
-      }
       const token = await saveCustomerPushToken(admin, data.user.id, body, now);
-      if (isApproved) {
-        if (!token.registered) return response({ status: "approved", notificationReady: false, message: "Your account is approved. Enable notifications in Jixels Customer Trackings, then submit your registration again to receive the approval code." }, 201);
-        const delivery = await issueCustomerApprovalCode(admin, data.user.id, email);
-        if (!delivery.issued) return fail("Your account is approved, but the in-app approval code could not be created. Please ask an administrator to retry approval.", 503, "APPROVAL_CODE_UNAVAILABLE");
-        return response({ status: "approved", notificationReady: true, pushSent: delivery.pushSent, message: delivery.pushSent ? "Your account is approved. The six-digit approval code was sent to Jixels Customer Trackings." : "Your account is approved, but the device notification could not be delivered. Open Jixels Customer Trackings and submit your registration again." }, 201);
-      }
       return response({ status: "pending", notificationReady: token.registered, message: "Registration details submitted successfully. Please wait for administrator approval before signing in." }, 201);
     }
     const { error: customerError } = await admin.from("customers").upsert({ id: data.user.id, full_name: fullName, email, phone, status: "pending", created_at: now, updated_at: now }, { onConflict: "id" });
     if (customerError) { console.error("Customer account provisioning failed", customerError); await rollbackAuthUser(); return fail("Registration could not be completed. Please try again.", 503, "CUSTOMER_PROVISIONING_FAILED"); }
-    const { error: screeningError } = await admin.from("screening_applications").insert({ customer_id: data.user.id, full_name: fullName, email, phone, status: "pending", updated_at: now });
-    if (screeningError) { console.error("Customer screening provisioning failed", screeningError); await rollbackAuthUser(); return fail("Registration could not be completed. Please try again.", 503, "CUSTOMER_APPROVAL_PROVISIONING_FAILED"); }
     const token = await saveCustomerPushToken(admin, data.user.id, body, now);
     return response({ status: "pending", notificationReady: token.registered, message: "Registration details submitted successfully. Please wait for administrator approval before signing in." }, 201);
   }
@@ -342,6 +329,7 @@ const agentRoles = new Set(["agent", "support_agent"]);
 const financeRoles = new Set(["finance", "finance_officer", "admin", "super_admin"]);
 const adminRoles = new Set(["admin", "super_admin", "operations_manager"]);
 const approvableStaffRoles = new Set(["agent", "support_agent", "finance", "finance_officer"]);
+const approvableAccountRoles = new Set(["customer", ...approvableStaffRoles]);
 const approvedStatuses = new Set(["active", "approved"]);
 const LOGIN_LOCK_MESSAGE = "Too many failed sign-in attempts. Please try again in 15 minutes.";
 
@@ -783,10 +771,11 @@ Deno.serve(async (request) => {
       if (requestedStatus && requestedStatus !== "directory" && !new Set(["pending", "approved", "rejected"]).has(requestedStatus)) {
         return fail("Choose a valid account directory status.", 422, "INVALID_ACCOUNT_STATUS");
       }
+      const roles = directory ? [...approvableStaffRoles] : [...approvableAccountRoles];
       let accountsQuery = admin
         .from("profiles")
         .select("id,full_name,email,phone,role,account_status,created_at,updated_at")
-        .in("role", [...approvableStaffRoles]);
+        .in("role", roles);
       accountsQuery = directory
         ? accountsQuery.neq("account_status", "pending")
         : accountsQuery.eq("account_status", requestedStatus || "pending");
@@ -806,7 +795,7 @@ Deno.serve(async (request) => {
       .select("id,full_name,email,phone,role,account_status")
       .eq("id", accountId)
       .maybeSingle();
-    if (accountError || !account || !approvableStaffRoles.has(account.role)) return fail("Pending staff account not found.", 404, "ACCOUNT_NOT_FOUND");
+    if (accountError || !account || !approvableAccountRoles.has(account.role)) return fail("Pending account not found.", 404, "ACCOUNT_NOT_FOUND");
     const { data: updated, error: updateError } = await admin
       .from("profiles")
       .update({ account_status: nextStatus, updated_at: new Date().toISOString() })
@@ -817,14 +806,30 @@ Deno.serve(async (request) => {
       console.error("Account approval update failed", updateError);
       return fail("The account decision could not be saved.", 500, "ACCOUNT_APPROVAL_UPDATE_FAILED");
     }
+    let pushSent = false;
+    if (account.role === "customer" && nextStatus === "approved") {
+      const delivery = await issueCustomerApprovalCode(admin, account.id, account.email ?? "");
+      if (!delivery.issued) {
+        await admin.from("profiles").update({ account_status: account.account_status, updated_at: new Date().toISOString() }).eq("id", account.id);
+        return fail("The customer account could not be approved because the approval code could not be created.", 503, "APPROVAL_CODE_UNAVAILABLE");
+      }
+      pushSent = delivery.pushSent;
+    }
     const { error: auditError } = await admin.from("audit_logs").insert({
       actor_id: user.id,
-      action: nextStatus === "approved" ? "approved staff account" : "rejected staff account",
+      action: nextStatus === "approved" ? `approved ${account.role} account` : `rejected ${account.role} account`,
       resource: "profiles",
       detail: { account_id: account.id, email: account.email, role: account.role, previous_status: account.account_status, next_status: nextStatus },
     });
     if (auditError) console.error("Account approval audit write failed", auditError);
-    return response({ account: updated, message: nextStatus === "approved" ? "Account approved. The user can now sign in." : "Account rejected. The user cannot access the portal." });
+    const message = nextStatus === "approved"
+      ? account.role === "customer"
+        ? pushSent
+          ? "Customer account approved. The six-digit code was sent in the Jixels Customer app."
+          : "Customer account approved. The code is ready, but the device notification was not delivered. Ask the customer to reopen the registered app."
+        : "Account approved. The user can now sign in."
+      : "Account rejected. The user cannot access the portal.";
+    return response({ account: updated, pushSent, message });
   }
 
   const deleteMatch = route.match(/^\/v1\/admin\/users\/([^/]+)$/);
@@ -910,15 +915,7 @@ Deno.serve(async (request) => {
       const { error: financeRefreshError } = await admin.rpc("materialize_tracker_sale", { p_application_id: application.id });
       if (financeRefreshError) console.error("Finance sale materialization failed", financeRefreshError);
     }
-    if (application.email) await admin.from("profiles").update({ account_status: "approved", updated_at: now }).eq("email", application.email.toLowerCase());
-    const { data: mobileProfile, error: mobileProfileError } = await admin.from("profiles").select("id,email,role").eq("email", application.email?.toLowerCase() ?? "").maybeSingle();
-    if (mobileProfileError) return fail("Customer approved, but mobile account status could not be checked.", 503, "CUSTOMER_APP_UNAVAILABLE");
-    if (!mobileProfile || mobileProfile.role !== "customer") return response({ approved: true, pushSent: false, message: "Customer approved. The customer must register the Jixels Customer app before an in-app approval code can be issued." });
-    const code = approvalCode();
-    const { error: codeError } = await admin.from("customer_approval_codes").upsert({ customer_id: mobileProfile.id, code_hash: await sha256(code), expires_at: new Date(Date.now() + 5 * 60_000).toISOString(), used_at: null }, { onConflict: "customer_id" });
-    if (codeError) return fail("Customer approved, but the in-app approval code could not be created.", 503, "APPROVAL_CODE_UNAVAILABLE");
-    const pushSent = await sendCustomerApprovalPush(admin, [mobileProfile.id, application.customer_id].filter(Boolean), code, mobileProfile.email ?? application.email ?? "");
-    return response({ approved: true, pushSent, message: pushSent ? "Customer approved. The Jixels Customer app received an in-app approval code." : "Customer approved. The customer must open the registered Jixels Customer app to receive the in-app code." });
+    return response({ approved: true, message: "Screening approved. Customer app access and its approval code are managed separately in Account approvals." });
   }
 
   if (route === "/v1/agent/customers" && (request.method === "GET" || request.method === "POST")) {

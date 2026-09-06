@@ -3,7 +3,7 @@
   const SUPABASE_KEY = "sb_publishable_IeSvEQI25WeymzwM-3j4VQ_a6a84vRO";
   // Never manufacture finance settings or operational records in the browser.
   // Settings are empty until an authorized Finance user saves them to Supabase.
-  const emptyData = { accounts: [], payments: [], agents: [], customers: [], staff: [], alerts: [], auditLogs: [], notifications: [], settings: { workspaceName: "", timezone: "", currency: "", saleCommission: "", monthlyCustomerCommission: "", commissionRate: "", dailyCollectionTarget: "", overdueGraceDays: "", exportRetentionDays: "", sessionTimeoutMinutes: "", notifyPayments: false, notifyReconciliation: false, notifyCommissions: false } };
+  const emptyData = { accounts: [], payments: [], agents: [], customers: [], staff: [], alerts: [], auditLogs: [], settings: { workspaceName: "", saleCommission: "", monthlyCustomerCommission: "" } };
   let memoryData = JSON.parse(JSON.stringify(emptyData)); let accessToken = null;
   const tables = { accounts: "finance_accounts", payments: "finance_payments", agents: "finance_agents", alerts: "finance_alerts", auditLogs: "finance_audit_logs" };
   const dashboardTables = { accounts: tables.accounts, payments: tables.payments };
@@ -24,7 +24,7 @@
     if (!response.ok) { console.error("Finance API request failed", path, response.status, await response.text().catch(() => "")); throw new Error(safeError(response.status)); }
     return response.status === 204 ? null : response.json();
   }
-  function saveData(data) {
+  async function saveData(data) {
     const previousData = memoryData;
     const nextData = { ...emptyData, ...clone(data) };
     memoryData = nextData;
@@ -37,13 +37,23 @@
         const customer = key === "accounts" ? nextData.customers.find(candidate => candidate.id === item.customerId || (candidate.full_name === item.customer && candidate.phone === item.phone)) : null;
         const record = { external_id: externalId, data: item, updated_at: new Date().toISOString() };
         if (key === "accounts") Object.assign(record, { customer_id: customer?.id || item.customerId || null, outstanding: Math.max(0, Number(item.balance || 0)), status: item.status || "active" });
-        return [request(`/rest/v1/${table}?on_conflict=external_id`, { method: "POST", headers: { Prefer: "resolution=merge-duplicates" }, body: JSON.stringify(record) })];
+        const options = key === "auditLogs"
+          ? { method: "POST", body: JSON.stringify(record) }
+          : { method: "POST", headers: { Prefer: "resolution=merge-duplicates" }, body: JSON.stringify(record) };
+        return [request(key === "auditLogs" ? `/rest/v1/${table}` : `/rest/v1/${table}?on_conflict=external_id`, options)];
       });
       const deletes = [...previousRows.keys()].filter(externalId => !nextRows.has(externalId)).map(externalId => request(`/rest/v1/${table}?external_id=eq.${encodeURIComponent(externalId)}`, { method: "DELETE" }));
       return [...writes, ...deletes];
     });
     if (JSON.stringify(previousData.settings) !== JSON.stringify(nextData.settings)) jobs.push(request("/rest/v1/finance_settings?on_conflict=id", { method: "POST", headers: { Prefer: "resolution=merge-duplicates" }, body: JSON.stringify({ id: "default", data: nextData.settings, updated_at: new Date().toISOString() }) }));
-    return Promise.all(jobs).catch(error => { window.dispatchEvent(new CustomEvent("finance-sync-error", { detail: error.message })); return null; });
+    try {
+      await Promise.all(jobs);
+      return clone(nextData);
+    } catch (error) {
+      memoryData = clone(previousData);
+      window.dispatchEvent(new CustomEvent("finance-sync-error", { detail: error.message }));
+      throw error;
+    }
   }
   async function loadStoredTables(tableMap) {
     return Promise.all(Object.entries(tableMap).map(async ([key, table]) => [key, await request(`/rest/v1/${table}?select=external_id,data&order=updated_at.desc`)]));

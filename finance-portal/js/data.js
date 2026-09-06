@@ -72,6 +72,15 @@
     if (settings?.[0]?.data) memoryData.settings = { ...emptyData.settings, ...settings[0].data };
     return clone(memoryData);
   }
+  async function refreshLive() {
+    const [rows, settings] = await Promise.all([
+      loadStoredTables({ ...dashboardTables, alerts: tables.alerts }),
+      request("/rest/v1/finance_settings?select=data&id=eq.default")
+    ]);
+    applyStoredTables(rows);
+    if (settings?.[0]?.data) memoryData.settings = { ...emptyData.settings, ...settings[0].data };
+    return clone(memoryData);
+  }
   async function hydrateSupplementary() {
     const [rows, customers, staff] = await Promise.all([
       loadStoredTables(supplementalTables),
@@ -113,5 +122,5 @@
     return { id: result.user.id, name: result.user.name || result.user.email.split("@")[0], email: result.user.email, phone: result.user.phone || "", role: result.user.role, accessToken: result.accessToken };
   }
   const money = value => new Intl.NumberFormat("en-KE", { style: "currency", currency: "KES", maximumFractionDigits: 0 }).format(Number(value || 0));
-  window.FinanceStore = { emptyData, readData, saveData, registerFinanceUser, financeAccountStatus, authenticateFinanceUser, hydrate, hydrateSupplementary, money };
+  window.FinanceStore = { emptyData, readData, saveData, registerFinanceUser, financeAccountStatus, authenticateFinanceUser, hydrate, refreshLive, hydrateSupplementary, money };
 })();

@@ -979,7 +979,7 @@ function AgentApp({ agent, onLogout }) {
   }, [screen]);
 
   const agentAlerts = useMemo(() => customers.flatMap(customer => [
-    ...(customer.payment !== "Paid" ? [{ id: `${customer.id}-payment`, type: "payment", icon: "wallet-outline", title: "Payment pending", message: `${customer.name} has no confirmed deposit.`, age: "now", customerName: customer.name }] : []),
+    ...(!customerPaymentComplete(customer) ? [{ id: `${customer.id}-payment`, type: "payment", icon: "wallet-outline", title: "Payment pending", message: `${customer.name} has no confirmed deposit.`, age: "now", customerName: customer.name }] : []),
     ...(customer.install !== "Complete" ? [{ id: `${customer.id}-install`, type: "install", icon: "radio-outline", title: "Install pending", message: `${customer.bike} tracker installation is not complete.`, age: "today", customerName: customer.name }] : []),
     ...(customer.kyc !== "Approved" ? [{ id: `${customer.id}-kyc`, type: "kyc", icon: "id-card-outline", title: "KYC review", message: `${customer.name} is waiting for admin KYC approval.`, age: "today", customerName: customer.name }] : [])
   ]).filter(alert => !deletedAlertIds.has(alert.id)).map(alert => ({ ...alert, unread: !readAlertIds.has(alert.id) })), [customers, deletedAlertIds, readAlertIds]);
@@ -1041,7 +1041,7 @@ function AgentApp({ agent, onLogout }) {
 
   useEffect(() => {
     refresh();
-    const assignmentSync = setInterval(() => refresh({ showSpinner: false }), 15_000);
+    const assignmentSync = setInterval(() => refresh({ showSpinner: false }), 5_000);
     if (Platform.OS === "android") {
       Notifications.setNotificationChannelAsync("agent", {
         name: "Jixels Agent Trackings",

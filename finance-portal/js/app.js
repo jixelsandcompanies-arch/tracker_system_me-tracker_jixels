@@ -9,7 +9,7 @@
   window.addEventListener("error", event => showFatalError(event.error || event.message));
   window.addEventListener("unhandledrejection", event => showFatalError(event.reason));
   try {
-  const { readData, saveData, registerFinanceUser, financeAccountStatus, authenticateFinanceUser, hydrate, hydrateSupplementary, money } = window.FinanceStore;
+  const { readData, saveData, registerFinanceUser, financeAccountStatus, authenticateFinanceUser, hydrate, refreshLive, hydrateSupplementary, money } = window.FinanceStore;
   const root = document.getElementById("root");
   let data = readData();
   let page = "dashboard";
@@ -22,6 +22,8 @@
   let online = navigator.onLine;
   let session = null;
   let commissionDialog = null;
+  let liveRefreshTimer = null;
+  let notificationsOpen = false;
 
   const icon = paths => `<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">${paths}</svg>`;
   const icons = {
@@ -239,8 +241,8 @@
 
   function paymentRecords(query = "") {
     const visible = data.payments.filter(payment => `${payment.id || ""} ${payment.account || ""} ${payment.customer || ""} ${payment.phone || ""}`.toLowerCase().includes(query.toLowerCase()));
-    const rows = visible.map(payment => `<tr><td><strong>${escapeHtml(payment.customer || "Unlinked")}</strong></td><td>${escapeHtml(payment.phone || "-")}<small>${escapeHtml(payment.receipt || payment.id || "No receipt")}</small></td><td>${escapeHtml(payment.product || payment.account || "-")}</td><td>${escapeHtml(payment.health || "-")}</td><td>${money(payment.overdue || 0)}</td><td>${money(payment.deposit || payment.credit || 0)}</td><td>${money(payment.paygoPayment || payment.amount || 0)}</td><td><strong>${money(payment.amount || 0)}</strong></td><td>${money(payment.dailyTarget || 0)}</td><td>${money(payment.balance || 0)}</td><td>${escapeHtml(payment.date || "-")}</td><td>${escapeHtml(payment.agent || "Unassigned")}<small>${escapeHtml(payment.agentCode || "No code")}</small></td><td>${status(payment.status || "Completed")}</td><td>${escapeHtml(payment.paygoAccount || payment.account || "-")}</td></tr>`).join("");
-    return `<div class="payment-scroll"><table class="payment-records-table"><thead><tr><th>Customer</th><th>Phone / Receipt</th><th>Product identifier</th><th>Health</th><th>Overdue</th><th>Deposit / Credit</th><th>Paygo Payment</th><th>Payment Amount</th><th>Daily Target</th><th>Balance</th><th>Date</th><th>Agent / Agent code</th><th>Status</th><th>Paygo Account</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+    const rows = visible.map(payment => `<tr><td><strong>${escapeHtml(payment.customer || "Unlinked")}</strong><small>${escapeHtml(payment.phone || "-")}</small><small>${escapeHtml(payment.email || "-")}</small></td><td>${escapeHtml(payment.product || "-")}<small>${escapeHtml(payment.tracker || "No tracker")}</small></td><td>${escapeHtml(payment.health || "Unknown")}</td><td>${escapeHtml(payment.paymentType || "Daily payment")}</td><td>${escapeHtml(payment.receipt || "Awaiting M-Pesa receipt")}</td><td><strong>${money(payment.amount || 0)}</strong></td><td>${money(payment.balance || 0)}</td><td>${escapeHtml(payment.date ? new Date(payment.date).toLocaleDateString() : "-")}</td><td>${escapeHtml(payment.agent || "Unassigned")}<small>${escapeHtml(payment.agentCode || "No code")}</small></td><td>${status(payment.status || "Confirmed")}</td></tr>`).join("");
+    return `<div class="payment-scroll"><table class="payment-records-table"><thead><tr><th>Customer contact</th><th>Product / tracker</th><th>Tracker health</th><th>Payment type</th><th>M-Pesa receipt</th><th>Amount</th><th>Balance</th><th>Date</th><th>Agent</th><th>Status</th></tr></thead><tbody>${rows}</tbody></table></div>`;
   }
 
   function paymentsPage() {
@@ -248,7 +250,8 @@
   }
 
   function reconciliationPage() {
-    return `<section class="reconciliation-workspace"><div class="reconcile-heading"><div><div class="reconcile-kicker"><i></i> Review activity</div><h2>Reconcile</h2><p>Provider receipt reconciliation is not configured for this workspace.</p></div></div><section class="card reconcile-panel">${empty("No reconciliation records", "No provider receipts have been imported.")}</section></section>`;
+    const rows = data.payments.filter(payment => payment.receipt).map(payment => `<tr><td>${escapeHtml(payment.receipt)}</td><td>${escapeHtml(payment.customer || "Unlinked")}</td><td>${escapeHtml(payment.paymentType || "Daily payment")}</td><td>${money(payment.amount || 0)}</td><td>${escapeHtml(payment.date ? new Date(payment.date).toLocaleString() : "-")}</td><td>${status("Reconciled")}</td></tr>`).join("");
+    return `<section class="reconciliation-workspace"><div class="reconcile-heading"><div><div class="reconcile-kicker"><i></i> Review activity</div><h2>Reconcile</h2><p>Confirmed M-Pesa receipts are reconciled against customer finance records.</p></div></div><section class="card reconcile-panel">${rows ? `<div class="table-wrap"><table><thead><tr><th>M-Pesa receipt</th><th>Customer</th><th>Payment type</th><th>Amount</th><th>Confirmed at</th><th>Status</th></tr></thead><tbody>${rows}</tbody></table></div>` : empty("No confirmed M-Pesa receipts", "Confirmed receipts will appear here automatically.")}</section></section>`;
   }
 
   function reportsPage() {
@@ -355,6 +358,14 @@
     bindEvents();
   }
 
+  function notificationMarkup() {
+    const alerts = (data.alerts || []).filter(alert => !alert.resolved).slice(0, 5);
+    const list = alerts.length
+      ? `<div class="notification-list">${alerts.map(alert => `<button class="notification-item unread" type="button" data-go="alerts"><span class="notification-dot"></span><span><strong>${escapeHtml(alert.title || "Finance alert")}</strong><small>${escapeHtml(alert.detail || "Requires review")}</small><time>${escapeHtml(alert.time || "Now")}</time></span></button>`).join("")}</div>`
+      : `<div class="notification-list"><div class="notification-item"><span class="notification-dot"></span><span><strong>No new finance alerts</strong><small>New payment and account events appear here.</small></span></div></div>`;
+    return `<button class="notification-button ${alerts.length ? "has-unread" : ""}" type="button" data-toggle-notifications aria-label="Finance notifications">${icons.alerts}</button>${notificationsOpen ? `<section class="notification-panel" aria-label="Finance notifications"><div class="notification-panel-heading"><strong>Notifications</strong><button type="button" data-go="alerts">Open alerts</button></div>${list}</section>` : ""}`;
+  }
+
   function prepareLoginForm() {
     const form = document.getElementById("login-form");
     if (!form) return;
@@ -446,6 +457,7 @@
         data = records;
         render();
       }).catch(error => console.error("Finance supplementary data loading failed", error));
+      if (!liveRefreshTimer) liveRefreshTimer = window.setInterval(refreshLiveWorkspace, 5_000);
     } catch (error) {
       console.error("Finance workspace loading failed", error);
       loading = false;
@@ -455,12 +467,25 @@
     }
   }
 
+  async function refreshLiveWorkspace() {
+    if (!session || loading || document.visibilityState !== "visible") return;
+    try {
+      const previous = JSON.stringify(data);
+      const refreshed = await refreshLive();
+      if (previous === JSON.stringify(refreshed)) return;
+      data = { ...data, ...refreshed };
+      render();
+    } catch (error) {
+      console.error("Finance live refresh failed", error);
+    }
+  }
+
   function bindOfflineEvents() {
     root.querySelector("[data-retry]")?.addEventListener("click", () => { online = navigator.onLine; render(); });
   }
 
   function openPage(nextPage) {
-    page = nextPage; sidebarOpen = false; if (window.innerWidth > 760) sidebarCollapsed = true; render();
+    page = nextPage; sidebarOpen = false; notificationsOpen = false; if (window.innerWidth > 760) sidebarCollapsed = true; render();
   }
 
   function updateAccountList() {
@@ -532,19 +557,23 @@
   }
 
   function bindEvents() {
+    const topbarActions = document.querySelector(".topbar-actions");
+    if (topbarActions) topbarActions.insertAdjacentHTML("afterbegin", notificationMarkup());
     document.querySelectorAll("[data-go]").forEach(button => button.addEventListener("click", () => openPage(button.dataset.go)));
+    document.querySelector("[data-toggle-notifications]")?.addEventListener("click", event => { event.stopPropagation(); notificationsOpen = !notificationsOpen; render(); });
     const menu = document.querySelector("[data-menu]");
     if (menu) menu.addEventListener("click", () => { sidebarOpen = true; render(); });
     document.querySelector("[data-close-menu]")?.addEventListener("click", () => { sidebarOpen = false; render(); });
     document.querySelector("[data-collapse]")?.addEventListener("click", () => { if (window.innerWidth <= 760) sidebarOpen = false; else sidebarCollapsed = !sidebarCollapsed; render(); });
     document.querySelector(".main")?.addEventListener("pointerdown", () => {
+      if (notificationsOpen) { notificationsOpen = false; render(); return; }
       if (window.innerWidth > 760 && !sidebarCollapsed) {
         sidebarCollapsed = true;
         document.querySelector(".app")?.classList.add("sidebar-collapsed");
         document.querySelector(".sidebar")?.classList.add("collapsed");
       }
     });
-    document.querySelector("[data-logout]")?.addEventListener("click", () => { authDraft = { name: "", phone: "", email: "", password: "", confirm: "" }; session = null; render(); });
+    document.querySelector("[data-logout]")?.addEventListener("click", () => { authDraft = { name: "", phone: "", email: "", password: "", confirm: "" }; session = null; if (liveRefreshTimer) { window.clearInterval(liveRefreshTimer); liveRefreshTimer = null; } render(); });
     document.querySelector("[data-export-report]")?.addEventListener("click", () => { void exportFinanceReport(); });
     document.querySelector(".commission-table")?.addEventListener("click", event => {
       const viewButton = event.target.closest("[data-view-agent]");

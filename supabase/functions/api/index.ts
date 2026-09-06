@@ -542,6 +542,22 @@ Deno.serve(async (request) => {
           receipt_number: completed ? String(items.MpesaReceiptNumber ?? "") || null : null,
         }).eq("id", promptedPayment.id);
         if (paymentUpdateError) console.error("Prompted deposit update failed", paymentUpdateError);
+        if (!completed) {
+          const { error: alertError } = await admin.from("finance_alerts").upsert({
+            external_id: `PAYMENT-FAILED-${promptedPayment.id}`,
+            data: {
+              id: `PAYMENT-FAILED-${promptedPayment.id}`,
+              title: "M-Pesa payment failed",
+              detail: "A prompted customer deposit was not completed.",
+              severity: "high",
+              status: "Open",
+              time: paidAt,
+              paymentId: promptedPayment.id,
+            },
+            updated_at: paidAt,
+          }, { onConflict: "external_id" });
+          if (alertError) console.error("Finance payment alert failed", alertError);
+        }
         if (completed && promptedPayment.customer_id && promptedPayment.product_id) {
           const { data: paidPayments, error: paidPaymentsError } = await admin
             .from("payments")
@@ -555,6 +571,16 @@ Deno.serve(async (request) => {
             const { error: applicationUpdateError } = await admin.from("screening_applications").update({ deposit_amount: depositedAmount, updated_at: paidAt })
               .eq("customer_id", promptedPayment.customer_id).eq("product_id", promptedPayment.product_id);
             if (applicationUpdateError) console.error("Prompted deposit application update failed", applicationUpdateError);
+            const { data: approvedApplication, error: approvedApplicationError } = await admin.from("screening_applications")
+              .select("id,status")
+              .eq("customer_id", promptedPayment.customer_id)
+              .eq("product_id", promptedPayment.product_id)
+              .maybeSingle();
+            if (approvedApplicationError) console.error("Finance payment materialization lookup failed", approvedApplicationError);
+            else if (approvedApplication?.status === "approved") {
+              const { error: financeRefreshError } = await admin.rpc("materialize_tracker_sale", { p_application_id: approvedApplication.id });
+              if (financeRefreshError) console.error("Finance payment materialization failed", financeRefreshError);
+            }
           }
         }
       }
@@ -706,6 +732,7 @@ Deno.serve(async (request) => {
       payer_phone: payerPhone,
       prompted_by: user.id,
       payment_reference: reference,
+      payment_type: "deposit",
     }).select("id,payment_reference,status").single();
     if (paymentError || !payment) return fail("The deposit prompt could not be recorded.", 503, "PAYMENT_RECORD_FAILED");
     const { error: applicationUpdateError } = await admin.from("screening_applications").update({
@@ -867,7 +894,7 @@ Deno.serve(async (request) => {
     const applicationId = String(body.applicationId ?? "").trim();
     const customerId = String(body.customerId ?? "").trim();
     if (!applicationId && !customerId) return fail("A screening application or customer is required.", 422, "INVALID_APPLICATION");
-    const applicationQuery = admin.from("screening_applications").select("id,customer_id,email,phone");
+    const applicationQuery = admin.from("screening_applications").select("id,customer_id,email,phone,product_id,tracker_identifier");
     const { data: application, error: applicationError } = applicationId
       ? await applicationQuery.eq("id", applicationId).maybeSingle()
       : await applicationQuery.eq("customer_id", customerId).order("created_at", { ascending: false }).limit(1).maybeSingle();
@@ -875,7 +902,14 @@ Deno.serve(async (request) => {
     const now = new Date().toISOString();
     const { error: approvalError } = await admin.from("screening_applications").update({ status: "approved", reviewed_by: user.id, reviewed_at: now, approved_at: now, updated_at: now }).eq("id", application.id);
     if (approvalError) return fail("The screening application could not be approved.", 400, "APPROVAL_FAILED");
-    if (application.customer_id) await admin.from("customers").update({ status: "active", updated_at: now }).eq("id", application.customer_id);
+    if (application.customer_id) {
+      const { data: tracker } = application.product_id
+        ? await admin.from("trackers").select("identifier").eq("bike_id", application.product_id).order("created_at", { ascending: true }).limit(1).maybeSingle()
+        : { data: null };
+      await admin.from("customers").update({ status: "active", tracker_number: application.tracker_identifier || tracker?.identifier || null, updated_at: now }).eq("id", application.customer_id);
+      const { error: financeRefreshError } = await admin.rpc("materialize_tracker_sale", { p_application_id: application.id });
+      if (financeRefreshError) console.error("Finance sale materialization failed", financeRefreshError);
+    }
     if (application.email) await admin.from("profiles").update({ account_status: "approved", updated_at: now }).eq("email", application.email.toLowerCase());
     const { data: mobileProfile, error: mobileProfileError } = await admin.from("profiles").select("id,email,role").eq("email", application.email?.toLowerCase() ?? "").maybeSingle();
     if (mobileProfileError) return fail("Customer approved, but mobile account status could not be checked.", 503, "CUSTOMER_APP_UNAVAILABLE");
@@ -899,6 +933,10 @@ Deno.serve(async (request) => {
         ? await admin.from("payments").select("customer_id,product_id,amount,status,receipt_number,payer_phone,payment_reference,created_at").in("customer_id", customerIds).in("status", ["processing", "paid", "completed", "confirmed"])
         : { data: [], error: null };
       if (paymentsError) return fail("Customer payment records could not be loaded.", 503, "PAYMENTS_UNAVAILABLE");
+      const { data: financeSettings, error: financeSettingsError } = await admin.from("finance_settings").select("data").eq("id", "default").maybeSingle();
+      if (financeSettingsError) return fail("Commission settings could not be loaded.", 503, "COMMISSION_SETTINGS_UNAVAILABLE");
+      const saleCommission = Number(financeSettings?.data?.saleCommission ?? 0);
+      const monthlyCustomerCommission = Number(financeSettings?.data?.monthlyCustomerCommission ?? 0);
       const paymentBySale = new Map<string, any[]>();
       for (const payment of payments ?? []) {
         const key = `${payment.customer_id}:${payment.product_id}`;
@@ -930,7 +968,7 @@ Deno.serve(async (request) => {
           payableAmount: Number(item.bikes?.payable_amount ?? 0),
           amount: amountPaid,
           balance: Math.max(0, Number(item.bikes?.payable_amount ?? 0) - amountPaid),
-          commission: 0,
+          commission: item.status === "approved" ? saleCommission + monthlyCustomerCommission : 0,
           receipt: confirmed[0]?.receipt_number ?? processing?.payment_reference ?? "",
           date: item.created_at?.slice(0, 10) ?? "",
           screeningStatus: item.status,

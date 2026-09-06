@@ -31,6 +31,7 @@ export default {
     },
     android: {
       package: "com.jixelstechnologies.agent",
+      versionCode: 2,
       softwareKeyboardLayoutMode: "resize",
       adaptiveIcon: {
         foregroundImage: "./assets/jixels-agent-icon.png",

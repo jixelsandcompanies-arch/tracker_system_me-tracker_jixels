@@ -189,7 +189,8 @@ begin
     'screening_applications', 'profiles', 'finance_accounts',
     'finance_payments', 'finance_alerts', 'finance_settings', 'alerts'
   ] loop
-    if not exists (
+    if to_regclass(format('public.%I', table_name)) is not null
+       and not exists (
       select 1
       from pg_publication_tables
       where pubname = 'supabase_realtime'

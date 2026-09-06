@@ -7,7 +7,9 @@ const statusLabel = (status) => status === "approved" ? "Approved" : status === 
 const applicationId = (application) => `APP-${application.id.replaceAll("-", "").slice(0, 10).toUpperCase()}`;
 
 function Document({ src, label, fallback = "Not submitted" }) {
-  return <article className="screening-document"><span>{label}</span>{src ? <img src={src} alt={label}/> : <div><UserRound size={24}/><small>{fallback}</small></div>}</article>;
+  const [failed, setFailed] = useState(false);
+  useEffect(() => setFailed(false), [src]);
+  return <article className="screening-document"><span>{label}</span>{src && !failed ? <img src={src} alt={label} onError={() => setFailed(true)}/> : <div><UserRound size={24}/><small>{failed ? "Image unavailable" : fallback}</small></div>}</article>;
 }
 
 function ReviewDrawer({ application, agents, onClose, onChanged }) {
@@ -22,11 +24,12 @@ function ReviewDrawer({ application, agents, onClose, onChanged }) {
     invokeApi(`/v1/admin/screening/${encodeURIComponent(application.id)}/documents`, null, "GET").then((result) => {
       if (!active) return;
       setDocuments(result.data?.documents || null);
+      if (result.error) setMessage(result.error.message);
       setDocumentsLoading(false);
-    });
+    }).catch(() => { if (active) setDocumentsLoading(false); });
     return () => { active = false; };
   }, [application.id]);
-  const documentUrl = (field) => documents?.[field] || (String(application[field] || "").startsWith("http") ? application[field] : "");
+  const documentUrl = (field) => documents?.[field] || "";
   const approve = async () => {
     setBusy(true); setMessage("");
     const result = await invokeApi("/v1/admin/screening/approve", { applicationId: application.id });

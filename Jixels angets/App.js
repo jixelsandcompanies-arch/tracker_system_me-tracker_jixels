@@ -57,7 +57,6 @@ const colors = {
 
 const initialCustomers = [];
 const trackerStock = [];
-const COMMISSION_RATE = 0.2;
 
 const screens = [
   { key: "dashboard", label: "Home", icon: "grid-outline" },
@@ -126,7 +125,7 @@ function customerBalance(customer) {
 }
 
 function customerPaymentComplete(customer) {
-  return ["Paid", "Deposit Paid"].includes(customer.payment);
+  return customer.payment === "Deposit Paid";
 }
 
 function customerSaleStatus(customer) {
@@ -575,8 +574,8 @@ function Customers({ customers, onDeposit, onRefresh, refreshing, darkMode = fal
       </View>
       <View style={styles.listStatus}>
         <Pill value={customer.payment} />
-        {!customerPaymentComplete(customer) && <Pressable onPress={() => onDeposit(customer.id)} style={styles.depositButton}><Text style={styles.depositButtonText}>Prompt deposit</Text></Pressable>}
-        <Text style={styles.smallMeta}>{customer.id}</Text>
+        {!customerPaymentComplete(customer) && <Pressable onPress={() => onDeposit(customer.id)} style={styles.depositButton}><Text style={styles.depositButtonText}>{customer.payment === "Processing" ? "Payment pending" : "Prompt payment"}</Text></Pressable>}
+        <Text style={styles.smallMeta}>{customer.customerCode || "Customer code pending"}</Text>
       </View>
     </View>)}
   </ScrollView>;
@@ -921,7 +920,7 @@ function DepositPrompt({ customer, visible, onCancel, onSubmit }) {
   const [phone, setPhone] = useState("");
 
   useEffect(() => {
-    setAmount(customer?.amount ? String(customer.amount) : "");
+    setAmount(customer?.requestedDepositAmount ? String(customer.requestedDepositAmount) : "");
     setPhone(customer?.payerPhone || customer?.phone || "");
   }, [customer]);
 
@@ -1071,22 +1070,6 @@ function AgentApp({ agent, onLogout }) {
     setCustomers(current => [customer, ...current]);
   }
 
-  function markPaid(id, paidAmount) {
-    setCustomers(current => current.map(customer => customer.id === id ? {
-      ...customer,
-      amount: paidAmount ?? customer.amount,
-      payment: Math.max(0, Number(customer.payableAmount || 0) - Number((paidAmount ?? customer.amount) || 0)) === 0 ? "Paid" : "Deposit Paid",
-      balance: Math.max(0, Number(customer.payableAmount || 0) - Number((paidAmount ?? customer.amount) || 0)),
-      saleStatus: customer.install === "Complete" ? "Complete" : "Pending",
-      commission: Math.max(customer.commission || 0, Math.round(((paidAmount ?? customer.amount) || 0) * COMMISSION_RATE)),
-      receipt: customer.receipt || `AG${Math.floor(100000 + Math.random() * 899999)}`
-    } : customer));
-    Notifications.scheduleNotificationAsync({
-      content: { title: "Deposit paid", body: "Customer deposit record updated.", sound: "default" },
-      trigger: null
-    }).catch(() => {});
-  }
-
   function requestDeposit(id) {
     const customer = customers.find(item => item.id === id);
     if (!customer || customerPaymentComplete(customer)) return;
@@ -1097,18 +1080,23 @@ function AgentApp({ agent, onLogout }) {
     const customer = customers.find(item => item.id === id);
     if (!customer) return;
     try {
-      await authApi.updatePaymentPhone(agent.accessToken, id, payerPhone);
+      const result = await authApi.promptDeposit(agent.accessToken, id, depositAmount, payerPhone);
+      const payment = result.payment || {};
+      setDepositCustomerId(null);
+      setCustomers(current => current.map(item => item.id === id ? {
+        ...item,
+        payment: "Processing",
+        requestedDepositAmount: depositAmount,
+        payerPhone,
+        receipt: payment.reference || item.receipt
+      } : item));
     } catch (error) {
-      return Alert.alert("Payment phone not saved", error instanceof Error ? error.message : "Try again before sending the payment prompt.");
+      return Alert.alert("Payment prompt unavailable", error instanceof Error ? error.message : "Try again before sending the payment prompt.");
     }
-    const receipt = `STK${Math.floor(100000 + Math.random() * 899999)}`;
-    setDepositCustomerId(null);
-    setCustomers(current => current.map(item => item.id === id ? { ...item, amount: depositAmount, payment: "Processing", balance: Number(item.payableAmount || 0), payerPhone, receipt } : item));
     Notifications.scheduleNotificationAsync({
       content: { title: "STK push sent", body: `${customer.name} has been prompted on ${payerPhone} to pay ${money(depositAmount)}.`, sound: "default" },
       trigger: null
     }).catch(() => {});
-    setTimeout(() => markPaid(id, depositAmount), 1800);
   }
 
   function markInstallComplete(id) {

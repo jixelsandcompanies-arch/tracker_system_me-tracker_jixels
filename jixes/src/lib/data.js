@@ -7,6 +7,7 @@ export const hasSupabaseConfig = Boolean(supabaseUrl && supabaseKey);
 export const supabase = hasSupabaseConfig ? createClient(supabaseUrl, supabaseKey, { auth: { persistSession: false, autoRefreshToken: false } }) : null;
 const allowedTables = new Set(["customers", "bikes", "trackers", "tracker_heartbeats", "payments", "finance_accounts", "screening_applications", "support_cases", "support_case_history", "alerts", "audit_logs", "chat_messages", "reports", "service_status", "workspace_settings", "profiles"]);
 export const DATA_BATCH_SIZE = 1000;
+let appliedSessionKey = null;
 const asError = (error, fallback) => error instanceof Error ? error : new Error(error?.message || fallback);
 function reportNetworkError(error) {
   if (typeof window !== "undefined" && /network|fetch|offline|load failed/i.test(error?.message || "")) window.dispatchEvent(new Event("jixels:data-offline"));
@@ -18,9 +19,11 @@ async function client() {
   // The shared login endpoint returns the full Supabase session. Applying it
   // before every query prevents the PostgREST client from falling back to the
   // anonymous key after a page refresh.
-  if (session?.accessToken && session?.refreshToken) {
+  const sessionKey = session?.accessToken && session?.refreshToken ? `${session.accessToken}:${session.refreshToken}` : null;
+  if (sessionKey && sessionKey !== appliedSessionKey) {
     const { error } = await supabase.auth.setSession({ access_token: session.accessToken, refresh_token: session.refreshToken });
     if (error) throw error;
+    appliedSessionKey = sessionKey;
   }
   if (session?.accessToken) supabase.realtime.setAuth(session.accessToken);
   return supabase;

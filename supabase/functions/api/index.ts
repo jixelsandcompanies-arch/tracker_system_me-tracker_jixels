@@ -74,6 +74,25 @@ function approvalCode() {
 const screeningDocumentBucket = "screening-documents";
 const screeningDocumentFields = ["customer_photo_url", "id_front_url", "id_back_url"] as const;
 
+function screeningDocumentPath(value: unknown) {
+  if (typeof value !== "string" || !value.trim() || value.startsWith("data:")) return null;
+  if (!/^https?:\/\//i.test(value)) return value.replace(/^\/+/, "");
+  try {
+    const path = new URL(value).pathname.split(`/${screeningDocumentBucket}/`)[1];
+    return path ? decodeURIComponent(path) : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function normalizeKenyanPhone(value: unknown) {
+  const digits = String(value ?? "").replace(/\D/g, "");
+  if (/^254\d{9}$/.test(digits)) return digits;
+  if (/^0\d{9}$/.test(digits)) return `254${digits.slice(1)}`;
+  if (/^7\d{8}$/.test(digits)) return `254${digits}`;
+  return null;
+}
+
 function decodeScreeningDocument(value: unknown) {
   if (typeof value !== "string") return null;
   const match = value.match(/^data:(image\/(?:jpeg|png));base64,([A-Za-z0-9+/=]+)$/);
@@ -377,7 +396,7 @@ async function portalSignIn(
 
   const { data: profile, error: profileError } = await admin
     .from("profiles")
-    .select("full_name,email,phone,role,account_status")
+    .select("full_name,email,phone,role,account_status,agent_code")
     .eq("id", data.user.id)
     .maybeSingle();
   if (profileError || !profile) {
@@ -402,7 +421,7 @@ async function portalSignIn(
     accessToken: data.session.access_token,
     refreshToken: data.session.refresh_token,
     expiresAt: new Date(data.session.expires_at! * 1000).toISOString(),
-    user: { id: data.user.id, email: data.user.email, name: profile.full_name, phone: profile.phone, role: profile.role, assignedVehicles },
+    user: { id: data.user.id, email: data.user.email, name: profile.full_name, phone: profile.phone, role: profile.role, agentCode: profile.agent_code, assignedVehicles },
   });
 }
 
@@ -505,7 +524,41 @@ Deno.serve(async (request) => {
   }
   if (route === "/v1/mpesa/stk/callback" && request.method === "POST") {
     const callback = body.Body?.stkCallback ?? {}; const items = Object.fromEntries((callback.CallbackMetadata?.Item ?? []).map((item: { Name: string; Value?: unknown }) => [item.Name, item.Value]));
-    await admin.from("daraja_transactions").upsert({ direction: "C2B", checkout_request_id: callback.CheckoutRequestID ?? null, transaction_id: items.MpesaReceiptNumber ?? null, phone: items.PhoneNumber ?? null, amount: Number(items.Amount ?? 0), status: Number(callback.ResultCode) === 0 ? "completed" : "failed", payload: body, updated_at: new Date().toISOString() }, { onConflict: "transaction_id" });
+    const completed = Number(callback.ResultCode) === 0;
+    const checkoutRequestId = String(callback.CheckoutRequestID ?? "");
+    await admin.from("daraja_transactions").upsert({ direction: "C2B", checkout_request_id: checkoutRequestId || null, transaction_id: items.MpesaReceiptNumber ?? null, phone: items.PhoneNumber ?? null, amount: Number(items.Amount ?? 0), status: completed ? "completed" : "failed", payload: body, updated_at: new Date().toISOString() }, { onConflict: "transaction_id" });
+    if (checkoutRequestId) {
+      const { data: promptedPayment, error: promptedPaymentError } = await admin
+        .from("payments")
+        .select("id,customer_id,product_id")
+        .eq("checkout_request_id", checkoutRequestId)
+        .maybeSingle();
+      if (promptedPaymentError) console.error("Prompted deposit lookup failed", promptedPaymentError);
+      if (promptedPayment) {
+        const paidAt = new Date().toISOString();
+        const { error: paymentUpdateError } = await admin.from("payments").update({
+          status: completed ? "paid" : "failed",
+          paid_at: completed ? paidAt : null,
+          receipt_number: completed ? String(items.MpesaReceiptNumber ?? "") || null : null,
+        }).eq("id", promptedPayment.id);
+        if (paymentUpdateError) console.error("Prompted deposit update failed", paymentUpdateError);
+        if (completed && promptedPayment.customer_id && promptedPayment.product_id) {
+          const { data: paidPayments, error: paidPaymentsError } = await admin
+            .from("payments")
+            .select("amount")
+            .eq("customer_id", promptedPayment.customer_id)
+            .eq("product_id", promptedPayment.product_id)
+            .in("status", ["paid", "completed", "confirmed"]);
+          if (paidPaymentsError) console.error("Prompted deposit total failed", paidPaymentsError);
+          else {
+            const depositedAmount = (paidPayments ?? []).reduce((total: number, payment: any) => total + Number(payment.amount ?? 0), 0);
+            const { error: applicationUpdateError } = await admin.from("screening_applications").update({ deposit_amount: depositedAmount, updated_at: paidAt })
+              .eq("customer_id", promptedPayment.customer_id).eq("product_id", promptedPayment.product_id);
+            if (applicationUpdateError) console.error("Prompted deposit application update failed", applicationUpdateError);
+          }
+        }
+      }
+    }
     return response({ ResultCode: 0, ResultDesc: "Accepted" });
   }
 
@@ -593,17 +646,17 @@ Deno.serve(async (request) => {
       .eq("id", applicationId)
       .maybeSingle();
     if (applicationError || !application) return fail("Screening application not found.", 404, "NOT_FOUND");
-    const documents: Record<string, string> = {};
-    for (const field of screeningDocumentFields) {
-      const path = application[field];
-      if (!path) continue;
-      const { data, error } = await admin.storage.from(screeningDocumentBucket).createSignedUrl(path, 300);
-      if (error) {
-        console.error("Screening document signing failed", error);
-        return fail("A customer document could not be opened.", 503, "DOCUMENT_UNAVAILABLE");
+    const signedDocuments = await Promise.all(screeningDocumentFields.map(async (field) => {
+      const path = screeningDocumentPath(application[field]);
+      if (!path) return [field, null] as const;
+      const { data, error } = await admin.storage.from(screeningDocumentBucket).createSignedUrl(path, 900);
+      if (error || !data?.signedUrl) {
+        console.error("Screening document signing failed", field, error);
+        return [field, null] as const;
       }
-      if (data?.signedUrl) documents[field] = data.signedUrl;
-    }
+      return [field, data.signedUrl] as const;
+    }));
+    const documents = Object.fromEntries(signedDocuments.filter((entry): entry is readonly [string, string] => Boolean(entry[1])));
     return response({ documents });
   }
 
@@ -624,6 +677,72 @@ Deno.serve(async (request) => {
       .maybeSingle();
     if (error || !application) return fail("Customer payment details could not be saved.", 404, "CUSTOMER_NOT_FOUND");
     return response({ customerId: application.customer_id, paymentPhone: application.payment_phone });
+  }
+
+  const depositPromptMatch = route.match(/^\/v1\/agent\/customers\/([^/]+)\/deposit-prompt$/);
+  if (depositPromptMatch && request.method === "POST") {
+    const { data: agentProfile, error: agentError } = await admin.from("profiles").select("role,account_status").eq("id", user.id).maybeSingle();
+    if (agentError || !agentProfile || !agentRoles.has(agentProfile.role)) return fail("This account does not have permission to request a customer payment.", 403, "PORTAL_ACCESS_DENIED");
+    if (!approvedStatuses.has(agentProfile.account_status)) return fail("Your agent account is awaiting administrator approval.", 403, "ACCOUNT_PENDING_APPROVAL");
+    const customerId = decodeURIComponent(depositPromptMatch[1]);
+    const amount = Number(body.amount);
+    const payerPhone = normalizeKenyanPhone(body.paymentPhone);
+    if (!Number.isFinite(amount) || amount <= 0 || !payerPhone) return fail("Enter a valid deposit amount and Kenyan payment phone number.", 422, "INVALID_PAYMENT");
+    const { data: application, error: applicationError } = await admin.from("screening_applications")
+      .select("id,customer_id,product_id,bikes(payable_amount)")
+      .eq("customer_id", customerId).eq("installer_agent_id", user.id).maybeSingle();
+    if (applicationError || !application?.customer_id || !application.product_id) return fail("Customer payment details could not be found.", 404, "CUSTOMER_NOT_FOUND");
+    const payableAmount = Number((application.bikes as any)?.payable_amount ?? 0);
+    if (payableAmount > 0 && amount > payableAmount) return fail("The deposit cannot be higher than the total payable amount.", 422, "INVALID_DEPOSIT");
+
+    const reference = `DEP-${crypto.randomUUID().replaceAll("-", "").slice(0, 16).toUpperCase()}`;
+    const now = new Date().toISOString();
+    const { data: payment, error: paymentError } = await admin.from("payments").insert({
+      customer_id: application.customer_id,
+      product_id: application.product_id,
+      amount,
+      currency: "KES",
+      status: "processing",
+      payer_phone: payerPhone,
+      prompted_by: user.id,
+      payment_reference: reference,
+    }).select("id,payment_reference,status").single();
+    if (paymentError || !payment) return fail("The deposit prompt could not be recorded.", 503, "PAYMENT_RECORD_FAILED");
+    const { error: applicationUpdateError } = await admin.from("screening_applications").update({
+      payment_phone: payerPhone,
+      requested_deposit_amount: amount,
+      updated_at: now,
+    }).eq("id", application.id);
+    if (applicationUpdateError) {
+      await admin.from("payments").delete().eq("id", payment.id);
+      return fail("The payment phone could not be saved.", 503, "PAYMENT_PHONE_SAVE_FAILED");
+    }
+
+    try {
+      const timestamp = new Date().toISOString().replace(/[-:TZ.]/g, "").slice(0, 14);
+      const result = await darajaPost("/mpesa/stkpush/v1/processrequest", {
+        BusinessShortCode: Deno.env.get("DARAJA_SHORTCODE"),
+        Password: stkPassword(timestamp),
+        Timestamp: timestamp,
+        TransactionType: "CustomerPayBillOnline",
+        Amount: amount,
+        PartyA: payerPhone,
+        PartyB: Deno.env.get("DARAJA_SHORTCODE"),
+        PhoneNumber: payerPhone,
+        CallBackURL: Deno.env.get("DARAJA_STK_CALLBACK_URL"),
+        AccountReference: reference,
+        TransactionDesc: "Jixels tracker deposit",
+      });
+      const checkoutRequestId = String(result.CheckoutRequestID ?? "");
+      if (!checkoutRequestId) throw new Error("M-Pesa did not return a checkout request ID.");
+      const { error: checkoutUpdateError } = await admin.from("payments").update({ checkout_request_id: checkoutRequestId }).eq("id", payment.id);
+      if (checkoutUpdateError) throw checkoutUpdateError;
+      await admin.from("daraja_transactions").insert({ direction: "C2B", checkout_request_id: checkoutRequestId, account_reference: reference, phone: payerPhone, amount, status: "submitted", payload: result });
+      return response({ payment: { id: payment.id, reference, status: "processing", checkoutRequestId } }, 202);
+    } catch (error) {
+      await admin.from("payments").update({ status: "failed" }).eq("id", payment.id);
+      return fail(error instanceof Error ? error.message : "M-Pesa request failed.", 502, "MPESA_ERROR");
+    }
   }
 
   const accountApprovalMatch = route.match(/^\/v1\/admin\/account-approvals\/([^/]+)$/);
@@ -773,9 +892,50 @@ Deno.serve(async (request) => {
     if (agentError || !agentProfile || !agentRoles.has(agentProfile.role)) return fail("This account does not have permission to onboard customers.", 403, "PORTAL_ACCESS_DENIED");
     if (!approvedStatuses.has(agentProfile.account_status)) return fail("Your agent account is awaiting administrator approval.", 403, "ACCOUNT_PENDING_APPROVAL");
     if (request.method === "GET") {
-      const { data: applications, error } = await admin.from("screening_applications").select("id,customer_id,full_name,email,phone,payment_phone,national_id,location,product_identifier,product_type,product_model,tracker_identifier,deposit_amount,status,created_at,customers(email,address),bikes(id,identifier,model,payable_amount,trackers(identifier))").eq("installer_agent_id", user.id).order("created_at", { ascending: false });
+      const { data: applications, error } = await admin.from("screening_applications").select("id,customer_id,full_name,email,phone,payment_phone,national_id,location,product_identifier,product_type,product_model,tracker_identifier,deposit_amount,requested_deposit_amount,status,created_at,customers(email,address,customer_code),bikes(id,identifier,model,payable_amount,trackers(identifier))").eq("installer_agent_id", user.id).order("created_at", { ascending: false });
       if (error) return fail("Agent customers could not be loaded.", 503, "CUSTOMERS_UNAVAILABLE");
-      return response({ customers: (applications ?? []).map((item: any) => ({ id: item.customer_id ?? item.id, vehicleId: item.bikes?.id ?? "", name: item.full_name, phone: item.phone ?? "", email: item.email ?? item.customers?.email ?? "", location: item.location ?? item.customers?.address ?? "", payerPhone: item.payment_phone ?? "", idNumber: item.national_id ?? "", bike: item.product_identifier ?? item.bikes?.identifier ?? "Pending assignment", vehicleModel: item.product_model ?? item.bikes?.model ?? "Assigned bike", tracker: item.tracker_identifier ?? item.bikes?.trackers?.[0]?.identifier ?? "Pending", kyc: item.status === "approved" ? "Approved" : "Submitted", install: "Pending", payment: Number(item.deposit_amount ?? 0) > 0 ? "Deposit Paid" : "Pending", payableAmount: Number(item.bikes?.payable_amount ?? 0), amount: Number(item.deposit_amount ?? 0), balance: Math.max(0, Number(item.bikes?.payable_amount ?? 0) - Number(item.deposit_amount ?? 0)), commission: item.status === "approved" ? 550 : 0, receipt: "", date: item.created_at?.slice(0, 10) ?? "", screeningStatus: item.status })) });
+      const customerIds = [...new Set((applications ?? []).map((item: any) => item.customer_id).filter(Boolean))];
+      const { data: payments, error: paymentsError } = customerIds.length
+        ? await admin.from("payments").select("customer_id,product_id,amount,status,receipt_number,payer_phone,payment_reference,created_at").in("customer_id", customerIds).in("status", ["processing", "paid", "completed", "confirmed"])
+        : { data: [], error: null };
+      if (paymentsError) return fail("Customer payment records could not be loaded.", 503, "PAYMENTS_UNAVAILABLE");
+      const paymentBySale = new Map<string, any[]>();
+      for (const payment of payments ?? []) {
+        const key = `${payment.customer_id}:${payment.product_id}`;
+        paymentBySale.set(key, [...(paymentBySale.get(key) ?? []), payment]);
+      }
+      return response({ customers: (applications ?? []).map((item: any) => {
+        const salePayments = paymentBySale.get(`${item.customer_id}:${item.bikes?.id ?? item.product_id}`) ?? [];
+        const confirmed = salePayments.filter((payment) => ["paid", "completed", "confirmed"].includes(String(payment.status).toLowerCase()));
+        const processing = salePayments.find((payment) => String(payment.status).toLowerCase() === "processing");
+        const amountPaid = confirmed.reduce((total, payment) => total + Number(payment.amount ?? 0), 0);
+        const requestedDepositAmount = Number(item.requested_deposit_amount ?? item.deposit_amount ?? 0);
+        return {
+          id: item.customer_id ?? item.id,
+          customerCode: item.customers?.customer_code ?? "",
+          vehicleId: item.bikes?.id ?? "",
+          name: item.full_name,
+          phone: item.phone ?? "",
+          email: item.email ?? item.customers?.email ?? "",
+          location: item.location ?? item.customers?.address ?? "",
+          payerPhone: processing?.payer_phone ?? confirmed[0]?.payer_phone ?? item.payment_phone ?? "",
+          idNumber: item.national_id ?? "",
+          bike: item.product_identifier ?? item.bikes?.identifier ?? "Pending assignment",
+          vehicleModel: item.product_model ?? item.bikes?.model ?? "Assigned bike",
+          tracker: item.tracker_identifier ?? item.bikes?.trackers?.[0]?.identifier ?? "Pending",
+          kyc: item.status === "approved" ? "Approved" : "Submitted",
+          install: "Pending",
+          payment: amountPaid > 0 ? "Deposit Paid" : processing ? "Processing" : "Pending",
+          requestedDepositAmount,
+          payableAmount: Number(item.bikes?.payable_amount ?? 0),
+          amount: amountPaid,
+          balance: Math.max(0, Number(item.bikes?.payable_amount ?? 0) - amountPaid),
+          commission: 0,
+          receipt: confirmed[0]?.receipt_number ?? processing?.payment_reference ?? "",
+          date: item.created_at?.slice(0, 10) ?? "",
+          screeningStatus: item.status,
+        };
+      }) });
     }
     const name = String(body.name ?? "").trim();
     const phone = String(body.phone ?? "").trim();
@@ -792,7 +952,7 @@ Deno.serve(async (request) => {
     if (bike.customer_id || ["pending", "sold"].includes(String(bike.status).toLowerCase())) return fail("This tracker is already linked to another customer sale.", 409, "TRACKER_ALREADY_SOLD");
     if (depositAmount > Number(bike.payable_amount ?? 0)) return fail("The deposit cannot be higher than the total payable amount.", 422, "INVALID_DEPOSIT");
     const now = new Date().toISOString();
-    const { data: customer, error: customerError } = await admin.from("customers").insert({ full_name: name, email, phone, national_id: nationalId, address: location || null, status: "pending", created_at: now, updated_at: now }).select("id").single();
+    const { data: customer, error: customerError } = await admin.from("customers").insert({ full_name: name, email, phone, national_id: nationalId, address: location || null, status: "pending", created_at: now, updated_at: now }).select("id,customer_code").single();
     if (customerError || !customer) return fail("Customer registration could not be saved.", 503, "CUSTOMER_REGISTRATION_FAILED");
 
     // This conditional update is the transaction boundary that prevents two
@@ -809,7 +969,7 @@ Deno.serve(async (request) => {
       return fail("The tracker was just assigned to another customer. Choose another assigned tracker.", 409, "TRACKER_ALREADY_SOLD");
     }
 
-    const { data: application, error: applicationError } = await admin.from("screening_applications").insert({ customer_id: customer.id, product_id: bike.id, installer_agent_id: user.id, full_name: name, email, phone, national_id: nationalId, location: location || null, product_identifier: bike.identifier, product_type: bike.product_type, product_model: bike.model, tracker_identifier: bike.trackers?.[0]?.identifier ?? bike.identifier, deposit_amount: depositAmount, status: "pending", created_at: now, updated_at: now }).select("id").single();
+    const { data: application, error: applicationError } = await admin.from("screening_applications").insert({ customer_id: customer.id, product_id: bike.id, installer_agent_id: user.id, full_name: name, email, phone, national_id: nationalId, location: location || null, product_identifier: bike.identifier, product_type: bike.product_type, product_model: bike.model, tracker_identifier: bike.trackers?.[0]?.identifier ?? bike.identifier, deposit_amount: 0, requested_deposit_amount: depositAmount, payment_phone: phone, status: "pending", created_at: now, updated_at: now }).select("id").single();
     if (applicationError || !application) {
       await admin.from("bikes").update({ customer_id: null, status: "available", updated_at: now }).eq("id", bike.id).eq("customer_id", customer.id);
       await admin.from("customers").delete().eq("id", customer.id);
@@ -834,7 +994,7 @@ Deno.serve(async (request) => {
       await admin.from("customers").delete().eq("id", customer.id);
       return fail("Customer images could not be saved. The registration was not submitted; capture the three images again.", 503, "SCREENING_DOCUMENTS_FAILED");
     }
-    return response({ customer: { id: customer.id, vehicleId: bike.id, name, phone, email, idNumber: nationalId, location: location || "Field location", bike: bike.identifier, vehicleModel: bike.model, tracker: bike.trackers?.[0]?.identifier ?? "Pending", kyc: "Submitted", install: "Pending", payment: depositAmount > 0 ? "Deposit Paid" : "Pending", payableAmount: Number(bike.payable_amount ?? 0), amount: depositAmount, balance: Math.max(0, Number(bike.payable_amount ?? 0) - Number(depositAmount)), commission: 0, receipt: "", date: now.slice(0, 10), screeningStatus: "pending" } }, 201);
+    return response({ customer: { id: customer.id, customerCode: customer.customer_code ?? "", vehicleId: bike.id, name, phone, email, idNumber: nationalId, location: location || "Field location", bike: bike.identifier, vehicleModel: bike.model, tracker: bike.trackers?.[0]?.identifier ?? "Pending", kyc: "Submitted", install: "Pending", payment: "Pending", requestedDepositAmount: depositAmount, payableAmount: Number(bike.payable_amount ?? 0), amount: 0, balance: Number(bike.payable_amount ?? 0), commission: 0, receipt: "", date: now.slice(0, 10), screeningStatus: "pending" } }, 201);
   }
 
   if (route === "/v1/agent/assignments" && request.method === "GET") {

@@ -19,6 +19,7 @@
     },
     "production": {
       "autoIncrement": true,
+      "android": { "buildType": "app-bundle" },
       "env": {
         "EXPO_PUBLIC_DEMO_MODE": "false",
         "EXPO_PUBLIC_JIXELS_API_URL": "https://tpzebfvhvjsezynqgdns.supabase.co/functions/v1/api",

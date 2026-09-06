@@ -1,0 +1,38 @@
+**/node_modules/
+.node_modules-*/
+**/.node_modules-*/
+.expo/
+**/.expo/
+.vscode/
+**/.vscode/
+.sidecar/
+**/.sidecar/
+dist/
+**/dist/
+android/
+ios/
+.tmp-*/
+**/.tmp-*/
+supabase/.temp/
+.env
+**/.env
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+customer-emulator-current.png
+finance-*.png
+eas-*-build.*.log
+.git-backup-*/
+**/.git-backup-*/
+.vercel/
+.env*
+Jixels angets/
+Jixels Techonoligies  tracking system/
+jixes/
+tracking finance/
+finance-portal/
+supabase/
+tests/
+scripts/

@@ -52,6 +52,17 @@ export default {
       "expo-notifications",
 
       [
+        "expo-build-properties",
+        {
+          android: {
+            enableMinifyInReleaseBuilds: true,
+            enableShrinkResourcesInReleaseBuilds: true,
+            enableBundleCompression: false,
+          },
+        },
+      ],
+
+      [
         "expo-image-picker",
         {
           photosPermission:

@@ -51,17 +51,21 @@ export default {
       "expo-notifications",
       "expo-font",
       [
+        "expo-build-properties",
+        {
+          android: {
+            enableMinifyInReleaseBuilds: true,
+            enableShrinkResourcesInReleaseBuilds: true,
+            enableBundleCompression: false
+          }
+        }
+      ],
+      [
         "expo-image-picker",
         {
           "photosPermission": "Allow Jixels Agent Trackings to attach customer KYC and installation photos.",
           "cameraPermission": "Allow Jixels Agent Trackings to capture customer KYC and installation photos.",
           "microphonePermission": false
-        }
-      ],
-      [
-        "expo-location",
-        {
-          "locationWhenInUsePermission": "Allow Jixels Agent Trackings to capture installation location for tracker setup."
         }
       ]
     ],

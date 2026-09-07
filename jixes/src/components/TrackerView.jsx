@@ -36,21 +36,22 @@ export default function TrackerView() {
     setMessage("");
   };
 
-  useEffect(() => {
-    load();
-    const unsubscribers = ["trackers", "bikes", "customers"].map((table) => subscribeToTable(table, load));
-    return () => unsubscribers.forEach((unsubscribe) => unsubscribe());
-  }, []);
-
-  const refreshLiveStatus = async () => {
+  const refreshLiveStatus = async ({ silent = false } = {}) => {
     setRefreshing(true);
     const result = await invokeApi("/v1/admin/trackers/refresh", {});
     setRefreshing(false);
     if (result.error) return setMessage(result.error.message);
     const unavailable = (result.data?.trackers ?? []).filter((tracker) => tracker.status === "not_configured" || tracker.status === "unreachable" || tracker.status === "invalid_report");
-    setMessage(unavailable.length ? `${unavailable.length} tracker(s) need attention. ${unavailable[0].message || "Check their Tramigo device IDs."}` : "Live Tramigo tracker status refreshed.");
+    if (!silent || unavailable.length) setMessage(unavailable.length ? `${unavailable.length} tracker(s) need attention. ${unavailable[0].message || "Check their Tramigo device IDs."}` : "Live Tramigo tracker status refreshed.");
     await load();
   };
+
+  useEffect(() => {
+    load();
+    refreshLiveStatus({ silent: true });
+    const unsubscribers = ["trackers", "bikes", "customers"].map((table) => subscribeToTable(table, load));
+    return () => unsubscribers.forEach((unsubscribe) => unsubscribe());
+  }, []);
 
   const trackerStatus = (tracker) =>
     tracker.operational_status === "immobilized"

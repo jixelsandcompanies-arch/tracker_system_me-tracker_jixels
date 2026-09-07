@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { ExternalLink, MapPin, Search, X } from "lucide-react";
-import { hasSupabaseConfig, listRecords, subscribeToTable } from "../lib/data";
+import { hasSupabaseConfig, invokeApi, listRecords, subscribeToTable } from "../lib/data";
 
 const capitalize = (value) =>
   value.replace(/^./, (letter) => letter.toUpperCase());
@@ -14,6 +14,7 @@ export default function TrackerView() {
   const [selected, setSelected] = useState(null);
   const [showAll, setShowAll] = useState(false);
   const [message, setMessage] = useState("");
+  const [refreshing, setRefreshing] = useState(false);
   const singleMapHost = useRef(null);
   const allMapHost = useRef(null);
   const singleMap = useRef(null);
@@ -40,6 +41,16 @@ export default function TrackerView() {
     const unsubscribers = ["trackers", "bikes", "customers"].map((table) => subscribeToTable(table, load));
     return () => unsubscribers.forEach((unsubscribe) => unsubscribe());
   }, []);
+
+  const refreshLiveStatus = async () => {
+    setRefreshing(true);
+    const result = await invokeApi("/v1/admin/trackers/refresh", {});
+    setRefreshing(false);
+    if (result.error) return setMessage(result.error.message);
+    const unavailable = (result.data?.trackers ?? []).filter((tracker) => tracker.status === "not_configured" || tracker.status === "unreachable" || tracker.status === "invalid_report");
+    setMessage(unavailable.length ? `${unavailable.length} tracker(s) need attention. ${unavailable[0].message || "Check their Tramigo device IDs."}` : "Live Tramigo tracker status refreshed.");
+    await load();
+  };
 
   const trackerStatus = (tracker) =>
     tracker.operational_status === "immobilized"
@@ -157,9 +168,7 @@ export default function TrackerView() {
             <h2>GPS Trackers</h2>
             <p>Monitor tracker health and open the latest live location.</p>
           </div>
-          <button className="button primary" onClick={() => setShowAll(true)}>
-            <MapPin size={15} /> View all trackers
-          </button>
+          <div className="button-row"><button className="button secondary" disabled={refreshing} onClick={refreshLiveStatus}>{refreshing ? "Refreshing…" : "Refresh live status"}</button><button className="button primary" onClick={() => setShowAll(true)}><MapPin size={15} /> View all trackers</button></div>
         </div>
         <div className="directory-filters tracker-filters">
           <label className="table-search">

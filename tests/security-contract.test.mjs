@@ -25,6 +25,8 @@ assert.match(payments, /stable payment idempotency key is required/, "M-Pesa mus
 assert.match(tracking, /socket\.on\("connect".*tracker:subscribe/, "tracker subscription must be connection-scoped");
 assert.match(apiFunction, /function tramigoLocation/, "the API must normalize Tramigo location reports");
 assert.match(apiFunction, /trackerStatus: tramigo\.trackerStatus/, "the API must pass Tramigo's explicit online state to the live-map client");
+assert.match(apiFunction, /route === "\/v1\/admin\/trackers\/refresh"/, "Operations must be able to refresh Tramigo tracker health server-side");
+assert.match(apiFunction, /tramigo_device_id/, "Operations tracker refresh must use the configured Tramigo device ID");
 assert.match(app, /verifyApprovalCode\(\{ email: applicant\.email, code \}\)/, "approval code verification must be bound to the registered customer email");
 assert.match(apiFunction, /customer_approval_codes/, "approval codes must be stored server-side");
 assert.match(apiFunction, /issueCustomerApprovalCode\(admin, account\.id, account\.email/, "account approval must issue the customer app approval code");

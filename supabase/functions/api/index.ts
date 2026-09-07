@@ -697,6 +697,42 @@ Deno.serve(async (request) => {
   const user = identity.user;
   if (!user) return fail("Authentication is required.", 401, "UNAUTHORIZED");
 
+  if (route === "/v1/admin/trackers/refresh" && request.method === "POST") {
+    const { data: manager, error: managerError } = await admin.from("profiles").select("role").eq("id", user.id).maybeSingle();
+    if (managerError || !manager || !adminRoles.has(manager.role)) return fail("Administrator permission is required to refresh trackers.", 403, "FORBIDDEN");
+    const requestedTrackerId = typeof body.trackerId === "string" ? body.trackerId : null;
+    let query = admin.from("trackers").select("id,identifier,tramigo_device_id");
+    if (requestedTrackerId) query = query.eq("id", requestedTrackerId);
+    const { data: trackers, error: trackersError } = await query;
+    if (trackersError) return fail("Tracker records could not be loaded.", 503, "TRACKERS_UNAVAILABLE");
+    const refreshed: Array<Record<string, unknown>> = [];
+    for (const tracker of trackers ?? []) {
+      const deviceId = String(tracker.tramigo_device_id ?? "").trim();
+      if (!deviceId) {
+        refreshed.push({ id: tracker.id, identifier: tracker.identifier, status: "not_configured", message: "Tramigo device ID is not configured." });
+        continue;
+      }
+      try {
+        const live = tramigoLocation(await tramigoRequest(`/api/reports/last_location/${encodeURIComponent(deviceId)}`));
+        if (!live) {
+          refreshed.push({ id: tracker.id, identifier: tracker.identifier, status: "invalid_report", message: "Tramigo returned no valid GPS position." });
+          continue;
+        }
+        const isOnline = live.trackerStatus === "online";
+        const { error: updateError } = await admin.from("trackers").update({
+          latitude: live.latitude, longitude: live.longitude, last_seen_at: live.recordedAt,
+          is_online: isOnline, operational_status: live.trackerStatus ?? "offline", updated_at: new Date().toISOString(),
+        }).eq("id", tracker.id);
+        if (updateError) throw updateError;
+        refreshed.push({ id: tracker.id, identifier: tracker.identifier, deviceId, status: live.trackerStatus ?? "unknown", recordedAt: live.recordedAt });
+      } catch (error) {
+        console.error("Tramigo tracker refresh failed", tracker.id, error);
+        refreshed.push({ id: tracker.id, identifier: tracker.identifier, deviceId, status: "unreachable", message: error instanceof Error ? error.message : "Tramigo request failed." });
+      }
+    }
+    return response({ trackers: refreshed });
+  }
+
   const screeningDocumentMatch = route.match(/^\/v1\/admin\/screening\/([^/]+)\/documents$/);
   if (screeningDocumentMatch && request.method === "GET") {
     const { data: manager, error: managerError } = await admin.from("profiles").select("role").eq("id", user.id).maybeSingle();

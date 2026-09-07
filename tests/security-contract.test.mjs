@@ -25,6 +25,8 @@ assert.match(payments, /stable payment idempotency key is required/, "M-Pesa mus
 assert.match(tracking, /socket\.on\("connect".*tracker:subscribe/, "tracker subscription must be connection-scoped");
 assert.match(apiFunction, /function tramigoLocation/, "the API must normalize Tramigo location reports");
 assert.match(apiFunction, /trackerStatus: tramigo\.trackerStatus/, "the API must pass Tramigo's explicit online state to the live-map client");
+assert.match(apiFunction, /\/api\/v2\/devices\?page=1&per_page=1000/, "Tramigo IMEIs must be resolved through the documented device catalogue before requesting locations");
+assert.match(apiFunction, /tramigoCloudDeviceId\(deviceId\)/, "Operations tracker refresh must use Tramigo's Cloud Device_ID");
 assert.match(apiFunction, /route === "\/v1\/admin\/trackers\/refresh"/, "Operations must be able to refresh Tramigo tracker health server-side");
 assert.match(apiFunction, /tramigo_device_id/, "Operations tracker refresh must use the configured Tramigo device ID");
 assert.match(apiFunction, /\^\\d\{10,20\}\$/, "Operations may use a numeric tracker identifier as the Tramigo device ID");

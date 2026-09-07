@@ -50,6 +50,34 @@ async function tramigoRequest(path: string, options: { method?: string; body?: u
   if (!result.ok) throw new Error(data.message ?? "Tramigo request failed.");
   return data;
 }
+function tramigoDeviceRecords(payload: any): any[] {
+  if (Array.isArray(payload)) return payload;
+  for (const key of ["devices", "data", "items", "results"]) {
+    if (Array.isArray(payload?.[key])) return payload[key];
+  }
+  return [];
+}
+function tramigoValue(record: any, names: string[]) {
+  for (const name of names) {
+    const value = record?.[name];
+    if (value != null && String(value).trim()) return String(value).trim();
+  }
+  return null;
+}
+// Tramigo report endpoints require the Cloud Device_ID. Operations may store
+// the tracker IMEI instead, so resolve it through the documented v2 devices
+// endpoint before requesting last_location.
+async function tramigoCloudDeviceId(identifier: string) {
+  const requested = String(identifier).trim();
+  const catalogue = await tramigoRequest("/api/v2/devices?page=1&per_page=1000");
+  const device = tramigoDeviceRecords(catalogue).find((item) => [
+    tramigoValue(item, ["Device_ID", "device_id", "ID", "id"]),
+    tramigoValue(item, ["IMEI", "imei", "Device_IMEI", "device_imei", "identifier"]),
+  ].includes(requested));
+  const cloudId = tramigoValue(device, ["Device_ID", "device_id", "ID", "id"]);
+  if (!cloudId) throw new Error(`Tramigo device ${requested} was not found in the configured account.`);
+  return cloudId;
+}
 function tramigoLocation(report: any) {
   const source = report?.main_reports?.[0] ?? report?.mainReports?.[0] ?? report;
   const latitude = Number(source?.Latitude ?? source?.latitude); const longitude = Number(source?.Longitude ?? source?.longitude);
@@ -718,7 +746,8 @@ Deno.serve(async (request) => {
         continue;
       }
       try {
-        const live = tramigoLocation(await tramigoRequest(`/api/reports/last_location/${encodeURIComponent(deviceId)}`));
+        const cloudDeviceId = await tramigoCloudDeviceId(deviceId);
+        const live = tramigoLocation(await tramigoRequest(`/api/reports/last_location/${encodeURIComponent(cloudDeviceId)}`));
         if (!live) {
           refreshed.push({ id: tracker.id, identifier: tracker.identifier, status: "invalid_report", message: "Tramigo returned no valid GPS position." });
           continue;
@@ -734,7 +763,7 @@ Deno.serve(async (request) => {
           is_online: isOnline, operational_status: operationalStatus, updated_at: new Date().toISOString(),
         }).eq("id", tracker.id);
         if (updateError) throw updateError;
-        refreshed.push({ id: tracker.id, identifier: tracker.identifier, deviceId, status: operationalStatus, recordedAt: live.recordedAt });
+        refreshed.push({ id: tracker.id, identifier: tracker.identifier, deviceId, cloudDeviceId, status: operationalStatus, recordedAt: live.recordedAt });
       } catch (error) {
         console.error("Tramigo tracker refresh failed", tracker.id, error);
         refreshed.push({ id: tracker.id, identifier: tracker.identifier, deviceId, status: "unreachable", message: error instanceof Error ? error.message : "Tramigo request failed." });
@@ -1300,7 +1329,8 @@ Deno.serve(async (request) => {
     let location = null;
     if (vehicle.tracker_imei && Deno.env.get("TRAMIGO_USERNAME")) {
       try {
-        const tramigo = tramigoLocation(await tramigoRequest(`/api/reports/last_location/${encodeURIComponent(vehicle.tracker_imei)}`));
+        const cloudDeviceId = await tramigoCloudDeviceId(vehicle.tracker_imei);
+        const tramigo = tramigoLocation(await tramigoRequest(`/api/reports/last_location/${encodeURIComponent(cloudDeviceId)}`));
         if (tramigo) { await admin.from("tracker_locations").insert({ vehicle_id: vehicleId, latitude: tramigo.latitude, longitude: tramigo.longitude, speed_kph: tramigo.speedKph, recorded_at: tramigo.recordedAt }); location = { latitude: tramigo.latitude, longitude: tramigo.longitude, speedKph: tramigo.speedKph, recordedAt: tramigo.recordedAt, trackerStatus: tramigo.trackerStatus }; }
       } catch (_) { /* fall back to the last synced location */ }
     }

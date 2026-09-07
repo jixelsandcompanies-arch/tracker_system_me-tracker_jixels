@@ -718,13 +718,18 @@ Deno.serve(async (request) => {
           refreshed.push({ id: tracker.id, identifier: tracker.identifier, status: "invalid_report", message: "Tramigo returned no valid GPS position." });
           continue;
         }
-        const isOnline = live.trackerStatus === "online";
+        // Some Tramigo last-location responses omit an explicit connection
+        // flag. In that case, a recent valid report is the correct fallback;
+        // explicit Tramigo status always remains authoritative.
+        const reportAge = Date.now() - new Date(live.recordedAt).getTime();
+        const isOnline = live.trackerStatus === "online" || (live.trackerStatus == null && Number.isFinite(reportAge) && reportAge <= 10 * 60_000);
+        const operationalStatus = live.trackerStatus ?? (isOnline ? "online" : "offline");
         const { error: updateError } = await admin.from("trackers").update({
           latitude: live.latitude, longitude: live.longitude, last_seen_at: live.recordedAt,
-          is_online: isOnline, operational_status: live.trackerStatus ?? "offline", updated_at: new Date().toISOString(),
+          is_online: isOnline, operational_status: operationalStatus, updated_at: new Date().toISOString(),
         }).eq("id", tracker.id);
         if (updateError) throw updateError;
-        refreshed.push({ id: tracker.id, identifier: tracker.identifier, deviceId, status: live.trackerStatus ?? "unknown", recordedAt: live.recordedAt });
+        refreshed.push({ id: tracker.id, identifier: tracker.identifier, deviceId, status: operationalStatus, recordedAt: live.recordedAt });
       } catch (error) {
         console.error("Tramigo tracker refresh failed", tracker.id, error);
         refreshed.push({ id: tracker.id, identifier: tracker.identifier, deviceId, status: "unreachable", message: error instanceof Error ? error.message : "Tramigo request failed." });

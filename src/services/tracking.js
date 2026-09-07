@@ -1,6 +1,7 @@
 import { io } from "socket.io-client";
 import { requireApiUrl } from "../config";
 import { apiRequest } from "./api";
+import { normalizeProviderTrackerStatus } from "../utils/trackerStatus.mjs";
 
 const request = (path, token) => apiRequest(path, { token });
 
@@ -25,7 +26,11 @@ function normalizeLocation(location) {
 
 function normalizeMotorcycle(payload) {
   const motorcycle = payload?.motorcycle ?? payload;
-  return motorcycle ? { ...motorcycle, location: normalizeLocation(motorcycle.location ?? motorcycle.lastLocation) } : motorcycle;
+  if (!motorcycle) return motorcycle;
+  const rawLocation = motorcycle.location ?? motorcycle.lastLocation;
+  const location = normalizeLocation(rawLocation);
+  const trackerStatus = normalizeProviderTrackerStatus(motorcycle) ?? normalizeProviderTrackerStatus(rawLocation);
+  return { ...motorcycle, trackerStatus, location: location ? { ...location, trackerStatus: trackerStatus ?? location.trackerStatus } : location };
 }
 
 export const trackingApi = {

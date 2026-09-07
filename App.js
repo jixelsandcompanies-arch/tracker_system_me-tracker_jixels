@@ -21,6 +21,7 @@ import { newIdempotencyKey, paymentsApi } from "./src/services/payments";
 import { dedupeById, isStrongPassword, isValidEmail, isValidOtp, normalizeEmail, normalizeKenyanMpesaPhone, upsertById } from "./src/utils/validation.mjs";
 import { customerApi } from "./src/services/customer";
 import { trackingApi } from "./src/services/tracking";
+import { trackerState } from "./src/utils/trackerStatus.mjs";
 
 Notifications.setNotificationHandler({
   handleNotification: async () => ({ shouldPlaySound: true, shouldSetBadge: true, shouldShowBanner: true, shouldShowList: true }),
@@ -92,11 +93,6 @@ const menu = [
   { key: "alerts", label: "Alerts", icon: "notifications-outline" },
   { key: "settings", label: "Settings", icon: "settings-outline" },
 ];
-
-function trackerState(recordedAt) {
-  const age = Date.now() - new Date(recordedAt).getTime();
-  return age > OFFLINE_MS ? "offline" : age > STALE_MS ? "stale" : "online";
-}
 
 function relativeTime(value, now) {
   const seconds = Math.max(0, Math.floor((now - new Date(value).getTime()) / 1000));
@@ -593,7 +589,7 @@ function TrackingScreen({ selectedBike, onSelectBike, accessToken }) {
     return () => { active = false; };
   }, []);
   const location = bike?.location ?? { latitude: 0, longitude: 0 };
-  const status = trackerState(bike?.location?.recordedAt ?? new Date(0).toISOString());
+  const status = trackerState({ providerStatus: bike?.trackerStatus ?? bike?.location?.trackerStatus, recordedAt: bike?.location?.recordedAt, staleMs: STALE_MS, offlineMs: OFFLINE_MS });
   const gpsAccuracy = Number.isFinite(Number(bike?.location?.accuracyMeters)) ? Math.round(Number(bike.location.accuracyMeters)) : null;
   const gpsQuality = gpsAccuracy == null ? "Unavailable" : gpsAccuracy <= 5 ? "Excellent" : gpsAccuracy <= 10 ? "Good" : gpsAccuracy <= 25 ? "Fair" : "Poor";
   const gpsQualityColor = gpsAccuracy == null ? colors.gray : gpsAccuracy <= 10 ? colors.green : gpsAccuracy <= 25 ? colors.orange : "#DC3B2A";

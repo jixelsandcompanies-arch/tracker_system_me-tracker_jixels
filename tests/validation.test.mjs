@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { dedupeById, isStrongPassword, isValidEmail, isValidOtp, normalizeEmail, normalizeKenyanMpesaPhone, upsertById } from "../src/utils/validation.mjs";
+import { normalizeProviderTrackerStatus, trackerState } from "../src/utils/trackerStatus.mjs";
 
 const tests = [];
 const test = (name, run) => tests.push({ name, run });
@@ -37,6 +38,15 @@ test("stable IDs prevent duplicate production records", () => {
   assert.equal(updated.length, 1);
   assert.equal(updated[0].status, "Confirmed");
   assert.equal(dedupeById([{ id: "a" }, { id: "a" }, { id: "b" }]).length, 2);
+});
+
+test("Tramigo active status takes precedence over an old position timestamp", () => {
+  const oldPosition = "2020-01-01T00:00:00.000Z";
+  assert.equal(normalizeProviderTrackerStatus({ deviceStatus: "Active" }), "online");
+  assert.equal(normalizeProviderTrackerStatus({ isOnline: false }), "offline");
+  assert.equal(trackerState({ providerStatus: "online", recordedAt: oldPosition }), "online");
+  assert.equal(trackerState({ providerStatus: "offline", recordedAt: new Date().toISOString() }), "offline");
+  assert.equal(trackerState({ recordedAt: oldPosition }), "offline");
 });
 
 for (const { name, run } of tests) {

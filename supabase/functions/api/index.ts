@@ -528,6 +528,8 @@ async function financeAccountStatus(admin: ReturnType<typeof createClient>, url:
 }
 
 Deno.serve(async (request) => {
+  const requestPath = new URL(request.url).pathname;
+  try {
   if (request.method === "OPTIONS") return new Response(null, { headers: cors });
   const url = new URL(request.url);
   const routeIndex = url.pathname.indexOf("/v1/");
@@ -1312,4 +1314,10 @@ Deno.serve(async (request) => {
     return response({ points: locations ?? [] });
   }
   return fail("Endpoint not implemented yet.", 501, "NOT_IMPLEMENTED");
+  } catch (error) {
+    // Never let an unexpected Edge Function exception become an opaque 500.
+    // The path is logged without credentials or request data for diagnosis.
+    console.error("Unhandled API request error", requestPath, error);
+    return fail("The tracker service encountered a server error. Refresh once more, then contact support with the request time.", 503, "API_UNEXPECTED_ERROR");
+  }
 });

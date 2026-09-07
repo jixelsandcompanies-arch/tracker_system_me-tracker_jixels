@@ -29,6 +29,7 @@ assert.match(apiFunction, /route === "\/v1\/admin\/trackers\/refresh"/, "Operati
 assert.match(apiFunction, /tramigo_device_id/, "Operations tracker refresh must use the configured Tramigo device ID");
 assert.match(apiFunction, /\^\\d\{10,20\}\$/, "Operations may use a numeric tracker identifier as the Tramigo device ID");
 assert.match(apiFunction, /reportAge.*10 \* 60_000/s, "Operations must fall back to a recent Tramigo report when no explicit device state is supplied");
+assert.match(apiFunction, /Unhandled API request error/, "unexpected API errors must be logged instead of returning an opaque server error");
 assert.match(app, /verifyApprovalCode\(\{ email: applicant\.email, code \}\)/, "approval code verification must be bound to the registered customer email");
 assert.match(apiFunction, /customer_approval_codes/, "approval codes must be stored server-side");
 assert.match(apiFunction, /issueCustomerApprovalCode\(admin, account\.id, account\.email/, "account approval must issue the customer app approval code");

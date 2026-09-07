@@ -26,12 +26,15 @@ assert.match(tracking, /socket\.on\("connect".*tracker:subscribe/, "tracker subs
 assert.match(apiFunction, /function tramigoLocation/, "the API must normalize Tramigo location reports");
 assert.match(apiFunction, /trackerStatus: tramigo\.trackerStatus/, "the API must pass Tramigo's explicit online state to the live-map client");
 assert.match(apiFunction, /\/api\/v2\/devices\?page=1&per_page=1000/, "Tramigo IMEIs must be resolved through the documented device catalogue before requesting locations");
-assert.match(apiFunction, /tramigoCloudDeviceId\(deviceId\)/, "Operations tracker refresh must use Tramigo's Cloud Device_ID");
+assert.match(apiFunction, /tramigoCloudDeviceId\(deviceId, deviceCatalogue, providerSession\)/, "Operations tracker refresh must use Tramigo's Cloud Device_ID");
 assert.match(apiFunction, /route === "\/v1\/admin\/trackers\/refresh"/, "Operations must be able to refresh Tramigo tracker health server-side");
 assert.match(apiFunction, /tramigo_device_id/, "Operations tracker refresh must use the configured Tramigo device ID");
 assert.match(apiFunction, /\^\\d\{10,20\}\$/, "Operations may use a numeric tracker identifier as the Tramigo device ID");
 assert.match(apiFunction, /reportAge.*10 \* 60_000/s, "Operations must fall back to a recent Tramigo report when no explicit device state is supplied");
 assert.match(apiFunction, /Unhandled API request error/, "unexpected API errors must be logged instead of returning an opaque server error");
+assert.match(apiFunction, /claim_tracker_refresh/, "live tracker refreshes must have server-side concurrency protection");
+assert.match(apiFunction, /TRACKER_BATCH_TOO_LARGE/, "tracker refreshes must have a bounded batch size");
+assert.match(apiFunction, /async function tramigoSession/, "a fleet refresh must reuse one Tramigo provider session");
 assert.match(app, /verifyApprovalCode\(\{ email: applicant\.email, code \}\)/, "approval code verification must be bound to the registered customer email");
 assert.match(apiFunction, /customer_approval_codes/, "approval codes must be stored server-side");
 assert.match(apiFunction, /issueCustomerApprovalCode\(admin, account\.id, account\.email/, "account approval must issue the customer app approval code");

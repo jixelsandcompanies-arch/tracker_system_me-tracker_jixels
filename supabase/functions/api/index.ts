@@ -29,7 +29,8 @@ function stkPassword(timestamp: string) {
 function tramigoPath(template: string, deviceId: string) {
   return template.replace(/\{(?:deviceId|imei|tracker_imei)\}|:deviceId/g, encodeURIComponent(deviceId));
 }
-async function tramigoRequest(path: string, options: { method?: string; body?: unknown } = {}) {
+type TramigoSession = { base: string; token: string };
+async function tramigoSession(): Promise<TramigoSession> {
   const base = (Deno.env.get("TRAMIGO_API_BASE_URL") ?? Deno.env.get("TRAMIGO_API_URL") ?? "https://api.tracking.tramigocloud.com").replace(/\/$/, "");
   const username = Deno.env.get("TRAMIGO_USERNAME"); const password = Deno.env.get("TRAMIGO_PASSWORD");
   if (!username || !password) throw new Error("Tramigo credentials are not configured.");
@@ -41,10 +42,16 @@ async function tramigoRequest(path: string, options: { method?: string; body?: u
   const session = await login.json().catch(() => ({}));
   const token = session.access_token ?? session.accessToken ?? session.token;
   if (!login.ok || !token) throw new Error("Tramigo authentication failed.");
+  return { base, token: String(token) };
+}
+async function tramigoRequest(path: string, options: { method?: string; body?: unknown } = {}, existingSession?: TramigoSession) {
+  // Reuse one short-lived Tramigo login for a fleet refresh. This avoids one
+  // provider login per tracker while keeping credentials server-side only.
+  const session = existingSession ?? await tramigoSession();
   const resultController = new AbortController(); const resultTimer = setTimeout(() => resultController.abort(), 10_000);
   let result: Response;
   try {
-    result = await fetch(`${base}${path}`, { method: options.method ?? "GET", headers: { Authorization: `Bearer ${token}`, Accept: "application/json", ...(options.body == null ? {} : { "Content-Type": "application/json" }) }, body: options.body == null ? undefined : JSON.stringify(options.body), signal: resultController.signal });
+    result = await fetch(`${session.base}${path}`, { method: options.method ?? "GET", headers: { Authorization: `Bearer ${session.token}`, Accept: "application/json", ...(options.body == null ? {} : { "Content-Type": "application/json" }) }, body: options.body == null ? undefined : JSON.stringify(options.body), signal: resultController.signal });
   } finally { clearTimeout(resultTimer); }
   const data = await result.json().catch(() => ({}));
   if (!result.ok) throw new Error(data.message ?? "Tramigo request failed.");
@@ -67,10 +74,10 @@ function tramigoValue(record: any, names: string[]) {
 // Tramigo report endpoints require the Cloud Device_ID. Operations may store
 // the tracker IMEI instead, so resolve it through the documented v2 devices
 // endpoint before requesting last_location.
-async function tramigoCloudDeviceId(identifier: string) {
+async function tramigoCloudDeviceId(identifier: string, catalogue?: any, session?: TramigoSession) {
   const requested = String(identifier).trim();
-  const catalogue = await tramigoRequest("/api/v2/devices?page=1&per_page=1000");
-  const device = tramigoDeviceRecords(catalogue).find((item) => [
+  const deviceList = catalogue ?? await tramigoRequest("/api/v2/devices?page=1&per_page=1000", {}, session);
+  const device = tramigoDeviceRecords(deviceList).find((item) => [
     tramigoValue(item, ["Device_ID", "device_id", "ID", "id"]),
     tramigoValue(item, ["IMEI", "imei", "Device_IMEI", "device_imei", "identifier"]),
   ].includes(requested));
@@ -730,11 +737,21 @@ Deno.serve(async (request) => {
   if (route === "/v1/admin/trackers/refresh" && request.method === "POST") {
     const { data: manager, error: managerError } = await admin.from("profiles").select("role").eq("id", user.id).maybeSingle();
     if (managerError || !manager || !adminRoles.has(manager.role)) return fail("Administrator permission is required to refresh trackers.", 403, "FORBIDDEN");
+    const { data: claimed, error: claimError } = await admin.rpc("claim_tracker_refresh", { p_lock_key: "operations-tracker-refresh", p_seconds: 20 });
+    if (claimError) return fail("Tracker refresh protection is unavailable.", 503, "REFRESH_GUARD_UNAVAILABLE");
+    if (!claimed) return fail("A live tracker refresh is already running. Try again in a few seconds.", 429, "REFRESH_IN_PROGRESS");
     const requestedTrackerId = typeof body.trackerId === "string" ? body.trackerId : null;
     let query = admin.from("trackers").select("id,identifier,tramigo_device_id");
     if (requestedTrackerId) query = query.eq("id", requestedTrackerId);
     const { data: trackers, error: trackersError } = await query;
     if (trackersError) return fail("Tracker records could not be loaded.", 503, "TRACKERS_UNAVAILABLE");
+    if ((trackers?.length ?? 0) > 100) return fail("Refresh no more than 100 trackers at once.", 422, "TRACKER_BATCH_TOO_LARGE");
+    let providerSession: TramigoSession; let deviceCatalogue: any;
+    try {
+      providerSession = await tramigoSession();
+      deviceCatalogue = await tramigoRequest("/api/v2/devices?page=1&per_page=1000", {}, providerSession);
+    }
+    catch (error) { return fail(error instanceof Error ? error.message : "Tramigo device catalogue is unavailable.", 502, "TRAMIGO_CATALOGUE_UNAVAILABLE"); }
     const refreshed: Array<Record<string, unknown>> = [];
     for (const tracker of trackers ?? []) {
       // A numeric Operations identifier can be the Tramigo device ID itself.
@@ -746,8 +763,8 @@ Deno.serve(async (request) => {
         continue;
       }
       try {
-        const cloudDeviceId = await tramigoCloudDeviceId(deviceId);
-        const live = tramigoLocation(await tramigoRequest(`/api/reports/last_location/${encodeURIComponent(cloudDeviceId)}`));
+        const cloudDeviceId = await tramigoCloudDeviceId(deviceId, deviceCatalogue, providerSession);
+        const live = tramigoLocation(await tramigoRequest(`/api/reports/last_location/${encodeURIComponent(cloudDeviceId)}`, {}, providerSession));
         if (!live) {
           refreshed.push({ id: tracker.id, identifier: tracker.identifier, status: "invalid_report", message: "Tramigo returned no valid GPS position." });
           continue;
@@ -1329,8 +1346,10 @@ Deno.serve(async (request) => {
     let location = null;
     if (vehicle.tracker_imei && Deno.env.get("TRAMIGO_USERNAME")) {
       try {
-        const cloudDeviceId = await tramigoCloudDeviceId(vehicle.tracker_imei);
-        const tramigo = tramigoLocation(await tramigoRequest(`/api/reports/last_location/${encodeURIComponent(cloudDeviceId)}`));
+        const providerSession = await tramigoSession();
+        const deviceCatalogue = await tramigoRequest("/api/v2/devices?page=1&per_page=1000", {}, providerSession);
+        const cloudDeviceId = await tramigoCloudDeviceId(vehicle.tracker_imei, deviceCatalogue, providerSession);
+        const tramigo = tramigoLocation(await tramigoRequest(`/api/reports/last_location/${encodeURIComponent(cloudDeviceId)}`, {}, providerSession));
         if (tramigo) { await admin.from("tracker_locations").insert({ vehicle_id: vehicleId, latitude: tramigo.latitude, longitude: tramigo.longitude, speed_kph: tramigo.speedKph, recorded_at: tramigo.recordedAt }); location = { latitude: tramigo.latitude, longitude: tramigo.longitude, speedKph: tramigo.speedKph, recordedAt: tramigo.recordedAt, trackerStatus: tramigo.trackerStatus }; }
       } catch (_) { /* fall back to the last synced location */ }
     }

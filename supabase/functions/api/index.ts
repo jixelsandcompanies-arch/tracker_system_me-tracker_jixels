@@ -118,6 +118,20 @@ async function removeScreeningDocuments(admin: ReturnType<typeof createClient>, 
   if (paths.length) await admin.storage.from(screeningDocumentBucket).remove(paths);
 }
 
+async function signedScreeningDocuments(admin: ReturnType<typeof createClient>, application: Record<string, unknown>) {
+  const signedDocuments = await Promise.all(screeningDocumentFields.map(async (field) => {
+    const path = screeningDocumentPath(application[field]);
+    if (!path) return [field, null] as const;
+    const { data, error } = await admin.storage.from(screeningDocumentBucket).createSignedUrl(path, 900);
+    if (error || !data?.signedUrl) {
+      console.error("Screening document signing failed", field, error);
+      return [field, null] as const;
+    }
+    return [field, data.signedUrl] as const;
+  }));
+  return Object.fromEntries(signedDocuments.filter((entry): entry is readonly [string, string] => Boolean(entry[1])));
+}
+
 async function sendCustomerApprovalPush(
   admin: ReturnType<typeof createClient>,
   customerIds: string[],
@@ -133,8 +147,8 @@ async function sendCustomerApprovalPush(
   const messages = tokens.map(({ expo_push_token }) => ({
     to: expo_push_token,
     sound: "default",
-    title: "Jixels account approved",
-    body: `Your account is approved. Your secure approval code is ${code}.`,
+    title: "Your account has been approved",
+    body: `Your verification code is ${code}.`,
     data: { type: "customer_approval", customerId: customerIds[0], code, email },
   }));
   try {
@@ -683,18 +697,99 @@ Deno.serve(async (request) => {
       .eq("id", applicationId)
       .maybeSingle();
     if (applicationError || !application) return fail("Screening application not found.", 404, "NOT_FOUND");
-    const signedDocuments = await Promise.all(screeningDocumentFields.map(async (field) => {
-      const path = screeningDocumentPath(application[field]);
-      if (!path) return [field, null] as const;
-      const { data, error } = await admin.storage.from(screeningDocumentBucket).createSignedUrl(path, 900);
-      if (error || !data?.signedUrl) {
-        console.error("Screening document signing failed", field, error);
-        return [field, null] as const;
+    return response({ documents: await signedScreeningDocuments(admin, application) });
+  }
+
+  const screeningUpdateMatch = route.match(/^\/v1\/admin\/screening\/([^/]+)$/);
+  if (screeningUpdateMatch && request.method === "PATCH") {
+    const { data: manager, error: managerError } = await admin.from("profiles").select("role").eq("id", user.id).maybeSingle();
+    if (managerError || !manager || !adminRoles.has(manager.role)) return fail("Administrator permission is required to update customer records.", 403, "FORBIDDEN");
+    const applicationId = decodeURIComponent(screeningUpdateMatch[1]);
+    const { data: application, error: applicationError } = await admin
+      .from("screening_applications")
+      .select("id,customer_id,full_name,email,phone,national_id,location,product_type,product_model,customer_photo_url,id_front_url,id_back_url")
+      .eq("id", applicationId)
+      .maybeSingle();
+    if (applicationError || !application) return fail("Screening application not found.", 404, "NOT_FOUND");
+
+    const text = (key: string, current: unknown) => body[key] === undefined ? current : String(body[key] ?? "").trim() || null;
+    const email = text("email", application.email);
+    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email))) return fail("Enter a valid customer email address.", 422, "INVALID_EMAIL");
+    const now = new Date().toISOString();
+    const applicationChanges: Record<string, unknown> = {
+      full_name: text("fullName", application.full_name),
+      phone: text("phone", application.phone),
+      email,
+      national_id: text("nationalId", application.national_id),
+      location: text("location", application.location),
+      product_type: text("productType", application.product_type),
+      product_model: text("productModel", application.product_model),
+      updated_at: now,
+    };
+    const uploadedPaths: string[] = [];
+    const replacedPaths: string[] = [];
+    let screeningUpdated = false;
+    const imageFields = [
+      ["customerPhoto", "customer_photo_url", "customer-photo"],
+      ["idFrontPhoto", "id_front_url", "national-id-front"],
+      ["idBackPhoto", "id_back_url", "national-id-back"],
+    ] as const;
+    try {
+      for (const [bodyField, column, label] of imageFields) {
+        if (!body[bodyField]) continue;
+        const path = await uploadScreeningDocument(admin, application.id, label, body[bodyField]);
+        uploadedPaths.push(path);
+        applicationChanges[column] = path;
+        const prior = screeningDocumentPath(application[column]);
+        if (prior) replacedPaths.push(prior);
       }
-      return [field, data.signedUrl] as const;
-    }));
-    const documents = Object.fromEntries(signedDocuments.filter((entry): entry is readonly [string, string] => Boolean(entry[1])));
-    return response({ documents });
+      const { data: updated, error: updateError } = await admin.from("screening_applications")
+        .update(applicationChanges).eq("id", application.id).select().single();
+      if (updateError || !updated) throw updateError ?? new Error("Customer record could not be updated.");
+      screeningUpdated = true;
+      if (application.customer_id) {
+        const { error: customerError } = await admin.from("customers").update({
+          full_name: applicationChanges.full_name,
+          phone: applicationChanges.phone,
+          email: applicationChanges.email,
+          national_id: applicationChanges.national_id,
+          address: applicationChanges.location,
+          updated_at: now,
+        }).eq("id", application.customer_id);
+        if (customerError) throw customerError;
+      }
+      try {
+        await removeScreeningDocuments(admin, replacedPaths);
+      } catch (cleanupError) {
+        console.error("Previous screening document cleanup failed", cleanupError);
+      }
+      let documents: Record<string, string> = {};
+      try {
+        documents = await signedScreeningDocuments(admin, updated);
+      } catch (signingError) {
+        console.error("Updated screening document signing failed", signingError);
+      }
+      return response({ application: updated, documents });
+    } catch (error) {
+      if (screeningUpdated) {
+        const { error: rollbackError } = await admin.from("screening_applications").update({
+          full_name: application.full_name,
+          phone: application.phone,
+          email: application.email,
+          national_id: application.national_id,
+          location: application.location,
+          product_type: application.product_type,
+          product_model: application.product_model,
+          customer_photo_url: application.customer_photo_url,
+          id_front_url: application.id_front_url,
+          id_back_url: application.id_back_url,
+        }).eq("id", application.id);
+        if (rollbackError) console.error("Customer update rollback failed", rollbackError);
+      }
+      await removeScreeningDocuments(admin, uploadedPaths);
+      console.error("Customer update failed", error);
+      return fail("Customer updates could not be saved. No image was replaced.", 503, "CUSTOMER_UPDATE_FAILED");
+    }
   }
 
   const paymentPhoneMatch = route.match(/^\/v1\/agent\/customers\/([^/]+)\/payment-phone$/);

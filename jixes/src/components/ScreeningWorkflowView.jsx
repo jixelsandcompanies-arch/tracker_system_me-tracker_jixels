@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Search, ShieldCheck, Trash2, UserRound, X } from "lucide-react";
+import { Pencil, Search, ShieldCheck, Trash2, UserRound, X } from "lucide-react";
 import { hasSupabaseConfig, invokeApi, listRecords, subscribeToTable, updateRecord } from "../lib/data";
 import { recordAudit } from "../lib/security";
 
@@ -12,11 +12,36 @@ function Document({ src, label, fallback = "Not submitted" }) {
   return <article className="screening-document"><span>{label}</span>{src && !failed ? <img src={src} alt={label} onError={() => setFailed(true)}/> : <div><UserRound size={24}/><small>{failed ? "Image unavailable" : fallback}</small></div>}</article>;
 }
 
+function readImage(file) {
+  return new Promise((resolve, reject) => {
+    if (!file) return resolve("");
+    if (!/^image\/(jpeg|png)$/.test(file.type) || file.size > 5 * 1024 * 1024) return reject(new Error("Choose a JPEG or PNG image smaller than 5 MB."));
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("The selected image could not be read."));
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.readAsDataURL(file);
+  });
+}
+
+function CustomerUpdateForm({ application, onCancel, onSave, saving }) {
+  const [form, setForm] = useState(() => ({ fullName: application.full_name || "", phone: application.phone || "", email: application.email || "", nationalId: application.national_id || "", location: application.location || "", productType: application.product_type || "", productModel: application.product_model || "" }));
+  const [images, setImages] = useState({});
+  const [message, setMessage] = useState("");
+  const set = (key, value) => setForm((current) => ({ ...current, [key]: value }));
+  const selectImage = async (key, file) => {
+    try { const image = await readImage(file); setImages((current) => ({ ...current, [key]: image })); setMessage(""); }
+    catch (error) { setMessage(error.message); }
+  };
+  const submit = (event) => { event.preventDefault(); onSave({ ...form, ...images }); };
+  return <form className="customer-record-form screening-update-form" onSubmit={submit}><h3>Update customer</h3><div className="customer-form-grid"><label>Customer name<input value={form.fullName} onChange={(event) => set("fullName", event.target.value)} required /></label><label>Phone<input value={form.phone} onChange={(event) => set("phone", event.target.value)} required /></label><label>Email<input type="email" value={form.email} onChange={(event) => set("email", event.target.value)} required /></label><label>National ID<input value={form.nationalId} onChange={(event) => set("nationalId", event.target.value)} required /></label><label>Location<input value={form.location} onChange={(event) => set("location", event.target.value)} /></label><label>Product type<input value={form.productType} onChange={(event) => set("productType", event.target.value)} /></label><label>Product model<input value={form.productModel} onChange={(event) => set("productModel", event.target.value)} /></label></div><div className="screening-image-inputs"><label>Customer photo<input type="file" accept="image/jpeg,image/png" onChange={(event) => selectImage("customerPhoto", event.target.files?.[0])} /></label><label>National ID front<input type="file" accept="image/jpeg,image/png" onChange={(event) => selectImage("idFrontPhoto", event.target.files?.[0])} /></label><label>National ID back<input type="file" accept="image/jpeg,image/png" onChange={(event) => selectImage("idBackPhoto", event.target.files?.[0])} /></label></div>{message && <div className="import-message">{message}</div>}<div className="detail-actions"><button className="button secondary" type="button" onClick={onCancel}>Cancel</button><button className="button primary" disabled={saving}>{saving ? "Saving…" : "Save customer"}</button></div></form>;
+}
+
 export function ScreeningReviewDrawer({ application, agents, onClose, onChanged }) {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [documents, setDocuments] = useState(null);
   const [documentsLoading, setDocumentsLoading] = useState(true);
+  const [editing, setEditing] = useState(false);
   const agent = agents.find((item) => item.id === application.installer_agent_id)?.full_name || "Unassigned";
   useEffect(() => {
     let active = true;
@@ -30,6 +55,16 @@ export function ScreeningReviewDrawer({ application, agents, onClose, onChanged 
     return () => { active = false; };
   }, [application.id]);
   const documentUrl = (field) => documents?.[field] || "";
+  const updateCustomer = async (payload) => {
+    setBusy(true); setMessage("");
+    const result = await invokeApi(`/v1/admin/screening/${encodeURIComponent(application.id)}`, payload, "PATCH");
+    setBusy(false);
+    if (result.error) return setMessage(result.error.message);
+    setDocuments(result.data?.documents || documents);
+    setEditing(false);
+    setMessage("Customer record updated.");
+    onChanged();
+  };
   const approve = async () => {
     setBusy(true); setMessage("");
     const result = await invokeApi("/v1/admin/screening/approve", { applicationId: application.id });
@@ -55,7 +90,7 @@ export function ScreeningReviewDrawer({ application, agents, onClose, onChanged 
     if (result.error) return setMessage(result.error.message);
     onChanged(); onClose();
   };
-  return <div className="detail-backdrop" onClick={onClose}><aside className="detail-drawer screening-review-drawer" onClick={(event) => event.stopPropagation()}><div className="detail-heading"><div><span className="eyebrow">CUSTOMER SCREENING</span><h2>{application.full_name}</h2><p>{applicationId(application)} · {statusLabel(application.status)}</p></div><button className="icon-btn" onClick={onClose}><X size={18}/></button></div><div className="screening-documents"><Document src={documentUrl("customer_photo_url")} label="Customer photo" fallback={documentsLoading ? "Loading image" : "Not submitted"}/><Document src={documentUrl("id_front_url")} label="National ID — front" fallback={documentsLoading ? "Loading image" : "Not submitted"}/><Document src={documentUrl("id_back_url")} label="National ID — back" fallback={documentsLoading ? "Loading image" : "Not submitted"}/></div><section className="screening-review-details"><h3>Customer details</h3><dl><div><dt>National ID</dt><dd>{application.national_id || "—"}</dd></div><div><dt>Phone</dt><dd>{application.phone || "—"}</dd></div><div><dt>Email</dt><dd>{application.email || "—"}</dd></div><div><dt>Location</dt><dd>{application.location || "—"}</dd></div></dl><h3>Product and account</h3><dl><div><dt>Product identity</dt><dd>{application.product_type || "Product"} | {application.product_identifier || "—"}</dd></div><div><dt>Make / Model</dt><dd>{application.product_model || "—"}</dd></div><div><dt>Agent</dt><dd>{agent}</dd></div><div><dt>Deposit</dt><dd>KES {Number(application.deposit_amount || 0).toLocaleString()}</dd></div><div><dt>Tracker / IMEI</dt><dd>{application.tracker_identifier || "—"}</dd></div><div><dt>Service plan</dt><dd>KES {Number(application.monthly_service_amount || 700).toLocaleString()} per month</dd></div></dl></section>{message && <div className="import-message">{message}</div>}<div className="detail-actions"><button className="button secondary" onClick={onClose}>Close</button>{application.status !== "suspended" && application.status !== "declined" && <button className="button secondary" disabled={busy} onClick={suspend}>Suspend</button>}{application.status === "approved" ? <button className="button danger" disabled={busy} onClick={remove}><Trash2 size={15}/>{busy ? "Deleting…" : "Delete customer"}</button> : <button className="button primary" disabled={busy} onClick={approve}><ShieldCheck size={15}/>{busy ? "Processing…" : "Approve customer"}</button>}</div></aside></div>;
+  return <div className="detail-backdrop" onClick={onClose}><aside className="detail-drawer screening-review-drawer" onClick={(event) => event.stopPropagation()}><div className="detail-heading"><div><span className="eyebrow">CUSTOMER SCREENING</span><h2>{application.full_name}</h2><p>{applicationId(application)} · {statusLabel(application.status)}</p></div><button className="icon-btn" onClick={onClose}><X size={18}/></button></div><div className="screening-documents"><Document src={documentUrl("customer_photo_url")} label="Customer photo" fallback={documentsLoading ? "Loading image" : "Not submitted"}/><Document src={documentUrl("id_front_url")} label="National ID — front" fallback={documentsLoading ? "Loading image" : "Not submitted"}/><Document src={documentUrl("id_back_url")} label="National ID — back" fallback={documentsLoading ? "Loading image" : "Not submitted"}/></div><section className="screening-review-details"><h3>Customer details</h3><dl><div><dt>National ID</dt><dd>{application.national_id || "—"}</dd></div><div><dt>Phone</dt><dd>{application.phone || "—"}</dd></div><div><dt>Email</dt><dd>{application.email || "—"}</dd></div><div><dt>Location</dt><dd>{application.location || "—"}</dd></div></dl><h3>Product and account</h3><dl><div><dt>Product identity</dt><dd>{application.product_type || "Product"} | {application.product_identifier || "—"}</dd></div><div><dt>Make / Model</dt><dd>{application.product_model || "—"}</dd></div><div><dt>Agent</dt><dd>{agent}</dd></div><div><dt>Deposit</dt><dd>KES {Number(application.deposit_amount || 0).toLocaleString()}</dd></div><div><dt>Tracker / IMEI</dt><dd>{application.tracker_identifier || "—"}</dd></div><div><dt>Service plan</dt><dd>KES {Number(application.monthly_service_amount || 700).toLocaleString()} per month</dd></div></dl></section>{editing ? <CustomerUpdateForm application={application} onCancel={() => setEditing(false)} onSave={updateCustomer} saving={busy}/> : <>{message && <div className="import-message">{message}</div>}<div className="detail-actions"><button className="button primary" disabled={busy} onClick={() => setEditing(true)}><Pencil size={15}/>Update customer</button>{application.status !== "suspended" && application.status !== "declined" && <button className="button secondary" disabled={busy} onClick={suspend}>Suspend</button>}{application.status === "approved" ? <button className="button danger" disabled={busy} onClick={remove}><Trash2 size={15}/>{busy ? "Deleting…" : "Delete customer"}</button> : <button className="button primary" disabled={busy} onClick={approve}><ShieldCheck size={15}/>{busy ? "Processing…" : "Approve customer"}</button>}</div></>}</aside></div>;
 }
 
 const ReviewDrawer = ScreeningReviewDrawer;

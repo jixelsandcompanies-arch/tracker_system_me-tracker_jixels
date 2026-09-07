@@ -54,7 +54,18 @@ function tramigoLocation(report: any) {
   const source = report?.main_reports?.[0] ?? report?.mainReports?.[0] ?? report;
   const latitude = Number(source?.Latitude ?? source?.latitude); const longitude = Number(source?.Longitude ?? source?.longitude);
   if (!Number.isFinite(latitude) || !Number.isFinite(longitude) || latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180) return null;
-  return { latitude, longitude, speedKph: Number(source?.Speed ?? source?.speed ?? 0), recordedAt: source?.DateTimeActual ?? report?.DateTimeActual ?? new Date().toISOString() };
+  // Tramigo status can be returned at either report level. Do not infer an
+  // active device from an old report; return its explicit connection state so
+  // the mobile app can use it ahead of timestamp ageing.
+  const statusValue = report?.IsOnline ?? report?.isOnline ?? report?.Online ?? report?.online
+    ?? report?.DeviceStatus ?? report?.deviceStatus ?? report?.ConnectionStatus ?? report?.connectionStatus
+    ?? source?.IsOnline ?? source?.isOnline ?? source?.Online ?? source?.online
+    ?? source?.DeviceStatus ?? source?.deviceStatus ?? source?.ConnectionStatus ?? source?.connectionStatus;
+  const normalizedStatus = typeof statusValue === "boolean" ? (statusValue ? "online" : "offline") : String(statusValue ?? "").trim().toLowerCase();
+  const trackerStatus = ["online", "active", "connected", "available", "true", "1"].includes(normalizedStatus)
+    ? "online"
+    : ["offline", "inactive", "disconnected", "unavailable", "false", "0"].includes(normalizedStatus) ? "offline" : null;
+  return { latitude, longitude, speedKph: Number(source?.Speed ?? source?.speed ?? 0), recordedAt: source?.DateTimeActual ?? report?.DateTimeActual ?? new Date().toISOString(), trackerStatus };
 }
 
 function isExpoPushToken(value: unknown) {
@@ -1244,7 +1255,7 @@ Deno.serve(async (request) => {
     if (vehicle.tracker_imei && Deno.env.get("TRAMIGO_USERNAME")) {
       try {
         const tramigo = tramigoLocation(await tramigoRequest(`/api/reports/last_location/${encodeURIComponent(vehicle.tracker_imei)}`));
-        if (tramigo) { await admin.from("tracker_locations").insert({ vehicle_id: vehicleId, latitude: tramigo.latitude, longitude: tramigo.longitude, speed_kph: tramigo.speedKph, recorded_at: tramigo.recordedAt }); location = { latitude: tramigo.latitude, longitude: tramigo.longitude, speedKph: tramigo.speedKph, recordedAt: tramigo.recordedAt }; }
+        if (tramigo) { await admin.from("tracker_locations").insert({ vehicle_id: vehicleId, latitude: tramigo.latitude, longitude: tramigo.longitude, speed_kph: tramigo.speedKph, recorded_at: tramigo.recordedAt }); location = { latitude: tramigo.latitude, longitude: tramigo.longitude, speedKph: tramigo.speedKph, recordedAt: tramigo.recordedAt, trackerStatus: tramigo.trackerStatus }; }
       } catch (_) { /* fall back to the last synced location */ }
     }
     if (!location) { const { data: saved } = await client.from("tracker_locations").select("latitude,longitude,speed_kph,heading,accuracy_meters,recorded_at").eq("vehicle_id", vehicleId).order("recorded_at", { ascending: false }).limit(1).maybeSingle(); location = saved && { latitude: saved.latitude, longitude: saved.longitude, speedKph: saved.speed_kph, heading: saved.heading, accuracyMeters: saved.accuracy_meters, recordedAt: saved.recorded_at }; }

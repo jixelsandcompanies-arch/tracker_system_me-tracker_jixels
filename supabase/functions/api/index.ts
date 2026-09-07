@@ -707,7 +707,10 @@ Deno.serve(async (request) => {
     if (trackersError) return fail("Tracker records could not be loaded.", 503, "TRACKERS_UNAVAILABLE");
     const refreshed: Array<Record<string, unknown>> = [];
     for (const tracker of trackers ?? []) {
-      const deviceId = String(tracker.tramigo_device_id ?? "").trim();
+      // A numeric Operations identifier can be the Tramigo device ID itself.
+      // Internal codes such as T-003GHBS are deliberately not sent to Tramigo.
+      const storedDeviceId = String(tracker.tramigo_device_id ?? "").trim();
+      const deviceId = storedDeviceId || (/^\d{10,20}$/.test(String(tracker.identifier ?? "").trim()) ? String(tracker.identifier).trim() : "");
       if (!deviceId) {
         refreshed.push({ id: tracker.id, identifier: tracker.identifier, status: "not_configured", message: "Tramigo device ID is not configured." });
         continue;

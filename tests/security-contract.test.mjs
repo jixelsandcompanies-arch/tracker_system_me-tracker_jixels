@@ -14,6 +14,8 @@ const agentAuth = read("Jixels angets/src/services/auth.js");
 const agentApp = read("Jixels angets/App.js");
 const agentEas = JSON.parse(read("Jixels angets/eas.json"));
 const eas = JSON.parse(read("eas.json"));
+const adminVercelConfig = read("jixes/vercel.json");
+const adminIndex = read("jixes/index.html");
 
 assert.match(config, /\^https:/, "production transport must enforce HTTPS");
 assert.equal(eas.build.production.env.EXPO_PUBLIC_DEMO_MODE, "false", "production must disable demo mode");
@@ -47,6 +49,8 @@ assert.match(app, /setPhase\("approval-notice"\)/, "a received approval notifica
 assert.match(app, /getLastNotificationResponseAsync/, "tapping an approval notification from a closed app must restore the in-app code screen");
 assert.match(apiFunction, /async function signedScreeningDocuments/, "the admin must receive signed document image URLs");
 assert.match(apiFunction, /screeningUpdateMatch/, "the admin must be able to update customer details and identity images");
+assert.match(adminVercelConfig, /img-src[^\"]+https:\/\/\*\.supabase\.co/, "production CSP must permit authorized Supabase Storage identity images");
+assert.match(adminIndex, /img-src[^\"]+https:\/\/\*\.supabase\.co/, "the portal CSP fallback must permit authorized Supabase Storage identity images");
 
 const reportAction = app.match(/const action = \{[^;]+reportType: "payments"[^;]+\};/)?.[0] ?? "";
 assert.ok(reportAction, "payment report request must exist");

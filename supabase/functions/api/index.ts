@@ -1286,7 +1286,7 @@ Deno.serve(async (request) => {
   if (route === "/v1/customer/overview" && request.method === "GET") {
     const [{ data: profile, error: profileError }, { data: vehicles, error: vehiclesError }] = await Promise.all([
       client.from("profiles").select("full_name,phone,avatar_url").single(),
-      client.from("vehicles").select("id,registration,model,vehicle_type,monitoring_armed,immobilized"),
+      admin.from("vehicles").select("id,registration,model,vehicle_type,monitoring_armed,immobilized").eq("owner_id", user.id),
     ]);
     if (profileError || !profile) return fail("This customer account is no longer available.", 404, "ACCOUNT_NOT_FOUND");
     if (vehiclesError) return fail("Customer vehicles could not be loaded.", 503, "CUSTOMER_RECORDS_UNAVAILABLE");
@@ -1296,7 +1296,7 @@ Deno.serve(async (request) => {
     const idempotencyKey = request.headers.get("Idempotency-Key")?.trim(); const amount = Number(body.amount); const phone = String(body.phone ?? "").replace(/\D/g, "");
     if (!idempotencyKey || !Number.isFinite(amount) || amount <= 0 || !/^254\d{9}$/.test(phone)) return fail("Valid amount, Kenyan phone number, and Idempotency-Key are required.", 422, "INVALID_PAYMENT");
     const { data: existing } = await client.from("payment_requests").select("id,status").eq("idempotency_key", idempotencyKey).maybeSingle(); if (existing) return response(existing);
-    const { data: vehicle } = await client.from("vehicles").select("id").eq("id", body.vehicleId).single(); if (!vehicle) return fail("Vehicle not found.", 404, "NOT_FOUND");
+    const { data: vehicle } = await admin.from("vehicles").select("id").eq("id", body.vehicleId).eq("owner_id", user.id).single(); if (!vehicle) return fail("Vehicle not found.", 404, "NOT_FOUND");
     const { data: payment, error } = await client.from("payment_requests").insert({ owner_id: user.id, vehicle_id: vehicle.id, idempotency_key: idempotencyKey, amount, phone, status: "processing" }).select("id,status").single(); if (error) return fail(error.message, 400);
     try { const timestamp = new Date().toISOString().replace(/[-:TZ.]/g, "").slice(0, 14); const result = await darajaPost("/mpesa/stkpush/v1/processrequest", { BusinessShortCode: Deno.env.get("DARAJA_SHORTCODE"), Password: stkPassword(timestamp), Timestamp: timestamp, TransactionType: "CustomerPayBillOnline", Amount: amount, PartyA: phone, PartyB: Deno.env.get("DARAJA_SHORTCODE"), PhoneNumber: phone, CallBackURL: Deno.env.get("DARAJA_STK_CALLBACK_URL"), AccountReference: idempotencyKey.slice(0, 12), TransactionDesc: "Tracker service payment" }); await client.from("daraja_transactions").insert({ direction: "C2B", checkout_request_id: result.CheckoutRequestID ?? null, account_reference: idempotencyKey, phone, amount, status: "submitted", payload: result }); return response({ ...payment, ...result }, 202); }
     catch (cause) { await client.from("payment_requests").update({ status: "failed", updated_at: new Date().toISOString() }).eq("id", payment.id); return fail(cause instanceof Error ? cause.message : "M-Pesa request failed.", 502, "MPESA_ERROR"); }
@@ -1304,7 +1304,7 @@ Deno.serve(async (request) => {
   const statusMatch = route.match(/^\/v1\/customer\/motorcycles\/([^/]+)\/security-status$/);
   if (statusMatch && request.method === "GET") {
     const vehicleId = decodeURIComponent(statusMatch[1]);
-    const { data: vehicle } = await client.from("vehicles").select("id,tracker_imei,monitoring_armed,immobilized").eq("id", vehicleId).single();
+    const { data: vehicle } = await admin.from("vehicles").select("id,tracker_imei,monitoring_armed,immobilized").eq("id", vehicleId).eq("owner_id", user.id).single();
     if (!vehicle) return fail("Vehicle not found.", 404, "NOT_FOUND");
     let provider = null;
     const configuredPath = Deno.env.get("TRAMIGO_CLOUD_OUTBOUND_STATUS_PATH");
@@ -1314,13 +1314,13 @@ Deno.serve(async (request) => {
     return response({ vehicleId, monitoringArmed: vehicle.monitoring_armed, immobilized: vehicle.immobilized, provider });
   }
   if (route === "/v1/customer/motorcycles/security-status" && request.method === "GET") {
-    const { data: vehicles } = await client.from("vehicles").select("id,registration,monitoring_armed,immobilized");
+    const { data: vehicles } = await admin.from("vehicles").select("id,registration,monitoring_armed,immobilized").eq("owner_id", user.id);
     return response({ vehicles: vehicles ?? [] });
   }
   const securityMatch = route.match(/^\/v1\/customer\/motorcycles\/([^/]+)\/(monitoring|immobilizer)$/);
   if (securityMatch && request.method === "POST") {
     const vehicleId = decodeURIComponent(securityMatch[1]); const action = securityMatch[2];
-    const { data: vehicle } = await client.from("vehicles").select("id,tracker_imei").eq("id", vehicleId).single();
+    const { data: vehicle } = await admin.from("vehicles").select("id,tracker_imei").eq("id", vehicleId).eq("owner_id", user.id).single();
     if (!vehicle) return fail("Vehicle not found.", 404, "NOT_FOUND");
     if (!vehicle.tracker_imei) return fail("This vehicle has no Tramigo tracker assigned.", 409, "TRACKER_NOT_ASSIGNED");
     const enabled = action === "monitoring" ? Boolean(body.armed) : Boolean(body.immobilized);
@@ -1329,7 +1329,7 @@ Deno.serve(async (request) => {
     try {
       const provider = await tramigoRequest(tramigoPath(configuredPath, vehicle.tracker_imei), { method: "POST", body: { deviceId: vehicle.tracker_imei, imei: vehicle.tracker_imei, enabled, armed: action === "monitoring" ? enabled : undefined, immobilized: action === "immobilizer" ? enabled : undefined } });
       const update = action === "monitoring" ? { monitoring_armed: enabled, updated_at: new Date().toISOString() } : { immobilized: enabled, updated_at: new Date().toISOString() };
-      const { error } = await admin.from("vehicles").update(update).eq("id", vehicleId);
+      const { error } = await admin.from("vehicles").update(update).eq("id", vehicleId).eq("owner_id", user.id);
       if (error) return fail("Tramigo accepted the command, but local state could not be saved.", 502, "STATE_SYNC_FAILED");
       return response({ vehicleId, action, enabled, provider });
     } catch (error) { return fail(error instanceof Error ? error.message : "Tramigo command failed.", 502, "TRAMIGO_ERROR"); }
@@ -1341,10 +1341,16 @@ Deno.serve(async (request) => {
   const locationMatch = route.match(/^\/v1\/customer\/motorcycles\/([^/]+)\/location$/);
   if (locationMatch && request.method === "GET") {
     const vehicleId = decodeURIComponent(locationMatch[1]);
-    const { data: vehicle } = await client.from("vehicles").select("id,registration,model,vehicle_type,tracker_imei").eq("id", vehicleId).single();
+    const { data: vehicle } = await admin.from("vehicles").select("id,registration,model,vehicle_type,tracker_imei").eq("id", vehicleId).eq("owner_id", user.id).single();
     if (!vehicle) return fail("Vehicle not found.", 404, "NOT_FOUND");
     let location = null;
-    if (vehicle.tracker_imei && Deno.env.get("TRAMIGO_USERNAME")) {
+    // A short per-owner lease makes repeated polling return the last trusted
+    // location instead of turning a stolen session into a Tramigo API flood.
+    const { data: canQueryProvider, error: rateLimitError } = await admin.rpc("claim_location_provider_read", {
+      p_key: `${user.id}:${vehicleId}`, p_max_requests: 4, p_window_seconds: 60,
+    });
+    if (rateLimitError) console.error("Location provider rate limit unavailable", rateLimitError);
+    if (vehicle.tracker_imei && Deno.env.get("TRAMIGO_USERNAME") && !rateLimitError && canQueryProvider === true) {
       try {
         const providerSession = await tramigoSession();
         const deviceCatalogue = await tramigoRequest("/api/v2/devices?page=1&per_page=1000", {}, providerSession);
@@ -1353,13 +1359,16 @@ Deno.serve(async (request) => {
         if (tramigo) { await admin.from("tracker_locations").insert({ vehicle_id: vehicleId, latitude: tramigo.latitude, longitude: tramigo.longitude, speed_kph: tramigo.speedKph, recorded_at: tramigo.recordedAt }); location = { latitude: tramigo.latitude, longitude: tramigo.longitude, speedKph: tramigo.speedKph, recordedAt: tramigo.recordedAt, trackerStatus: tramigo.trackerStatus }; }
       } catch (_) { /* fall back to the last synced location */ }
     }
-    if (!location) { const { data: saved } = await client.from("tracker_locations").select("latitude,longitude,speed_kph,heading,accuracy_meters,recorded_at").eq("vehicle_id", vehicleId).order("recorded_at", { ascending: false }).limit(1).maybeSingle(); location = saved && { latitude: saved.latitude, longitude: saved.longitude, speedKph: saved.speed_kph, heading: saved.heading, accuracyMeters: saved.accuracy_meters, recordedAt: saved.recorded_at }; }
-    return response({ ...vehicle, location });
+    if (!location) { const { data: saved } = await admin.from("tracker_locations").select("latitude,longitude,speed_kph,heading,accuracy_meters,recorded_at").eq("vehicle_id", vehicleId).order("recorded_at", { ascending: false }).limit(1).maybeSingle(); location = saved && { latitude: saved.latitude, longitude: saved.longitude, speedKph: saved.speed_kph, heading: saved.heading, accuracyMeters: saved.accuracy_meters, recordedAt: saved.recorded_at }; }
+    const { tracker_imei: _privateTrackerImei, ...safeVehicle } = vehicle;
+    return response({ ...safeVehicle, location });
   }
   const routeMatch = route.match(/^\/v1\/customer\/motorcycles\/([^/]+)\/route$/);
   if (routeMatch && request.method === "GET") {
     const vehicleId = decodeURIComponent(routeMatch[1]);
-    const { data: locations } = await client.from("tracker_locations").select("latitude,longitude,recorded_at").eq("vehicle_id", vehicleId).order("recorded_at", { ascending: true }).limit(500);
+    const { data: vehicle } = await admin.from("vehicles").select("id").eq("id", vehicleId).eq("owner_id", user.id).maybeSingle();
+    if (!vehicle) return fail("Vehicle not found.", 404, "NOT_FOUND");
+    const { data: locations } = await admin.from("tracker_locations").select("latitude,longitude,recorded_at").eq("vehicle_id", vehicleId).order("recorded_at", { ascending: true }).limit(500);
     return response({ points: locations ?? [] });
   }
   return fail("Endpoint not implemented yet.", 501, "NOT_IMPLEMENTED");

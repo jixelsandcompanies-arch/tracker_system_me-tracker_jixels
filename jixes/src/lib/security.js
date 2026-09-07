@@ -2,7 +2,7 @@ const rolePermissions = {
   "Super administrator": ["*"],
   "Operations manager": ["Dashboard", "Customers", "Products", "GPS Trackers", "Screening", "Support Cases", "Alerts", "Reports"],
   "Finance officer": ["Dashboard", "Customers", "Payments", "Commissions", "Reports"],
-  "Support agent": ["Dashboard", "Customers", "Products", "GPS Trackers", "Screening", "Support Cases", "Alerts", "Commissions"],
+  "Support agent": ["Dashboard", "Customers", "Products", "Screening", "Support Cases", "Alerts", "Commissions"],
   "Read-only auditor": ["Dashboard", "Reports", "Audit Logs"]
 };
 

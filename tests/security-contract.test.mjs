@@ -37,6 +37,9 @@ assert.match(apiFunction, /Unhandled API request error/, "unexpected API errors 
 assert.match(apiFunction, /claim_tracker_refresh/, "live tracker refreshes must have server-side concurrency protection");
 assert.match(apiFunction, /TRACKER_BATCH_TOO_LARGE/, "tracker refreshes must have a bounded batch size");
 assert.match(apiFunction, /async function tramigoSession/, "a fleet refresh must reuse one Tramigo provider session");
+assert.match(apiFunction, /claim_location_provider_read/, "customer location requests must be rate-limited before calling Tramigo");
+assert.match(apiFunction, /tracker_imei: _privateTrackerImei/, "customer location responses must not expose tracker IMEIs");
+assert.doesNotMatch(read("jixes/src/lib/data.js"), /SERVICE_ROLE|service_role/, "the admin browser bundle must never contain a Supabase service-role key");
 assert.match(app, /verifyApprovalCode\(\{ email: applicant\.email, code \}\)/, "approval code verification must be bound to the registered customer email");
 assert.match(apiFunction, /customer_approval_codes/, "approval codes must be stored server-side");
 assert.match(apiFunction, /issueCustomerApprovalCode\(admin, account\.id, account\.email/, "account approval must issue the customer app approval code");

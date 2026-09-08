@@ -125,6 +125,7 @@ function tramigoLocation(report: any) {
 function tramigoReportRecords(payload: any): any[] {
   if (Array.isArray(payload)) return payload;
   for (const key of ["data", "items", "results", "reports"]) if (Array.isArray(payload?.[key])) return payload[key];
+  if (payload?.data && typeof payload.data === "object") return tramigoReportRecords(payload.data);
   return [];
 }
 
@@ -147,13 +148,17 @@ async function fetchTramigoRoute(identifier: string, window: { from: string; to:
   const firstMain = first?.main_reports?.[0] ?? first?.mainReports?.[0] ?? {};
   const lastMain = last?.main_reports?.[0] ?? last?.mainReports?.[0] ?? {};
   const value = (record: any, keys: string[]) => keys.map((key) => record?.[key]).find((item) => item != null && String(item).trim() !== "") ?? null;
+  const infoText = records.flatMap((record) => record?.info_reports ?? record?.infoReports ?? []).map((item) => String(item?.Info_Details ?? item?.infoDetails ?? "")).filter(Boolean).join(" | ");
+  const infoValue = (label: string) => infoText.match(new RegExp(`${label}\\s*[:=]\\s*([^|]+)`, "i"))?.[1]?.trim() ?? null;
+  const firstEvent = value(first, ["HeaderString", "headerString", "Type", "type"]);
+  const lastEvent = value(last, ["HeaderString", "headerString", "Type", "type"]);
   const trip = records.flatMap((record) => record?.trip_reports ?? record?.tripReports ?? []).at(0) ?? {};
   return {
     points,
     summary: {
-      start: { event: value(first, ["Type", "type", "HeaderString", "headerString"]), time: value(first, ["DateTime_Actual", "DateTimeActual", "StartTime"]) ?? value(trip, ["StartTime"]), landmark: value(firstMain, ["Landmark", "landmark"]), latitude: points[0]?.latitude ?? null, longitude: points[0]?.longitude ?? null },
-      end: { event: value(last, ["Type", "type", "HeaderString", "headerString"]), time: value(last, ["DateTime_Actual", "DateTimeActual", "EndTime"]) ?? value(trip, ["EndTime"]), landmark: value(lastMain, ["Landmark", "landmark"]), latitude: points.at(-1)?.latitude ?? null, longitude: points.at(-1)?.longitude ?? null },
-      battery: value(last, ["Battery", "battery", "BatteryLevel", "batteryLevel"]), satellite: value(last, ["Satellite", "satellite", "Satellites", "satellites"]), gsm: value(last, ["GSM", "gsm", "Gsm", "SignalStrength"]), parkedTime: value(last, ["ParkedTime", "parkedTime"]), fuel: value(last, ["Fuel", "fuel", "FuelAnalog", "fuelAnalog"]), zone: value(last, ["Zone", "zone", "Geofence", "geofence"]) ?? "No Geofence",
+      start: { event: firstEvent, time: value(first, ["DateTime_Actual", "DateTimeActual", "StartTime"]) ?? value(trip, ["StartTime"]), landmark: value(firstMain, ["Landmark", "landmark"]) ?? firstEvent, latitude: points[0]?.latitude ?? null, longitude: points[0]?.longitude ?? null },
+      end: { event: lastEvent, time: value(last, ["DateTime_Actual", "DateTimeActual", "EndTime"]) ?? value(trip, ["EndTime"]), landmark: value(lastMain, ["Landmark", "landmark"]) ?? lastEvent, latitude: points.at(-1)?.latitude ?? null, longitude: points.at(-1)?.longitude ?? null },
+      battery: value(last, ["Battery", "battery", "BatteryLevel", "batteryLevel"]) ?? infoValue("Battery"), satellite: value(last, ["Satellite", "satellite", "Satellites", "satellites"]) ?? infoValue("Satellite"), gsm: value(last, ["GSM", "gsm", "Gsm", "SignalStrength"]) ?? infoValue("GSM"), parkedTime: value(last, ["ParkedTime", "parkedTime"]) ?? infoValue("Parked Time"), fuel: value(last, ["Fuel", "fuel", "FuelAnalog", "fuelAnalog"]) ?? infoValue("Fuel \\(Analog\\)") ?? infoValue("Fuel"), zone: value(last, ["Zone", "zone", "Geofence", "geofence"]) ?? infoValue("Zone") ?? "No Geofence",
     },
   };
 }

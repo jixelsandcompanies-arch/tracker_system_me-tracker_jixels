@@ -336,6 +336,7 @@ export default function TrackerView() {
                     <p><b>Start</b><span>{route.providerSummary.start.event || "—"} · {route.providerSummary.start.time || "—"}<br />{route.providerSummary.start.landmark || "—"}</span></p>
                     <p><b>End</b><span>{route.providerSummary.end.event || "—"} · {route.providerSummary.end.time || "—"}<br />{route.providerSummary.end.landmark || "—"}</span></p>
                     <p><b>Device status</b><span>Zone: {route.providerSummary.zone || "—"} · Battery: {route.providerSummary.battery || "—"} · Satellite: {route.providerSummary.satellite || "—"} · GSM: {route.providerSummary.gsm || "—"} · Parked: {route.providerSummary.parkedTime || "—"} · Fuel: {route.providerSummary.fuel || "—"}</span></p>
+                    <p><b>Coordinates</b><span>Start: {route.providerSummary.start.latitude ?? "—"}, {route.providerSummary.start.longitude ?? "—"}<br />End: {route.providerSummary.end.latitude ?? "—"}, {route.providerSummary.end.longitude ?? "—"}</span></p>
                   </div>}
                 </div>
                 <a

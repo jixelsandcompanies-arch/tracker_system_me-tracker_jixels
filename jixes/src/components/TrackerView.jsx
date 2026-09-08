@@ -58,7 +58,7 @@ export default function TrackerView() {
     if (result.error) return setMessage(result.error.message);
     setRoute(result.data);
     const pointCount = result.data?.points?.length ?? 0;
-    setMessage(result.data?.message || (pointCount > 1 ? "Route history loaded." : pointCount === 1 ? "One GPS point was recorded; there is not enough movement data to draw a route." : "No saved GPS points for this date."));
+    setMessage(result.data?.providerRouteError ? "Tramigo did not return historical reports for this date. The device may be active but has no provider history available." : result.data?.message || (pointCount > 1 ? "Route history loaded." : pointCount === 1 ? "One GPS point was recorded; there is not enough movement data to draw a route." : "No saved GPS points for this date."));
   };
 
   useEffect(() => {

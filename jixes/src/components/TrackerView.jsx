@@ -1,9 +1,17 @@
 import { useEffect, useRef, useState } from "react";
-import { ExternalLink, MapPin, Search, X } from "lucide-react";
+import { ExternalLink, MapPin, MapPinned, Search, X } from "lucide-react";
 import { hasSupabaseConfig, invokeApi, listRecords, subscribeToTable } from "../lib/data";
 
 const capitalize = (value) =>
   value.replace(/^./, (letter) => letter.toUpperCase());
+
+const FLEET_COUNTRIES = {
+  KE: { name: "Kenya", center: [-0.0236, 37.9062], zoom: 6 },
+  UG: { name: "Uganda", center: [1.3733, 32.2903], zoom: 7 },
+  TZ: { name: "Tanzania", center: [-6.369, 34.8888], zoom: 6 },
+  RW: { name: "Rwanda", center: [-1.9403, 29.8739], zoom: 8 },
+  ET: { name: "Ethiopia", center: [9.145, 40.4897], zoom: 6 },
+};
 
 export default function TrackerView() {
   const [trackers, setTrackers] = useState([]);
@@ -19,6 +27,10 @@ export default function TrackerView() {
   const [route, setRoute] = useState(null);
   const [routeLoading, setRouteLoading] = useState(false);
   const [allRoutes, setAllRoutes] = useState({});
+  const [fleetCountry, setFleetCountry] = useState("KE");
+  const [fleetGeofenceMode, setFleetGeofenceMode] = useState(false);
+  const [fleetGeofenceRadius, setFleetGeofenceRadius] = useState(1000);
+  const [fleetGeofence, setFleetGeofence] = useState(null);
   const singleMapHost = useRef(null);
   const allMapHost = useRef(null);
   const singleMap = useRef(null);
@@ -138,7 +150,7 @@ export default function TrackerView() {
 
   useEffect(() => {
     if (!showAll || !allMapHost.current || !window.L) return;
-    const located = linkedTrackers.filter(
+    const located = trackers.filter(
       (tracker) => tracker.latitude != null && tracker.longitude != null,
     );
     allMap.current?.remove();
@@ -147,7 +159,7 @@ export default function TrackerView() {
       touchZoom: true,
       scrollWheelZoom: true,
       worldCopyJump: true,
-    }).setView([-1.286389, 36.817223], 7);
+    }).setView(FLEET_COUNTRIES[fleetCountry].center, FLEET_COUNTRIES[fleetCountry].zoom);
     allMap.current.dragging.enable();
     allMap.current.touchZoom.enable();
     allMap.current.boxZoom.enable();
@@ -171,14 +183,20 @@ export default function TrackerView() {
         );
       return point;
     });
-    if (points.length)
-      allMap.current.fitBounds(points, { padding: [35, 35], maxZoom: 15 });
+    if (fleetGeofence) window.L.circle([fleetGeofence.latitude, fleetGeofence.longitude], { radius: fleetGeofence.radius, color: "#7c3aed", fillColor: "#8b5cf6", fillOpacity: 0.16, weight: 2 }).addTo(allMap.current).bindTooltip(`Geofence · ${fleetGeofence.radius} m`);
+    const onMapClick = (event) => {
+      if (!fleetGeofenceMode) return;
+      setFleetGeofence({ latitude: event.latlng.lat, longitude: event.latlng.lng, radius: Number(fleetGeofenceRadius) || 1000 });
+      setFleetGeofenceMode(false);
+    };
+    allMap.current.on("click", onMapClick);
+    allMap.current.setView(FLEET_COUNTRIES[fleetCountry].center, FLEET_COUNTRIES[fleetCountry].zoom);
     setTimeout(() => allMap.current?.invalidateSize(), 0);
     return () => {
       allMap.current?.remove();
       allMap.current = null;
     };
-  }, [showAll, linkedTrackers, products, allRoutes]);
+  }, [showAll, trackers, products, allRoutes, fleetCountry, fleetGeofenceMode, fleetGeofenceRadius, fleetGeofence]);
 
   useEffect(() => {
     if (!showAll || !linkedTrackers.length) return;
@@ -371,7 +389,7 @@ export default function TrackerView() {
                 <h2>All GPS trackers</h2>
                 <p>
                   {
-                    linkedTrackers.filter(
+                    trackers.filter(
                       (tracker) =>
                         tracker.latitude != null && tracker.longitude != null,
                     ).length
@@ -383,6 +401,13 @@ export default function TrackerView() {
                 <X size={18} />
               </button>
             </div>
+            <div className="fleet-map-toolbar">
+              <label>Country<select aria-label="Fleet map country" value={fleetCountry} onChange={(event) => setFleetCountry(event.target.value)}><option value="KE">Kenya</option><option value="UG">Uganda</option><option value="TZ">Tanzania</option><option value="RW">Rwanda</option><option value="ET">Ethiopia</option></select></label>
+              <label>Radius (m)<input type="number" min="100" max="100000" step="100" value={fleetGeofenceRadius} onChange={(event) => setFleetGeofenceRadius(Number(event.target.value) || 1000)} /></label>
+              <button className={`button ${fleetGeofenceMode ? "primary" : "secondary"}`} onClick={() => setFleetGeofenceMode((mode) => !mode)}><MapPinned size={14} /> {fleetGeofenceMode ? "Click map to place" : "Add geofence"}</button>
+              {fleetGeofence && <button className="button secondary" onClick={() => setFleetGeofence(null)}>Clear geofence</button>}
+            </div>
+            {fleetGeofenceMode && <p className="fleet-map-hint">Click the Kenya map to place a {fleetGeofenceRadius} m geofence.</p>}
             <div ref={allMapHost} className="all-trackers-map" />
           </aside>
         </div>

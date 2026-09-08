@@ -49,6 +49,7 @@ assert.match(apiFunction, /\.limit\(2000\)/, "route history must have a bounded 
 assert.match(apiFunction, /tracker_imei: _privateTrackerImei/, "customer location responses must not expose tracker IMEIs");
 assert.match(adminData, /table === "finance_settings".*updated_at/, "finance settings loading must tolerate legacy schemas without created_at");
 assert.match(trackerView, /invokeApi\(`\/v1\/admin\/trackers.*route.*null, \"GET\"\)/s, "admin route history must use GET");
+assert.match(apiFunction, /\/api\/reports\//, "route history must request Tramigo historical reports");
 assert.doesNotMatch(read("jixes/src/lib/data.js"), /SERVICE_ROLE|service_role/, "the admin browser bundle must never contain a Supabase service-role key");
 assert.match(app, /verifyApprovalCode\(\{ email: applicant\.email, code \}\)/, "approval code verification must be bound to the registered customer email");
 assert.match(apiFunction, /customer_approval_codes/, "approval codes must be stored server-side");

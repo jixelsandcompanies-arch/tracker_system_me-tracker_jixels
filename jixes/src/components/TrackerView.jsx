@@ -18,6 +18,7 @@ export default function TrackerView() {
   const [routeDate, setRouteDate] = useState(new Date().toISOString().slice(0, 10));
   const [route, setRoute] = useState(null);
   const [routeLoading, setRouteLoading] = useState(false);
+  const [allRoutes, setAllRoutes] = useState({});
   const singleMapHost = useRef(null);
   const allMapHost = useRef(null);
   const singleMap = useRef(null);
@@ -56,7 +57,8 @@ export default function TrackerView() {
     setRouteLoading(false);
     if (result.error) return setMessage(result.error.message);
     setRoute(result.data);
-    setMessage(result.data?.message || (result.data?.points?.length ? "Route history loaded." : "No saved GPS points for this date."));
+    const pointCount = result.data?.points?.length ?? 0;
+    setMessage(result.data?.message || (pointCount > 1 ? "Route history loaded." : pointCount === 1 ? "One GPS point was recorded; there is not enough movement data to draw a route." : "No saved GPS points for this date."));
   };
 
   useEffect(() => {
@@ -156,6 +158,8 @@ export default function TrackerView() {
     }).addTo(allMap.current);
     const points = located.map((tracker) => {
       const point = [Number(tracker.latitude), Number(tracker.longitude)];
+      const history = allRoutes[tracker.id]?.points ?? [];
+      if (history.length > 1) window.L.polyline(history.map((item) => [Number(item.latitude), Number(item.longitude)]), { color: "#1f6feb", weight: 4, opacity: 0.72 }).addTo(allMap.current);
       window.L.circleMarker(point, {
         radius: 9,
         color: trackerStatus(tracker) === "online" ? "#16865f" : "#d98221",
@@ -174,7 +178,17 @@ export default function TrackerView() {
       allMap.current?.remove();
       allMap.current = null;
     };
-  }, [showAll, linkedTrackers, products]);
+  }, [showAll, linkedTrackers, products, allRoutes]);
+
+  useEffect(() => {
+    if (!showAll || !linkedTrackers.length) return;
+    let active = true;
+    Promise.all(linkedTrackers.slice(0, 50).map(async (tracker) => {
+      const result = await invokeApi(`/v1/admin/trackers/${encodeURIComponent(tracker.id)}/route?range=7-days`, null, "GET");
+      return [tracker.id, result.error ? null : result.data];
+    })).then((entries) => { if (active) setAllRoutes(Object.fromEntries(entries)); });
+    return () => { active = false; };
+  }, [showAll, linkedTrackers]);
 
   useEffect(() => {
     if (!selected) { setRoute(null); setMessage(""); }

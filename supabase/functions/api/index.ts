@@ -103,6 +103,28 @@ function tramigoLocation(report: any) {
   return { latitude, longitude, speedKph: Number(source?.Speed ?? source?.speed ?? 0), recordedAt: source?.DateTimeActual ?? report?.DateTimeActual ?? new Date().toISOString(), trackerStatus };
 }
 
+function tramigoReportRecords(payload: any): any[] {
+  if (Array.isArray(payload)) return payload;
+  for (const key of ["data", "items", "results", "reports"]) if (Array.isArray(payload?.[key])) return payload[key];
+  return [];
+}
+
+function tramigoRouteLocations(payload: any) {
+  return tramigoReportRecords(payload).map((report) => {
+    const source = report?.main_reports?.[0] ?? report?.mainReports?.[0] ?? report;
+    const latitude = Number(source?.Latitude ?? source?.latitude); const longitude = Number(source?.Longitude ?? source?.longitude);
+    const recordedAt = source?.DateTimeActual ?? source?.datetime_actual ?? source?.dateTime ?? source?.timestamp ?? report?.DateTimeActual;
+    return { latitude, longitude, speedKph: Number(source?.Speed ?? source?.speed ?? 0), recordedAt };
+  }).filter((point) => Number.isFinite(point.latitude) && Number.isFinite(point.longitude) && point.latitude >= -90 && point.latitude <= 90 && point.longitude >= -180 && point.longitude <= 180 && point.recordedAt);
+}
+
+async function fetchTramigoRoute(identifier: string, window: { from: string; to: string }, session: TramigoSession, catalogue: any) {
+  const cloudDeviceId = await tramigoCloudDeviceId(identifier, catalogue, session);
+  const params = new URLSearchParams({ page: "1", per_page: "1000", start_date: window.from.replace("T", " ").replace(/\.\d{3}Z$/, ""), end_date: window.to.replace("T", " ").replace(/\.\d{3}Z$/, "") });
+  const payload = await tramigoRequest(`/api/reports/${encodeURIComponent(cloudDeviceId)}?${params}`, {}, session);
+  return tramigoRouteLocations(payload);
+}
+
 function routeWindow(url: URL) {
   const now = new Date();
   const range = String(url.searchParams.get("range") ?? "today").toLowerCase();
@@ -855,7 +877,7 @@ Deno.serve(async (request) => {
     const window = routeWindow(url);
     if ("error" in window) return fail(window.error, 422, "INVALID_ROUTE_WINDOW");
     const trackerId = decodeURIComponent(adminRouteMatch[1]);
-    const { data: tracker, error: trackerError } = await admin.from("trackers").select("id,identifier,bike_id,vehicle_id").eq("id", trackerId).maybeSingle();
+    const { data: tracker, error: trackerError } = await admin.from("trackers").select("id,identifier,tramigo_device_id,bike_id,vehicle_id").eq("id", trackerId).maybeSingle();
     if (trackerError) return fail("Tracker route could not be loaded.", 503, "ROUTE_UNAVAILABLE");
     if (!tracker) return fail("Tracker not found.", 404, "NOT_FOUND");
     let vehicleId = tracker.vehicle_id;
@@ -866,6 +888,19 @@ Deno.serve(async (request) => {
         vehicleId = vehicle?.id ?? null;
         if (vehicleId) await admin.from("trackers").update({ vehicle_id: vehicleId, updated_at: new Date().toISOString() }).eq("id", tracker.id);
       }
+    }
+    const providerIdentifier = String(tracker.tramigo_device_id ?? tracker.identifier ?? "").trim();
+    if (providerIdentifier && Deno.env.get("TRAMIGO_USERNAME")) {
+      try {
+        const providerSession = await tramigoSession();
+        const catalogue = await tramigoRequest("/api/v2/devices?page=1&per_page=1000", {}, providerSession);
+        const providerPoints = await fetchTramigoRoute(providerIdentifier, window, providerSession, catalogue);
+        if (providerPoints.length) {
+          const rows = providerPoints.map((point) => ({ vehicle_id: vehicleId, tracker_id: tracker.id, latitude: point.latitude, longitude: point.longitude, speed_kph: point.speedKph, recorded_at: point.recordedAt }));
+          const { error: historyError } = await admin.from("tracker_locations").insert(rows);
+          if (historyError) console.error("Provider route history insert failed", tracker.id, historyError);
+        }
+      } catch (error) { console.error("Tramigo historical route unavailable", tracker.id, error); }
     }
     try {
       const result = await loadRoute(admin, vehicleId, tracker.id, window);

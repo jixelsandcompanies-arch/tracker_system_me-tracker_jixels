@@ -120,7 +120,7 @@ function tramigoRouteLocations(payload: any) {
 
 async function fetchTramigoRoute(identifier: string, window: { from: string; to: string }, session: TramigoSession, catalogue: any) {
   const cloudDeviceId = await tramigoCloudDeviceId(identifier, catalogue, session);
-  const params = new URLSearchParams({ page: "1", per_page: "1000", start_date: window.from.replace("T", " ").replace(/\.\d{3}Z$/, ""), end_date: window.to.replace("T", " ").replace(/\.\d{3}Z$/, "") });
+  const params = new URLSearchParams({ page: "1", per_page: "100", start_date: window.from.replace("T", " ").replace(/\.\d{3}Z$/, ""), end_date: window.to.replace("T", " ").replace(/\.\d{3}Z$/, "") });
   const payload = await tramigoRequest(`/api/reports/${encodeURIComponent(cloudDeviceId)}?${params}`, {}, session);
   return tramigoRouteLocations(payload);
 }
@@ -890,21 +890,23 @@ Deno.serve(async (request) => {
       }
     }
     const providerIdentifier = String(tracker.tramigo_device_id ?? tracker.identifier ?? "").trim();
+    let providerPointCount = 0; let providerRouteError = false;
     if (providerIdentifier && Deno.env.get("TRAMIGO_USERNAME")) {
       try {
         const providerSession = await tramigoSession();
         const catalogue = await tramigoRequest("/api/v2/devices?page=1&per_page=1000", {}, providerSession);
         const providerPoints = await fetchTramigoRoute(providerIdentifier, window, providerSession, catalogue);
+        providerPointCount = providerPoints.length;
         if (providerPoints.length) {
           const rows = providerPoints.map((point) => ({ vehicle_id: vehicleId, tracker_id: tracker.id, latitude: point.latitude, longitude: point.longitude, speed_kph: point.speedKph, recorded_at: point.recordedAt }));
           const { error: historyError } = await admin.from("tracker_locations").insert(rows);
           if (historyError) console.error("Provider route history insert failed", tracker.id, historyError);
         }
-      } catch (error) { console.error("Tramigo historical route unavailable", tracker.id, error); }
+      } catch (error) { providerRouteError = true; console.error("Tramigo historical route unavailable", tracker.id, error); }
     }
     try {
       const result = await loadRoute(admin, vehicleId, tracker.id, window);
-      return response({ trackerId, identifier: tracker.identifier, ...result, message: result.points.length ? undefined : "No saved GPS points for this date." });
+      return response({ trackerId, identifier: tracker.identifier, ...result, providerPointCount, providerRouteError, message: result.points.length ? undefined : "No saved GPS points for this date." });
     } catch (error) {
       console.error("Admin tracker route load failed", trackerId, error);
       return fail("Tracker route history is temporarily unavailable.", 503, "ROUTE_UNAVAILABLE");

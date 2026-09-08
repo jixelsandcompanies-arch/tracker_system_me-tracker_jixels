@@ -49,6 +49,7 @@ import "./styles/notifications.css";
 import "./styles/directory.css";
 import "./styles/details.css";
 import "./styles/errors.css";
+import "./styles/premium.css";
 
 class AppErrorBoundary extends React.Component {
   constructor(props) {

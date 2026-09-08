@@ -144,10 +144,10 @@ function routeSummary(points: Array<{ latitude: number; longitude: number; recor
   return { distanceKm: Number(distanceKm.toFixed(2)), durationMinutes, stops };
 }
 
-async function loadRoute(admin: ReturnType<typeof createClient>, vehicleId: string, window: { from: string; to: string }) {
-  const { data, error } = await admin.from("tracker_locations")
-    .select("latitude,longitude,recorded_at")
-    .eq("vehicle_id", vehicleId)
+async function loadRoute(admin: ReturnType<typeof createClient>, vehicleId: string | null, trackerId: string | null, window: { from: string; to: string }) {
+  let query = admin.from("tracker_locations").select("latitude,longitude,recorded_at");
+  query = vehicleId ? query.eq("vehicle_id", vehicleId) : query.eq("tracker_id", trackerId);
+  const { data, error } = await query
     .gte("recorded_at", window.from)
     .lte("recorded_at", window.to)
     .order("recorded_at", { ascending: true })
@@ -834,13 +834,11 @@ Deno.serve(async (request) => {
           is_online: isOnline, operational_status: operationalStatus, updated_at: new Date().toISOString(),
         }).eq("id", tracker.id);
         if (updateError) throw updateError;
-        if (tracker.vehicle_id) {
-          const { error: historyError } = await admin.from("tracker_locations").insert({
-            vehicle_id: tracker.vehicle_id, latitude: live.latitude, longitude: live.longitude,
-            speed_kph: live.speedKph, recorded_at: live.recordedAt,
-          });
-          if (historyError) console.error("Tracker route history insert failed", tracker.id, historyError);
-        }
+        const { error: historyError } = await admin.from("tracker_locations").insert({
+          vehicle_id: tracker.vehicle_id ?? null, tracker_id: tracker.id, latitude: live.latitude, longitude: live.longitude,
+          speed_kph: live.speedKph, recorded_at: live.recordedAt,
+        });
+        if (historyError) console.error("Tracker route history insert failed", tracker.id, historyError);
         refreshed.push({ id: tracker.id, identifier: tracker.identifier, deviceId, cloudDeviceId, status: operationalStatus, recordedAt: live.recordedAt });
       } catch (error) {
         console.error("Tramigo tracker refresh failed", tracker.id, error);
@@ -869,9 +867,9 @@ Deno.serve(async (request) => {
         if (vehicleId) await admin.from("trackers").update({ vehicle_id: vehicleId, updated_at: new Date().toISOString() }).eq("id", tracker.id);
       }
     }
-    if (!vehicleId) return response({ trackerId, identifier: tracker.identifier, points: [], distanceKm: 0, durationMinutes: 0, stops: 0, from: window.from, to: window.to, message: "This tracker is not linked to a vehicle history yet." });
     try {
-      return response({ trackerId, identifier: tracker.identifier, ...(await loadRoute(admin, vehicleId, window)) });
+      const result = await loadRoute(admin, vehicleId, tracker.id, window);
+      return response({ trackerId, identifier: tracker.identifier, ...result, message: result.points.length ? undefined : "No saved GPS points for this date." });
     } catch (error) {
       console.error("Admin tracker route load failed", trackerId, error);
       return fail("Tracker route history is temporarily unavailable.", 503, "ROUTE_UNAVAILABLE");
@@ -1445,7 +1443,7 @@ Deno.serve(async (request) => {
         const deviceCatalogue = await tramigoRequest("/api/v2/devices?page=1&per_page=1000", {}, providerSession);
         const cloudDeviceId = await tramigoCloudDeviceId(vehicle.tracker_imei, deviceCatalogue, providerSession);
         const tramigo = tramigoLocation(await tramigoRequest(`/api/reports/last_location/${encodeURIComponent(cloudDeviceId)}`, {}, providerSession));
-        if (tramigo) { await admin.from("tracker_locations").insert({ vehicle_id: vehicleId, latitude: tramigo.latitude, longitude: tramigo.longitude, speed_kph: tramigo.speedKph, recorded_at: tramigo.recordedAt }); location = { latitude: tramigo.latitude, longitude: tramigo.longitude, speedKph: tramigo.speedKph, recordedAt: tramigo.recordedAt, trackerStatus: tramigo.trackerStatus }; }
+        if (tramigo) { const trackerRow = await admin.from("trackers").select("id").eq("identifier", vehicle.tracker_imei).maybeSingle(); await admin.from("tracker_locations").insert({ vehicle_id: vehicleId, tracker_id: trackerRow.data?.id ?? null, latitude: tramigo.latitude, longitude: tramigo.longitude, speed_kph: tramigo.speedKph, recorded_at: tramigo.recordedAt }); location = { latitude: tramigo.latitude, longitude: tramigo.longitude, speedKph: tramigo.speedKph, recordedAt: tramigo.recordedAt, trackerStatus: tramigo.trackerStatus }; }
       } catch (_) { /* fall back to the last synced location */ }
     }
     if (!location) { const { data: saved } = await admin.from("tracker_locations").select("latitude,longitude,speed_kph,heading,accuracy_meters,recorded_at").eq("vehicle_id", vehicleId).order("recorded_at", { ascending: false }).limit(1).maybeSingle(); location = saved && { latitude: saved.latitude, longitude: saved.longitude, speedKph: saved.speed_kph, heading: saved.heading, accuracyMeters: saved.accuracy_meters, recordedAt: saved.recorded_at }; }
@@ -1459,7 +1457,7 @@ Deno.serve(async (request) => {
     if (!vehicle) return fail("Vehicle not found.", 404, "NOT_FOUND");
     const window = routeWindow(url);
     if ("error" in window) return fail(window.error, 422, "INVALID_ROUTE_WINDOW");
-    try { return response(await loadRoute(admin, vehicleId, window)); }
+    try { return response(await loadRoute(admin, vehicleId, null, window)); }
     catch (error) { console.error("Customer route load failed", vehicleId, error); return fail("Route history is temporarily unavailable.", 503, "ROUTE_UNAVAILABLE"); }
   }
   return fail("Endpoint not implemented yet.", 501, "NOT_IMPLEMENTED");

@@ -89,7 +89,7 @@ function tramigoCatalogueDevice(catalogue: any, cloudDeviceId: string) {
   return tramigoDeviceRecords(catalogue).find((item) => String(tramigoValue(item, ["Device_ID", "device_id", "ID", "id"]) ?? "") === String(cloudDeviceId));
 }
 function tramigoCatalogueStatus(record: any) {
-  const value = record?.IsOnline ?? record?.isOnline ?? record?.Online ?? record?.online ?? record?.ConnectionStatus ?? record?.connectionStatus ?? record?.Status ?? record?.status;
+  const value = record?.IsOnline ?? record?.isOnline ?? record?.Online ?? record?.online ?? record?.ConnectionStatus ?? record?.connectionStatus ?? record?.IsActive ?? record?.isActive ?? record?.Active ?? record?.active ?? record?.Status ?? record?.status;
   const normalized = String(value ?? "").trim().toLowerCase();
   return ["online", "active", "connected", "available", "true", "1"].includes(normalized) ? "online" : ["offline", "inactive", "disconnected", "unavailable", "false", "0"].includes(normalized) ? "offline" : null;
 }
@@ -105,9 +105,9 @@ function tramigoLocation(report: any) {
   // active device from an old report; return its explicit connection state so
   // the mobile app can use it ahead of timestamp ageing.
   const statusValue = report?.IsOnline ?? report?.isOnline ?? report?.Online ?? report?.online
-    ?? report?.DeviceStatus ?? report?.deviceStatus ?? report?.ConnectionStatus ?? report?.connectionStatus
+    ?? report?.DeviceStatus ?? report?.deviceStatus ?? report?.ConnectionStatus ?? report?.connectionStatus ?? report?.IsActive ?? report?.isActive ?? report?.Active ?? report?.active
     ?? source?.IsOnline ?? source?.isOnline ?? source?.Online ?? source?.online
-    ?? source?.DeviceStatus ?? source?.deviceStatus ?? source?.ConnectionStatus ?? source?.connectionStatus;
+    ?? source?.DeviceStatus ?? source?.deviceStatus ?? source?.ConnectionStatus ?? source?.connectionStatus ?? source?.IsActive ?? source?.isActive ?? source?.Active ?? source?.active;
   const normalizedStatus = typeof statusValue === "boolean" ? (statusValue ? "online" : "offline") : String(statusValue ?? "").trim().toLowerCase();
   const trackerStatus = ["online", "active", "connected", "available", "true", "1"].includes(normalizedStatus)
     ? "online"

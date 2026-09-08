@@ -857,12 +857,21 @@ Deno.serve(async (request) => {
     const window = routeWindow(url);
     if ("error" in window) return fail(window.error, 422, "INVALID_ROUTE_WINDOW");
     const trackerId = decodeURIComponent(adminRouteMatch[1]);
-    const { data: tracker, error: trackerError } = await admin.from("trackers").select("id,identifier,vehicle_id").eq("id", trackerId).maybeSingle();
+    const { data: tracker, error: trackerError } = await admin.from("trackers").select("id,identifier,bike_id,vehicle_id").eq("id", trackerId).maybeSingle();
     if (trackerError) return fail("Tracker route could not be loaded.", 503, "ROUTE_UNAVAILABLE");
     if (!tracker) return fail("Tracker not found.", 404, "NOT_FOUND");
-    if (!tracker.vehicle_id) return response({ trackerId, identifier: tracker.identifier, points: [], distanceKm: 0, durationMinutes: 0, stops: 0, from: window.from, to: window.to, message: "This tracker is not linked to a vehicle history yet." });
+    let vehicleId = tracker.vehicle_id;
+    if (!vehicleId && tracker.bike_id) {
+      const { data: bike } = await admin.from("bikes").select("identifier").eq("id", tracker.bike_id).maybeSingle();
+      if (bike?.identifier) {
+        const { data: vehicle } = await admin.from("vehicles").select("id").eq("registration", bike.identifier).maybeSingle();
+        vehicleId = vehicle?.id ?? null;
+        if (vehicleId) await admin.from("trackers").update({ vehicle_id: vehicleId, updated_at: new Date().toISOString() }).eq("id", tracker.id);
+      }
+    }
+    if (!vehicleId) return response({ trackerId, identifier: tracker.identifier, points: [], distanceKm: 0, durationMinutes: 0, stops: 0, from: window.from, to: window.to, message: "This tracker is not linked to a vehicle history yet." });
     try {
-      return response({ trackerId, identifier: tracker.identifier, ...(await loadRoute(admin, tracker.vehicle_id, window)) });
+      return response({ trackerId, identifier: tracker.identifier, ...(await loadRoute(admin, vehicleId, window)) });
     } catch (error) {
       console.error("Admin tracker route load failed", trackerId, error);
       return fail("Tracker route history is temporarily unavailable.", 503, "ROUTE_UNAVAILABLE");

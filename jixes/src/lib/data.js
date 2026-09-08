@@ -36,7 +36,11 @@ export async function listRecords(table, { page = 0, pageSize = 25, order = "cre
     if (!db) return { data: [], count: 0, error: new Error("Supabase is not configured") };
     const safePage = Math.max(0, Number(page) || 0);
     const safePageSize = Math.min(DATA_BATCH_SIZE, Math.max(1, Number(pageSize) || 25));
-    let query = db.from(table).select("*", { count: "exact" }).order(order, { ascending }).range(safePage * safePageSize, safePage * safePageSize + safePageSize - 1);
+    // finance_settings predates the shared created_at convention in some
+    // production databases. It is a singleton and already has updated_at,
+    // so keep the portal usable while migrations/schema caches converge.
+    const sortColumn = table === "finance_settings" && order === "created_at" ? "updated_at" : order;
+    let query = db.from(table).select("*", { count: "exact" }).order(sortColumn, { ascending }).range(safePage * safePageSize, safePage * safePageSize + safePageSize - 1);
     Object.entries(filters).forEach(([key, value]) => { if (value !== "" && value != null) query = query.eq(key, value); });
     if (from) query = query.gte(dateColumn, `${from}T00:00:00.000Z`);
     if (to) query = query.lte(dateColumn, `${to}T23:59:59.999Z`);

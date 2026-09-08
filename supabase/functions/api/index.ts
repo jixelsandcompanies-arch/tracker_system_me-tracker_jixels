@@ -100,7 +100,7 @@ function tramigoLocation(report: any) {
   const trackerStatus = ["online", "active", "connected", "available", "true", "1"].includes(normalizedStatus)
     ? "online"
     : ["offline", "inactive", "disconnected", "unavailable", "false", "0"].includes(normalizedStatus) ? "offline" : null;
-  return { latitude, longitude, speedKph: Number(source?.Speed ?? source?.speed ?? 0), recordedAt: source?.DateTimeActual ?? report?.DateTimeActual ?? new Date().toISOString(), trackerStatus };
+  return { latitude, longitude, speedKph: Number(source?.Speed ?? source?.speed ?? 0), recordedAt: source?.DateTimeActual ?? source?.DateTime_Actual ?? report?.DateTimeActual ?? report?.DateTime_Actual ?? new Date().toISOString(), trackerStatus };
 }
 
 function tramigoReportRecords(payload: any): any[] {
@@ -113,7 +113,7 @@ function tramigoRouteLocations(payload: any) {
   return tramigoReportRecords(payload).map((report) => {
     const source = report?.main_reports?.[0] ?? report?.mainReports?.[0] ?? report;
     const latitude = Number(source?.Latitude ?? source?.latitude); const longitude = Number(source?.Longitude ?? source?.longitude);
-    const recordedAt = source?.DateTimeActual ?? source?.datetime_actual ?? source?.dateTime ?? source?.timestamp ?? report?.DateTimeActual;
+    const recordedAt = source?.DateTimeActual ?? source?.DateTime_Actual ?? source?.datetime_actual ?? source?.dateTime ?? source?.timestamp ?? report?.DateTimeActual ?? report?.DateTime_Actual ?? report?.DateTime_Received;
     return { latitude, longitude, speedKph: Number(source?.Speed ?? source?.speed ?? 0), recordedAt };
   }).filter((point) => Number.isFinite(point.latitude) && Number.isFinite(point.longitude) && point.latitude >= -90 && point.latitude <= 90 && point.longitude >= -180 && point.longitude <= 180 && point.recordedAt);
 }

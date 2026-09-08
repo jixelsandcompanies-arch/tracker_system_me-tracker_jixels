@@ -25,7 +25,7 @@ export function useTracking({ motorcycleId, accessToken }) {
     } finally {
       if (mounted.current && activeMotorcycleId.current === requestedId) setLoading(false);
     }
-  }, [accessToken, demoMode, motorcycleId]);
+  }, [accessToken, motorcycleId]);
 
   const loadRoute = useCallback(async (range) => {
     setRouteLoading(true);

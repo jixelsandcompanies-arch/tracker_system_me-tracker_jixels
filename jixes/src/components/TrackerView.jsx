@@ -15,6 +15,9 @@ export default function TrackerView() {
   const [showAll, setShowAll] = useState(false);
   const [message, setMessage] = useState("");
   const [refreshing, setRefreshing] = useState(false);
+  const [routeDate, setRouteDate] = useState(new Date().toISOString().slice(0, 10));
+  const [route, setRoute] = useState(null);
+  const [routeLoading, setRouteLoading] = useState(false);
   const singleMapHost = useRef(null);
   const allMapHost = useRef(null);
   const singleMap = useRef(null);
@@ -44,6 +47,16 @@ export default function TrackerView() {
     const unavailable = (result.data?.trackers ?? []).filter((tracker) => tracker.status === "not_configured" || tracker.status === "unreachable" || tracker.status === "invalid_report");
     if (!silent || unavailable.length) setMessage(unavailable.length ? `${unavailable.length} tracker(s) need attention. ${unavailable[0].message || "Check their Tramigo device IDs."}` : "Live Tramigo tracker status refreshed.");
     await load();
+  };
+
+  const loadRoute = async () => {
+    if (!selected || !/^\d{4}-\d{2}-\d{2}$/.test(routeDate)) return setMessage("Choose a route date in YYYY-MM-DD format.");
+    setRouteLoading(true);
+    const result = await invokeApi(`/v1/admin/trackers/${encodeURIComponent(selected.id)}/route?from=${encodeURIComponent(`${routeDate}T00:00:00.000Z`)}&to=${encodeURIComponent(`${routeDate}T23:59:59.999Z`)}`, {});
+    setRouteLoading(false);
+    if (result.error) return setMessage(result.error.message);
+    setRoute(result.data);
+    setMessage(result.data?.message || (result.data?.points?.length ? "Route history loaded." : "No saved GPS points for this date."));
   };
 
   useEffect(() => {
@@ -99,6 +112,8 @@ export default function TrackerView() {
       maxZoom: 19,
       attribution: "© OpenStreetMap contributors",
     }).addTo(singleMap.current);
+    const routeLayer = route?.points?.length > 1 ? window.L.polyline(route.points.map((item) => [Number(item.latitude), Number(item.longitude)]), { color: "#1f6feb", weight: 5, opacity: 0.85 }).addTo(singleMap.current) : null;
+    if (routeLayer) singleMap.current.fitBounds(routeLayer.getBounds(), { padding: [30, 30], maxZoom: 16 });
     window.L.circleMarker(point, {
       radius: 12,
       color: "#d92d20",
@@ -117,7 +132,7 @@ export default function TrackerView() {
       singleMap.current?.remove();
       singleMap.current = null;
     };
-  }, [selected]);
+  }, [selected, route]);
 
   useEffect(() => {
     if (!showAll || !allMapHost.current || !window.L) return;
@@ -160,6 +175,10 @@ export default function TrackerView() {
       allMap.current = null;
     };
   }, [showAll, linkedTrackers, products]);
+
+  useEffect(() => {
+    if (!selected) { setRoute(null); setMessage(""); }
+  }, [selected]);
 
   return (
     <>
@@ -293,6 +312,11 @@ export default function TrackerView() {
                     {Number(selected.latitude).toFixed(6)},{" "}
                     {Number(selected.longitude).toFixed(6)}
                   </p>
+                  <div className="tracker-route-controls">
+                    <label>Route date<input type="date" value={routeDate} onChange={(event) => setRouteDate(event.target.value)} /></label>
+                    <button className="button secondary" disabled={routeLoading} onClick={loadRoute}>{routeLoading ? "Loading…" : "Show route"}</button>
+                  </div>
+                  {route && <p><b>Route summary</b><span>{route.distanceKm} km · {route.durationMinutes} min · {route.stops} stops · {route.points?.length || 0} points</span></p>}
                 </div>
                 <a
                   className="button primary tracker-route"

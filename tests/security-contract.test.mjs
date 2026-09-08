@@ -38,6 +38,12 @@ assert.match(apiFunction, /claim_tracker_refresh/, "live tracker refreshes must 
 assert.match(apiFunction, /TRACKER_BATCH_TOO_LARGE/, "tracker refreshes must have a bounded batch size");
 assert.match(apiFunction, /async function tramigoSession/, "a fleet refresh must reuse one Tramigo provider session");
 assert.match(apiFunction, /claim_location_provider_read/, "customer location requests must be rate-limited before calling Tramigo");
+assert.match(apiFunction, /function routeWindow/, "route history must validate an explicit date window");
+assert.match(apiFunction, /range === "yesterday"/, "route history must support the previous day");
+assert.match(apiFunction, /route === \"\/v1\/admin\/trackers\/refresh\"/, "Operations must be able to refresh Tramigo tracker health server-side");
+assert.match(apiFunction, /adminRouteMatch.*trackers.*route/s, "admin route history must use a protected API endpoint");
+assert.match(apiFunction, /\.gte\(\"recorded_at\", window\.from\)/, "route history must enforce the requested start date server-side");
+assert.match(apiFunction, /\.limit\(2000\)/, "route history must have a bounded point count");
 assert.match(apiFunction, /tracker_imei: _privateTrackerImei/, "customer location responses must not expose tracker IMEIs");
 assert.doesNotMatch(read("jixes/src/lib/data.js"), /SERVICE_ROLE|service_role/, "the admin browser bundle must never contain a Supabase service-role key");
 assert.match(app, /verifyApprovalCode\(\{ email: applicant\.email, code \}\)/, "approval code verification must be bound to the registered customer email");

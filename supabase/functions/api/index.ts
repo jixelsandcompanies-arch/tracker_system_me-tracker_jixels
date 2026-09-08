@@ -103,6 +103,60 @@ function tramigoLocation(report: any) {
   return { latitude, longitude, speedKph: Number(source?.Speed ?? source?.speed ?? 0), recordedAt: source?.DateTimeActual ?? report?.DateTimeActual ?? new Date().toISOString(), trackerStatus };
 }
 
+function routeWindow(url: URL) {
+  const now = new Date();
+  const range = String(url.searchParams.get("range") ?? "today").toLowerCase();
+  let from = url.searchParams.get("from");
+  let to = url.searchParams.get("to");
+  if (!from && !to) {
+    const days = range === "today" || range === "yesterday" ? 1 : range === "7-days" || range === "7days" ? 7 : range === "30-days" || range === "30days" ? 30 : Number.NaN;
+    if (!Number.isInteger(days)) return { error: "Route range must be today, yesterday, 7-days, or 30-days." };
+    if (range === "yesterday") {
+      const end = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+      to = end.toISOString(); from = new Date(end.getTime() - 24 * 60 * 60 * 1000).toISOString();
+    } else {
+      to = now.toISOString(); from = new Date(now.getTime() - days * 24 * 60 * 60 * 1000).toISOString();
+    }
+  }
+  const start = new Date(String(from));
+  const end = new Date(String(to ?? now.toISOString()));
+  if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime()) || start >= end) return { error: "Route dates are invalid. Use ISO dates with from before to." };
+  if (end.getTime() - start.getTime() > 31 * 24 * 60 * 60 * 1000) return { error: "Route history is limited to 31 days per request." };
+  return { from: start.toISOString(), to: end.toISOString() };
+}
+
+function routeSummary(points: Array<{ latitude: number; longitude: number; recorded_at: string }>) {
+  const earthKm = 6371;
+  let distanceKm = 0;
+  for (let index = 1; index < points.length; index += 1) {
+    const previous = points[index - 1]; const current = points[index];
+    const lat1 = previous.latitude * Math.PI / 180; const lat2 = current.latitude * Math.PI / 180;
+    const dLat = lat2 - lat1; const dLon = (current.longitude - previous.longitude) * Math.PI / 180;
+    const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLon / 2) ** 2;
+    distanceKm += earthKm * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  }
+  const start = points[0]?.recorded_at; const end = points.at(-1)?.recorded_at;
+  const durationMinutes = start && end ? Math.max(0, Math.round((new Date(end).getTime() - new Date(start).getTime()) / 60000)) : 0;
+  let stops = 0;
+  for (let index = 1; index < points.length; index += 1) {
+    if (new Date(points[index].recorded_at).getTime() - new Date(points[index - 1].recorded_at).getTime() >= 10 * 60 * 1000) stops += 1;
+  }
+  return { distanceKm: Number(distanceKm.toFixed(2)), durationMinutes, stops };
+}
+
+async function loadRoute(admin: ReturnType<typeof createClient>, vehicleId: string, window: { from: string; to: string }) {
+  const { data, error } = await admin.from("tracker_locations")
+    .select("latitude,longitude,recorded_at")
+    .eq("vehicle_id", vehicleId)
+    .gte("recorded_at", window.from)
+    .lte("recorded_at", window.to)
+    .order("recorded_at", { ascending: true })
+    .limit(2000);
+  if (error) throw error;
+  const points = (data ?? []).map((point: any) => ({ latitude: Number(point.latitude), longitude: Number(point.longitude), recorded_at: point.recorded_at }));
+  return { points, ...routeSummary(points), from: window.from, to: window.to };
+}
+
 function isExpoPushToken(value: unknown) {
   return typeof value === "string" && /^(?:Expo|Exponent)PushToken\[[^\]]+\]$/.test(value);
 }
@@ -789,6 +843,25 @@ Deno.serve(async (request) => {
     return response({ trackers: refreshed });
   }
 
+  const adminRouteMatch = route.match(/^\/v1\/admin\/trackers\/([^/]+)\/route$/);
+  if (adminRouteMatch && request.method === "GET") {
+    const { data: manager, error: managerError } = await admin.from("profiles").select("role").eq("id", user.id).maybeSingle();
+    if (managerError || !manager || !adminRoles.has(manager.role)) return fail("Administrator permission is required to view tracker routes.", 403, "FORBIDDEN");
+    const window = routeWindow(url);
+    if ("error" in window) return fail(window.error, 422, "INVALID_ROUTE_WINDOW");
+    const trackerId = decodeURIComponent(adminRouteMatch[1]);
+    const { data: tracker, error: trackerError } = await admin.from("trackers").select("id,identifier,vehicle_id").eq("id", trackerId).maybeSingle();
+    if (trackerError) return fail("Tracker route could not be loaded.", 503, "ROUTE_UNAVAILABLE");
+    if (!tracker) return fail("Tracker not found.", 404, "NOT_FOUND");
+    if (!tracker.vehicle_id) return response({ trackerId, identifier: tracker.identifier, points: [], distanceKm: 0, durationMinutes: 0, stops: 0, from: window.from, to: window.to, message: "This tracker is not linked to a vehicle history yet." });
+    try {
+      return response({ trackerId, identifier: tracker.identifier, ...(await loadRoute(admin, tracker.vehicle_id, window)) });
+    } catch (error) {
+      console.error("Admin tracker route load failed", trackerId, error);
+      return fail("Tracker route history is temporarily unavailable.", 503, "ROUTE_UNAVAILABLE");
+    }
+  }
+
   const screeningDocumentMatch = route.match(/^\/v1\/admin\/screening\/([^/]+)\/documents$/);
   if (screeningDocumentMatch && request.method === "GET") {
     const { data: manager, error: managerError } = await admin.from("profiles").select("role").eq("id", user.id).maybeSingle();
@@ -1368,8 +1441,10 @@ Deno.serve(async (request) => {
     const vehicleId = decodeURIComponent(routeMatch[1]);
     const { data: vehicle } = await admin.from("vehicles").select("id").eq("id", vehicleId).eq("owner_id", user.id).maybeSingle();
     if (!vehicle) return fail("Vehicle not found.", 404, "NOT_FOUND");
-    const { data: locations } = await admin.from("tracker_locations").select("latitude,longitude,recorded_at").eq("vehicle_id", vehicleId).order("recorded_at", { ascending: true }).limit(500);
-    return response({ points: locations ?? [] });
+    const window = routeWindow(url);
+    if ("error" in window) return fail(window.error, 422, "INVALID_ROUTE_WINDOW");
+    try { return response(await loadRoute(admin, vehicleId, window)); }
+    catch (error) { console.error("Customer route load failed", vehicleId, error); return fail("Route history is temporarily unavailable.", 503, "ROUTE_UNAVAILABLE"); }
   }
   return fail("Endpoint not implemented yet.", 501, "NOT_IMPLEMENTED");
   } catch (error) {

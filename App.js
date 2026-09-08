@@ -32,7 +32,7 @@ const DRAWER_CLOSED = 0;
 const STALE_MS = 2 * 60_000;
 const OFFLINE_MS = 10 * 60_000;
 const GPS_LAUNCH_SECONDS = 7;
-const ranges = ["Today", "Yesterday", "7 Days", "Custom"];
+const ranges = ["Today", "Yesterday", "7 Days", "30 Days"];
 // Customer records are populated only after the authenticated API request.
 // This module-level list is read by existing screen components.
 let bikes = [];

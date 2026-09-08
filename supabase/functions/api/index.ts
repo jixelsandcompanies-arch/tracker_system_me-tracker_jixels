@@ -795,7 +795,7 @@ Deno.serve(async (request) => {
     if (claimError) return fail("Tracker refresh protection is unavailable.", 503, "REFRESH_GUARD_UNAVAILABLE");
     if (!claimed) return fail("A live tracker refresh is already running. Try again in a few seconds.", 429, "REFRESH_IN_PROGRESS");
     const requestedTrackerId = typeof body.trackerId === "string" ? body.trackerId : null;
-    let query = admin.from("trackers").select("id,identifier,tramigo_device_id");
+    let query = admin.from("trackers").select("id,identifier,tramigo_device_id,vehicle_id");
     if (requestedTrackerId) query = query.eq("id", requestedTrackerId);
     const { data: trackers, error: trackersError } = await query;
     if (trackersError) return fail("Tracker records could not be loaded.", 503, "TRACKERS_UNAVAILABLE");
@@ -834,6 +834,13 @@ Deno.serve(async (request) => {
           is_online: isOnline, operational_status: operationalStatus, updated_at: new Date().toISOString(),
         }).eq("id", tracker.id);
         if (updateError) throw updateError;
+        if (tracker.vehicle_id) {
+          const { error: historyError } = await admin.from("tracker_locations").insert({
+            vehicle_id: tracker.vehicle_id, latitude: live.latitude, longitude: live.longitude,
+            speed_kph: live.speedKph, recorded_at: live.recordedAt,
+          });
+          if (historyError) console.error("Tracker route history insert failed", tracker.id, historyError);
+        }
         refreshed.push({ id: tracker.id, identifier: tracker.identifier, deviceId, cloudDeviceId, status: operationalStatus, recordedAt: live.recordedAt });
       } catch (error) {
         console.error("Tramigo tracker refresh failed", tracker.id, error);

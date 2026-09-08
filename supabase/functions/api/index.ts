@@ -94,7 +94,7 @@ function tramigoCatalogueStatus(record: any) {
   return ["online", "active", "connected", "available", "true", "1"].includes(normalized) ? "online" : ["offline", "inactive", "disconnected", "unavailable", "false", "0"].includes(normalized) ? "offline" : null;
 }
 function tramigoCatalogueLastSeen(record: any) {
-  const value = record?.LastSeen ?? record?.lastSeen ?? record?.LastSeenAt ?? record?.last_seen_at ?? record?.DateTime_Actual ?? record?.DateTimeActual;
+  const value = record?.LastSeen ?? record?.lastSeen ?? record?.LastSeenAt ?? record?.last_seen_at ?? record?.LastCommunication ?? record?.lastCommunication ?? record?.LastCommunicationTime ?? record?.lastCommunicationTime ?? record?.LastUpdate ?? record?.lastUpdate ?? record?.LastActivity ?? record?.lastActivity ?? record?.LastActivityAt ?? record?.lastActivityAt ?? record?.DateTime_Actual ?? record?.DateTimeActual ?? record?.DateTime_Received ?? record?.DateTimeReceived;
   return value && Number.isFinite(new Date(value).getTime()) ? new Date(value).toISOString() : null;
 }
 function safeLiveTimestamp(value: unknown) {
@@ -894,8 +894,11 @@ Deno.serve(async (request) => {
         const catalogueSeenAt = tramigoCatalogueLastSeen(catalogueDevice);
         const liveTimestamp = safeLiveTimestamp(live.recordedAt);
         const reportAge = Date.now() - new Date(liveTimestamp).getTime();
-        const isOnline = live.trackerStatus === "online" || catalogueStatus === "online" || (live.trackerStatus == null && catalogueStatus == null && Number.isFinite(reportAge) && reportAge <= 10 * 60_000);
-        const operationalStatus = live.trackerStatus ?? catalogueStatus ?? (isOnline ? "online" : "offline");
+        // The catalogue is Tramigo's current device connection state. A stale
+        // report can contain an old offline flag, so it must not override a
+        // newer catalogue state during a refresh.
+        const isOnline = catalogueStatus === "online" || (catalogueStatus == null && live.trackerStatus === "online") || (live.trackerStatus == null && catalogueStatus == null && Number.isFinite(reportAge) && reportAge <= 10 * 60_000);
+        const operationalStatus = catalogueStatus ?? live.trackerStatus ?? (isOnline ? "online" : "offline");
         const { error: updateError } = await admin.from("trackers").update({
           latitude: live.latitude, longitude: live.longitude, last_seen_at: catalogueSeenAt && new Date(catalogueSeenAt) <= new Date() && new Date(catalogueSeenAt) > new Date(liveTimestamp) ? catalogueSeenAt : liveTimestamp,
           is_online: isOnline, operational_status: operationalStatus, updated_at: new Date().toISOString(),

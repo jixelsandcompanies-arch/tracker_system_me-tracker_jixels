@@ -852,7 +852,10 @@ Deno.serve(async (request) => {
       }
       try {
         const cloudDeviceId = await tramigoCloudDeviceId(deviceId, deviceCatalogue, providerSession);
-        const live = tramigoLocation(await tramigoRequest(`/api/reports/last_location/${encodeURIComponent(cloudDeviceId)}`, {}, providerSession));
+        const locationReport = tramigoLocation(await tramigoRequest(`/api/reports/last_location/${encodeURIComponent(cloudDeviceId)}`, {}, providerSession));
+        let latestReport = null;
+        try { latestReport = tramigoLocation(await tramigoRequest(`/api/reports/last/${encodeURIComponent(cloudDeviceId)}`, {}, providerSession)); } catch (_) { /* last_location remains the fallback */ }
+        const live = latestReport && (!locationReport || new Date(latestReport.recordedAt).getTime() >= new Date(locationReport.recordedAt).getTime()) ? latestReport : locationReport;
         if (!live) {
           refreshed.push({ id: tracker.id, identifier: tracker.identifier, status: "invalid_report", message: "Tramigo returned no valid GPS position." });
           continue;

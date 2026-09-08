@@ -53,6 +53,10 @@ export default function ProductInventoryView() {
     const pending = data.screening_applications.some((screening) => screening.customer_id === product.customer_id && ["new", "reviewing", "pending"].includes(screening.status));
     return pending ? "Pending" : "Sold";
   };
+  const trackerFor = (product) => data.trackers.find((tracker) => tracker.bike_id === product.id);
+  const trackerLocation = (tracker) => tracker && tracker.latitude != null && tracker.longitude != null
+    ? `${Number(tracker.latitude).toFixed(5)}, ${Number(tracker.longitude).toFixed(5)}`
+    : "Location not received";
   const visibleProducts = data.bikes.filter((product) => {
     const tracker = data.trackers.find((item) => item.bike_id === product.id)?.identifier || "";
     const agent = data.profiles.find((profile) => profile.id === product.assigned_agent_id)?.full_name || "";
@@ -114,13 +118,13 @@ export default function ProductInventoryView() {
       <div className="directory-filters inventory-filters"><label className="table-search"><Search size={15}/><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search products, trackers, or agents"/></label><button className="button secondary" onClick={() => remove(selectedIds)}>Delete selected</button><button className="button danger" onClick={() => remove(visibleProducts.map((product) => product.id))}>Delete all</button></div>
       {message && <div className="import-message">{message}</div>}
       <div className="table-wrap"><table>
-        <thead><tr><th><input type="checkbox" checked={visibleProducts.length > 0 && visibleProducts.every((product) => selectedIds.includes(product.id))} onChange={(event) => setSelectedIds(event.target.checked ? visibleProducts.map((product) => product.id) : [])}/></th><th>Product</th><th>Payable amount</th><th>Assigned customer</th><th>Tracker</th><th>Assigned agent</th><th>Status</th><th>Actions</th></tr></thead>
+        <thead><tr><th><input type="checkbox" checked={visibleProducts.length > 0 && visibleProducts.every((product) => selectedIds.includes(product.id))} onChange={(event) => setSelectedIds(event.target.checked ? visibleProducts.map((product) => product.id) : [])}/></th><th>Product</th><th>Payable amount</th><th>Assigned customer</th><th>GPS tracker & location</th><th>Assigned agent</th><th>Status</th><th>Actions</th></tr></thead>
         <tbody>{visibleProducts.map((product) => <tr key={product.id}>
           <td><input type="checkbox" checked={selectedIds.includes(product.id)} onChange={() => toggle(product.id)}/></td>
           <td><strong>{product.product_type}</strong><small>{product.identifier}</small></td>
           <td>{money(product.payable_amount)}</td>
           <td>{data.customers.find((customer) => customer.id === product.customer_id)?.full_name || "—"}</td>
-          <td>{data.trackers.find((tracker) => tracker.bike_id === product.id)?.identifier || "Unlinked"}</td>
+          <td>{trackerFor(product) ? <div className="inventory-tracker-cell"><strong>{trackerFor(product).identifier}</strong><small className={trackerFor(product).is_online ? "tracker-online" : "tracker-offline"}>{trackerFor(product).is_online ? "Online" : "Offline"}</small><small>{trackerLocation(trackerFor(product))}</small></div> : <span className="muted-cell">No GPS tracker linked</span>}</td>
           <td>{data.profiles.find((profile) => profile.id === product.assigned_agent_id)?.full_name || "Unassigned"}</td>
           <td><span className={`inventory-status ${inventoryStatus(product).toLowerCase()}`}>{inventoryStatus(product)}</span></td>
           <td><div className="account-actions"><button className="button secondary" onClick={() => open(product)}>Update</button><button className="button danger" onClick={() => remove([product.id])}><Trash2 size={14}/> Delete</button></div></td>

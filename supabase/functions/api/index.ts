@@ -89,12 +89,14 @@ function tramigoCatalogueDevice(catalogue: any, cloudDeviceId: string) {
   return tramigoDeviceRecords(catalogue).find((item) => String(tramigoValue(item, ["Device_ID", "device_id", "ID", "id"]) ?? "") === String(cloudDeviceId));
 }
 function tramigoCatalogueStatus(record: any) {
-  const value = record?.IsOnline ?? record?.isOnline ?? record?.Online ?? record?.online ?? record?.ConnectionStatus ?? record?.connectionStatus ?? record?.IsActive ?? record?.isActive ?? record?.Active ?? record?.active ?? record?.Status ?? record?.status;
+  const source = record?.device ?? record?.Device ?? record?.connection ?? record?.Connection ?? record?.state ?? record?.State ?? record;
+  const value = source?.IsOnline ?? source?.isOnline ?? source?.Online ?? source?.online ?? source?.ConnectionStatus ?? source?.connectionStatus ?? source?.Connectivity ?? source?.connectivity ?? source?.IsConnected ?? source?.isConnected ?? source?.IsActive ?? source?.isActive ?? source?.Active ?? source?.active ?? source?.DeviceStatus ?? source?.deviceStatus ?? source?.Status ?? source?.status ?? source?.State ?? source?.state;
   const normalized = String(value ?? "").trim().toLowerCase();
   return ["online", "active", "connected", "available", "true", "1"].includes(normalized) ? "online" : ["offline", "inactive", "disconnected", "unavailable", "false", "0"].includes(normalized) ? "offline" : null;
 }
 function tramigoCatalogueLastSeen(record: any) {
-  const value = record?.LastSeen ?? record?.lastSeen ?? record?.LastSeenAt ?? record?.last_seen_at ?? record?.LastCommunication ?? record?.lastCommunication ?? record?.LastCommunicationTime ?? record?.lastCommunicationTime ?? record?.LastUpdate ?? record?.lastUpdate ?? record?.LastActivity ?? record?.lastActivity ?? record?.LastActivityAt ?? record?.lastActivityAt ?? record?.DateTime_Actual ?? record?.DateTimeActual ?? record?.DateTime_Received ?? record?.DateTimeReceived;
+  const source = record?.device ?? record?.Device ?? record?.connection ?? record?.Connection ?? record?.state ?? record?.State ?? record;
+  const value = source?.LastSeen ?? source?.lastSeen ?? source?.LastSeenAt ?? source?.last_seen_at ?? source?.LastCommunication ?? source?.lastCommunication ?? source?.LastCommunicationTime ?? source?.lastCommunicationTime ?? source?.LastUpdate ?? source?.lastUpdate ?? source?.LastActivity ?? source?.lastActivity ?? source?.LastActivityAt ?? source?.lastActivityAt ?? source?.DateTime_Actual ?? source?.DateTimeActual ?? source?.DateTime_Received ?? source?.DateTimeReceived;
   return value && Number.isFinite(new Date(value).getTime()) ? new Date(value).toISOString() : null;
 }
 function safeLiveTimestamp(value: unknown) {

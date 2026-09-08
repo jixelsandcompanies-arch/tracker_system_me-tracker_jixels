@@ -97,6 +97,13 @@ function tramigoCatalogueLastSeen(record: any) {
   const value = record?.LastSeen ?? record?.lastSeen ?? record?.LastSeenAt ?? record?.last_seen_at ?? record?.DateTime_Actual ?? record?.DateTimeActual;
   return value && Number.isFinite(new Date(value).getTime()) ? new Date(value).toISOString() : null;
 }
+function safeLiveTimestamp(value: unknown) {
+  const parsed = new Date(String(value ?? ""));
+  if (!Number.isFinite(parsed.getTime())) return new Date().toISOString();
+  // Device clocks and timezone-less Tramigo values can be ahead of the API
+  // server. Never display a live timestamp from the future.
+  return parsed.getTime() > Date.now() + 5 * 60_000 ? new Date().toISOString() : parsed.toISOString();
+}
 function tramigoLocation(report: any) {
   const source = report?.main_reports?.[0] ?? report?.mainReports?.[0] ?? report;
   const latitude = Number(source?.Latitude ?? source?.latitude); const longitude = Number(source?.Longitude ?? source?.longitude);
@@ -880,11 +887,12 @@ Deno.serve(async (request) => {
         const catalogueDevice = tramigoCatalogueDevice(deviceCatalogue, cloudDeviceId);
         const catalogueStatus = tramigoCatalogueStatus(catalogueDevice);
         const catalogueSeenAt = tramigoCatalogueLastSeen(catalogueDevice);
-        const reportAge = Date.now() - new Date(live.recordedAt).getTime();
+        const liveTimestamp = safeLiveTimestamp(live.recordedAt);
+        const reportAge = Date.now() - new Date(liveTimestamp).getTime();
         const isOnline = live.trackerStatus === "online" || catalogueStatus === "online" || (live.trackerStatus == null && catalogueStatus == null && Number.isFinite(reportAge) && reportAge <= 10 * 60_000);
         const operationalStatus = live.trackerStatus ?? catalogueStatus ?? (isOnline ? "online" : "offline");
         const { error: updateError } = await admin.from("trackers").update({
-          latitude: live.latitude, longitude: live.longitude, last_seen_at: catalogueSeenAt && new Date(catalogueSeenAt) > new Date(live.recordedAt) ? catalogueSeenAt : live.recordedAt,
+          latitude: live.latitude, longitude: live.longitude, last_seen_at: catalogueSeenAt && new Date(catalogueSeenAt) <= new Date() && new Date(catalogueSeenAt) > new Date(liveTimestamp) ? catalogueSeenAt : liveTimestamp,
           is_online: isOnline, operational_status: operationalStatus, updated_at: new Date().toISOString(),
         }).eq("id", tracker.id);
         if (updateError) throw updateError;

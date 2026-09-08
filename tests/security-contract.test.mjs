@@ -17,6 +17,7 @@ const eas = JSON.parse(read("eas.json"));
 const adminVercelConfig = read("jixes/vercel.json");
 const adminIndex = read("jixes/index.html");
 const adminData = read("jixes/src/lib/data.js");
+const trackerView = read("jixes/src/components/TrackerView.jsx");
 
 assert.match(config, /\^https:/, "production transport must enforce HTTPS");
 assert.equal(eas.build.production.env.EXPO_PUBLIC_DEMO_MODE, "false", "production must disable demo mode");
@@ -47,6 +48,7 @@ assert.match(apiFunction, /\.gte\(\"recorded_at\", window\.from\)/, "route histo
 assert.match(apiFunction, /\.limit\(2000\)/, "route history must have a bounded point count");
 assert.match(apiFunction, /tracker_imei: _privateTrackerImei/, "customer location responses must not expose tracker IMEIs");
 assert.match(adminData, /table === "finance_settings".*updated_at/, "finance settings loading must tolerate legacy schemas without created_at");
+assert.match(trackerView, /invokeApi\(`\/v1\/admin\/trackers.*route.*null, \"GET\"\)/s, "admin route history must use GET");
 assert.doesNotMatch(read("jixes/src/lib/data.js"), /SERVICE_ROLE|service_role/, "the admin browser bundle must never contain a Supabase service-role key");
 assert.match(app, /verifyApprovalCode\(\{ email: applicant\.email, code \}\)/, "approval code verification must be bound to the registered customer email");
 assert.match(apiFunction, /customer_approval_codes/, "approval codes must be stored server-side");

@@ -52,7 +52,7 @@ export default function TrackerView() {
   const loadRoute = async () => {
     if (!selected || !/^\d{4}-\d{2}-\d{2}$/.test(routeDate)) return setMessage("Choose a route date in YYYY-MM-DD format.");
     setRouteLoading(true);
-    const result = await invokeApi(`/v1/admin/trackers/${encodeURIComponent(selected.id)}/route?from=${encodeURIComponent(`${routeDate}T00:00:00.000Z`)}&to=${encodeURIComponent(`${routeDate}T23:59:59.999Z`)}`, {});
+    const result = await invokeApi(`/v1/admin/trackers/${encodeURIComponent(selected.id)}/route?from=${encodeURIComponent(`${routeDate}T00:00:00.000Z`)}&to=${encodeURIComponent(`${routeDate}T23:59:59.999Z`)}`, null, "GET");
     setRouteLoading(false);
     if (result.error) return setMessage(result.error.message);
     setRoute(result.data);

@@ -85,6 +85,18 @@ async function tramigoCloudDeviceId(identifier: string, catalogue?: any, session
   if (!cloudId) throw new Error(`Tramigo device ${requested} was not found in the configured account.`);
   return cloudId;
 }
+function tramigoCatalogueDevice(catalogue: any, cloudDeviceId: string) {
+  return tramigoDeviceRecords(catalogue).find((item) => String(tramigoValue(item, ["Device_ID", "device_id", "ID", "id"]) ?? "") === String(cloudDeviceId));
+}
+function tramigoCatalogueStatus(record: any) {
+  const value = record?.IsOnline ?? record?.isOnline ?? record?.Online ?? record?.online ?? record?.ConnectionStatus ?? record?.connectionStatus ?? record?.Status ?? record?.status;
+  const normalized = String(value ?? "").trim().toLowerCase();
+  return ["online", "active", "connected", "available", "true", "1"].includes(normalized) ? "online" : ["offline", "inactive", "disconnected", "unavailable", "false", "0"].includes(normalized) ? "offline" : null;
+}
+function tramigoCatalogueLastSeen(record: any) {
+  const value = record?.LastSeen ?? record?.lastSeen ?? record?.LastSeenAt ?? record?.last_seen_at ?? record?.DateTime_Actual ?? record?.DateTimeActual;
+  return value && Number.isFinite(new Date(value).getTime()) ? new Date(value).toISOString() : null;
+}
 function tramigoLocation(report: any) {
   const source = report?.main_reports?.[0] ?? report?.mainReports?.[0] ?? report;
   const latitude = Number(source?.Latitude ?? source?.latitude); const longitude = Number(source?.Longitude ?? source?.longitude);
@@ -848,11 +860,14 @@ Deno.serve(async (request) => {
         // Some Tramigo last-location responses omit an explicit connection
         // flag. In that case, a recent valid report is the correct fallback;
         // explicit Tramigo status always remains authoritative.
+        const catalogueDevice = tramigoCatalogueDevice(deviceCatalogue, cloudDeviceId);
+        const catalogueStatus = tramigoCatalogueStatus(catalogueDevice);
+        const catalogueSeenAt = tramigoCatalogueLastSeen(catalogueDevice);
         const reportAge = Date.now() - new Date(live.recordedAt).getTime();
-        const isOnline = live.trackerStatus === "online" || (live.trackerStatus == null && Number.isFinite(reportAge) && reportAge <= 10 * 60_000);
-        const operationalStatus = live.trackerStatus ?? (isOnline ? "online" : "offline");
+        const isOnline = live.trackerStatus === "online" || catalogueStatus === "online" || (live.trackerStatus == null && catalogueStatus == null && Number.isFinite(reportAge) && reportAge <= 10 * 60_000);
+        const operationalStatus = live.trackerStatus ?? catalogueStatus ?? (isOnline ? "online" : "offline");
         const { error: updateError } = await admin.from("trackers").update({
-          latitude: live.latitude, longitude: live.longitude, last_seen_at: live.recordedAt,
+          latitude: live.latitude, longitude: live.longitude, last_seen_at: catalogueSeenAt && new Date(catalogueSeenAt) > new Date(live.recordedAt) ? catalogueSeenAt : live.recordedAt,
           is_online: isOnline, operational_status: operationalStatus, updated_at: new Date().toISOString(),
         }).eq("id", tracker.id);
         if (updateError) throw updateError;

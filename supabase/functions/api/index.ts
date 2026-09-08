@@ -134,7 +134,21 @@ async function fetchTramigoRoute(identifier: string, window: { from: string; to:
   const cloudDeviceId = await tramigoCloudDeviceId(identifier, catalogue, session);
   const params = new URLSearchParams({ page: "1", per_page: "100", start_date: window.from.replace("T", " ").replace(/\.\d{3}Z$/, ""), end_date: window.to.replace("T", " ").replace(/\.\d{3}Z$/, "") });
   const payload = await tramigoRequest(`/api/reports/${encodeURIComponent(cloudDeviceId)}?${params}`, {}, session);
-  return tramigoRouteLocations(payload);
+  const points = tramigoRouteLocations(payload);
+  const records = tramigoReportRecords(payload);
+  const first = records[0] ?? {}; const last = records.at(-1) ?? {};
+  const firstMain = first?.main_reports?.[0] ?? first?.mainReports?.[0] ?? {};
+  const lastMain = last?.main_reports?.[0] ?? last?.mainReports?.[0] ?? {};
+  const value = (record: any, keys: string[]) => keys.map((key) => record?.[key]).find((item) => item != null && String(item).trim() !== "") ?? null;
+  const trip = records.flatMap((record) => record?.trip_reports ?? record?.tripReports ?? []).at(0) ?? {};
+  return {
+    points,
+    summary: {
+      start: { event: value(first, ["Type", "type", "HeaderString", "headerString"]), time: value(first, ["DateTime_Actual", "DateTimeActual", "StartTime"]) ?? value(trip, ["StartTime"]), landmark: value(firstMain, ["Landmark", "landmark"]), latitude: points[0]?.latitude ?? null, longitude: points[0]?.longitude ?? null },
+      end: { event: value(last, ["Type", "type", "HeaderString", "headerString"]), time: value(last, ["DateTime_Actual", "DateTimeActual", "EndTime"]) ?? value(trip, ["EndTime"]), landmark: value(lastMain, ["Landmark", "landmark"]), latitude: points.at(-1)?.latitude ?? null, longitude: points.at(-1)?.longitude ?? null },
+      battery: value(last, ["Battery", "battery", "BatteryLevel", "batteryLevel"]), satellite: value(last, ["Satellite", "satellite", "Satellites", "satellites"]), gsm: value(last, ["GSM", "gsm", "Gsm", "SignalStrength"]), parkedTime: value(last, ["ParkedTime", "parkedTime"]), fuel: value(last, ["Fuel", "fuel", "FuelAnalog", "fuelAnalog"]), zone: value(last, ["Zone", "zone", "Geofence", "geofence"]) ?? "No Geofence",
+    },
+  };
 }
 
 function routeWindow(url: URL) {
@@ -908,15 +922,15 @@ Deno.serve(async (request) => {
       }
     }
     const providerIdentifier = String(tracker.tramigo_device_id ?? tracker.identifier ?? "").trim();
-    let providerPointCount = 0; let providerRouteError = false;
+    let providerPointCount = 0; let providerRouteError = false; let providerSummary = null;
     if (providerIdentifier && Deno.env.get("TRAMIGO_USERNAME")) {
       try {
         const providerSession = await tramigoSession();
         const catalogue = await tramigoRequest("/api/v2/devices?page=1&per_page=1000", {}, providerSession);
-        const providerPoints = await fetchTramigoRoute(providerIdentifier, window, providerSession, catalogue);
-        providerPointCount = providerPoints.length;
-        if (providerPoints.length) {
-          const rows = providerPoints.map((point) => ({ vehicle_id: vehicleId, tracker_id: tracker.id, latitude: point.latitude, longitude: point.longitude, speed_kph: point.speedKph, recorded_at: point.recordedAt }));
+        const providerRoute = await fetchTramigoRoute(providerIdentifier, window, providerSession, catalogue);
+        providerPointCount = providerRoute.points.length; providerSummary = providerRoute.summary;
+        if (providerRoute.points.length) {
+          const rows = providerRoute.points.map((point) => ({ vehicle_id: vehicleId, tracker_id: tracker.id, latitude: point.latitude, longitude: point.longitude, speed_kph: point.speedKph, recorded_at: point.recordedAt }));
           const { error: historyError } = await admin.from("tracker_locations").insert(rows);
           if (historyError) console.error("Provider route history insert failed", tracker.id, historyError);
         }
@@ -924,7 +938,7 @@ Deno.serve(async (request) => {
     }
     try {
       const result = await loadRoute(admin, vehicleId, tracker.id, window);
-      return response({ trackerId, identifier: tracker.identifier, ...result, providerPointCount, providerRouteError, message: result.points.length ? undefined : "No saved GPS points for this date." });
+      return response({ trackerId, identifier: tracker.identifier, ...result, providerPointCount, providerSummary, providerRouteError, message: result.points.length ? undefined : "No saved GPS points for this date." });
     } catch (error) {
       console.error("Admin tracker route load failed", trackerId, error);
       return fail("Tracker route history is temporarily unavailable.", 503, "ROUTE_UNAVAILABLE");

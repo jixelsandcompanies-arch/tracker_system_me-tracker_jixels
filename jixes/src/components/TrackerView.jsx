@@ -331,6 +331,12 @@ export default function TrackerView() {
                     <button className="button secondary" disabled={routeLoading} onClick={loadRoute}>{routeLoading ? "Loading…" : "Show route"}</button>
                   </div>
                   {route && <p><b>Route summary</b><span>{route.distanceKm} km · {route.durationMinutes} min · {route.stops} stops · {route.points?.length || 0} points</span></p>}
+                  {route?.providerSummary && <div className="tracker-trip-report">
+                    <strong>Tramigo trip report</strong>
+                    <p><b>Start</b><span>{route.providerSummary.start.event || "—"} · {route.providerSummary.start.time || "—"}<br />{route.providerSummary.start.landmark || "—"}</span></p>
+                    <p><b>End</b><span>{route.providerSummary.end.event || "—"} · {route.providerSummary.end.time || "—"}<br />{route.providerSummary.end.landmark || "—"}</span></p>
+                    <p><b>Device status</b><span>Zone: {route.providerSummary.zone || "—"} · Battery: {route.providerSummary.battery || "—"} · Satellite: {route.providerSummary.satellite || "—"} · GSM: {route.providerSummary.gsm || "—"} · Parked: {route.providerSummary.parkedTime || "—"} · Fuel: {route.providerSummary.fuel || "—"}</span></p>
+                  </div>}
                 </div>
                 <a
                   className="button primary tracker-route"

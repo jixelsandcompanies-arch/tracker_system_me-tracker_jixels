@@ -787,7 +787,7 @@ Deno.serve(async (request) => {
     return response({ ResultCode: 0, ResultDesc: "Accepted" });
   }
   if (route === "/v1/wifi/packages" && request.method === "GET") {
-    const { data, error } = await admin.from("wifi_packages").select("id,name,slug,price_kes,duration_minutes,description,is_active,is_popular,display_order").eq("is_active", true).order("display_order", { ascending: true });
+    const { data, error } = await admin.from("wifi_packages").select("id,name,slug,price_kes,duration_minutes,description,is_active,is_popular,is_best_value,display_order").eq("is_active", true).order("display_order", { ascending: true });
     if (error) return fail("Wi-Fi packages are temporarily unavailable.", 503, "WIFI_PACKAGES_UNAVAILABLE");
     return response({ packages: data ?? [] });
   }

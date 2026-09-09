@@ -5,8 +5,8 @@ export const WIFI_PACKAGES = Object.freeze([
   { name: "6 Hours", priceKes: 30, durationMinutes: 360 },
   { name: "12 Hours", priceKes: 60, durationMinutes: 720 },
   { name: "24 Hours", priceKes: 80, durationMinutes: 1440 },
-  { name: "7 Days / Weekly", priceKes: 400, durationMinutes: 10080 },
-  { name: "30 Days / Monthly", priceKes: 800, durationMinutes: 43200 },
+  { name: "Weekly", priceKes: 300, durationMinutes: 10080 },
+  { name: "Monthly", priceKes: 800, durationMinutes: 43200 },
 ]);
 
 export function isPackageValid(pkg) {

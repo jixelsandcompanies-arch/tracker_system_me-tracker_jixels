@@ -3,7 +3,7 @@ import { Pencil, Search, ShieldCheck, Trash2, UserRound, X } from "lucide-react"
 import { hasSupabaseConfig, invokeApi, listRecords, subscribeToTable, updateRecord } from "../lib/data";
 import { recordAudit } from "../lib/security";
 
-const statusLabel = (status) => status === "approved" ? "Approved" : status === "suspended" || status === "declined" ? "Suspended" : "Pending";
+const statusLabel = (status) => status === "approved" ? "Approved" : status === "processing" ? "In review" : status === "suspended" || status === "declined" ? "Suspended" : "Pending";
 const applicationId = (application) => `APP-${application.id.replaceAll("-", "").slice(0, 10).toUpperCase()}`;
 
 function Document({ src, label, fallback = "Not submitted" }) {
@@ -102,17 +102,40 @@ export default function ScreeningWorkflowView() {
   const [status, setStatus] = useState("pending");
   const [selected, setSelected] = useState(null);
   const [message, setMessage] = useState("");
+  const autoScreen = async (records) => {
+    const identities = new Map();
+    records.forEach((item) => {
+      for (const value of [item.email, item.phone, item.national_id]) {
+        const key = String(value || "").trim().toLowerCase();
+        if (key) identities.set(key, (identities.get(key) || 0) + 1);
+      }
+    });
+    const ready = records.filter((item) => {
+      if (item.status !== "pending") return false;
+      const fieldsReady = [item.full_name, item.email, item.phone, item.national_id, item.product_id, item.tracker_identifier].every(Boolean);
+      const documentsReady = [item.customer_photo_url, item.id_front_url, item.id_back_url].every(Boolean);
+      const duplicate = [item.email, item.phone, item.national_id].some((value) => {
+        const key = String(value || "").trim().toLowerCase();
+        return key && identities.get(key) > 1;
+      });
+      return fieldsReady && documentsReady && !duplicate;
+    });
+    if (ready.length) await Promise.all(ready.map((item) => updateRecord("screening_applications", item.id, { status: "processing", updated_at: new Date().toISOString() })));
+    return new Set(ready.map((item) => item.id));
+  };
   const load = async () => {
     if (!hasSupabaseConfig) return setMessage("Connect Supabase to view screening applications.");
     const [apps, profiles] = await Promise.all([listRecords("screening_applications", { pageSize: 500 }), listRecords("profiles", { pageSize: 500 })]);
     const error = apps.error || profiles.error;
     if (error) return setMessage(error.message);
-    setApplications(apps.data); setAgents(profiles.data); setMessage("");
+    const readyIds = await autoScreen(apps.data);
+    const refreshed = apps.data.map((item) => readyIds.has(item.id) ? { ...item, status: "processing" } : item);
+    setApplications(refreshed); setAgents(profiles.data); setMessage("");
   };
   useEffect(() => { load(); return subscribeToTable("screening_applications", load); }, []);
   const visible = applications.filter((application) => {
     const normalized = statusLabel(application.status).toLowerCase();
     return (!status || normalized === status) && JSON.stringify(application).toLowerCase().includes(query.toLowerCase());
   });
-  return <><section className="panel module-table"><div className="panel-heading"><div><h2>Screening applications</h2><p>Applications submitted from the customer app for identity and account approval.</p></div></div><div className="directory-filters"><label className="table-search"><Search size={15}/><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search application, customer, tracker, or ID"/></label><select value={status} onChange={(event) => setStatus(event.target.value)}><option value="">All statuses</option><option value="pending">Pending</option><option value="approved">Approved</option><option value="suspended">Suspended</option></select></div>{message && <div className="import-message">{message}</div>}<div className="table-wrap"><table><thead><tr><th>Application ID</th><th>Customer</th><th>National ID</th><th>Agent</th><th>Tracker</th><th>Deposit</th><th>Status</th><th>Actions</th></tr></thead><tbody>{visible.map((application) => <tr key={application.id}><td>{applicationId(application)}</td><td><strong>{application.full_name}</strong></td><td>{application.national_id || "—"}</td><td>{agents.find((agent) => agent.id === application.installer_agent_id)?.full_name || "Unassigned"}</td><td>{application.tracker_identifier || application.tracker_serial_number || "—"}</td><td>KES {Number(application.deposit_amount || 0).toLocaleString()}</td><td><span className={`screening-status ${statusLabel(application.status).toLowerCase()}`}>{statusLabel(application.status)}</span></td><td><button className="text-button screening-open" onClick={() => setSelected(application)}>Open</button></td></tr>)}</tbody></table></div></section>{selected && <ReviewDrawer application={applications.find((item) => item.id === selected.id) || selected} agents={agents} onClose={() => setSelected(null)} onChanged={load}/>}</>;
+  return <><section className="panel module-table"><div className="panel-heading"><div><h2>Screening applications</h2><p>Required fields and identity documents are checked automatically before review.</p></div></div><div className="directory-filters"><label className="table-search"><Search size={15}/><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search application, customer, tracker, or ID"/></label><select value={status} onChange={(event) => setStatus(event.target.value)}><option value="">All statuses</option><option value="pending">Pending</option><option value="processing">In review</option><option value="approved">Approved</option><option value="suspended">Suspended</option></select></div>{message && <div className="import-message">{message}</div>}<div className="table-wrap"><table><thead><tr><th>Application ID</th><th>Customer</th><th>National ID</th><th>Agent</th><th>Tracker</th><th>Deposit</th><th>Status</th><th>Actions</th></tr></thead><tbody>{visible.map((application) => <tr key={application.id}><td>{applicationId(application)}</td><td><strong>{application.full_name}</strong></td><td>{application.national_id || "—"}</td><td>{agents.find((agent) => agent.id === application.installer_agent_id)?.full_name || "Unassigned"}</td><td>{application.tracker_identifier || application.tracker_serial_number || "—"}</td><td>KES {Number(application.deposit_amount || 0).toLocaleString()}</td><td><span className={`screening-status ${statusLabel(application.status).toLowerCase()}`}>{statusLabel(application.status)}</span></td><td><button className="text-button screening-open" onClick={() => setSelected(application)}>Open</button></td></tr>)}</tbody></table></div></section>{selected && <ReviewDrawer application={applications.find((item) => item.id === selected.id) || selected} agents={agents} onClose={() => setSelected(null)} onChanged={load}/>}</>;
 }

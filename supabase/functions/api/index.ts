@@ -1322,13 +1322,16 @@ Deno.serve(async (request) => {
       if (error) return fail("Agent customers could not be loaded.", 503, "CUSTOMERS_UNAVAILABLE");
       const customerIds = [...new Set((applications ?? []).map((item: any) => item.customer_id).filter(Boolean))];
       const { data: payments, error: paymentsError } = customerIds.length
-        ? await admin.from("payments").select("customer_id,product_id,amount,status,receipt_number,payer_phone,payment_reference,created_at").in("customer_id", customerIds).in("status", ["processing", "paid", "completed", "confirmed"])
+        ? await admin.from("payments").select("customer_id,product_id,amount,status,payment_type,paid_at,receipt_number,payer_phone,payment_reference,created_at").in("customer_id", customerIds).in("status", ["processing", "paid", "completed", "confirmed"])
         : { data: [], error: null };
       if (paymentsError) return fail("Customer payment records could not be loaded.", 503, "PAYMENTS_UNAVAILABLE");
       const { data: financeSettings, error: financeSettingsError } = await admin.from("finance_settings").select("data").eq("id", "default").maybeSingle();
       if (financeSettingsError) return fail("Commission settings could not be loaded.", 503, "COMMISSION_SETTINGS_UNAVAILABLE");
       const saleCommission = Number(financeSettings?.data?.saleCommission ?? 0);
       const monthlyCustomerCommission = Number(financeSettings?.data?.monthlyCustomerCommission ?? 0);
+      const commissionNow = new Date();
+      const commissionMonthStart = new Date(commissionNow.getFullYear(), commissionNow.getMonth(), 1);
+      const commissionNextMonthStart = new Date(commissionNow.getFullYear(), commissionNow.getMonth() + 1, 1);
       const paymentBySale = new Map<string, any[]>();
       for (const payment of payments ?? []) {
         const key = `${payment.customer_id}:${payment.product_id}`;
@@ -1337,6 +1340,11 @@ Deno.serve(async (request) => {
       return response({ customers: (applications ?? []).map((item: any) => {
         const salePayments = paymentBySale.get(`${item.customer_id}:${item.bikes?.id ?? item.product_id}`) ?? [];
         const confirmed = salePayments.filter((payment) => ["paid", "completed", "confirmed"].includes(String(payment.status).toLowerCase()));
+        const monthlyPayments = confirmed.filter((payment) => {
+          const paymentType = String(payment.payment_type ?? "daily").toLowerCase().replace(/[ _-]/g, "");
+          const paidAt = new Date(payment.paid_at ?? payment.created_at ?? "");
+          return paymentType !== "deposit" && Number.isFinite(paidAt.getTime()) && paidAt >= commissionMonthStart && paidAt < commissionNextMonthStart;
+        });
         const processing = salePayments.find((payment) => String(payment.status).toLowerCase() === "processing");
         const amountPaid = confirmed.reduce((total, payment) => total + Number(payment.amount ?? 0), 0);
         const requestedDepositAmount = Number(item.requested_deposit_amount ?? item.deposit_amount ?? 0);
@@ -1360,7 +1368,7 @@ Deno.serve(async (request) => {
           payableAmount: Number(item.bikes?.payable_amount ?? 0),
           amount: amountPaid,
           balance: Math.max(0, Number(item.bikes?.payable_amount ?? 0) - amountPaid),
-          commission: item.status === "approved" ? saleCommission + monthlyCustomerCommission : 0,
+          commission: item.status === "approved" ? saleCommission + (monthlyPayments.length * monthlyCustomerCommission) : 0,
           receipt: confirmed[0]?.receipt_number ?? processing?.payment_reference ?? "",
           date: item.created_at?.slice(0, 10) ?? "",
           screeningStatus: item.status,

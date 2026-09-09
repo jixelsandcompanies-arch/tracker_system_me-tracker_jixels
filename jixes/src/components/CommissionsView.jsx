@@ -89,13 +89,21 @@ export default function CommissionsView() {
           ),
         0,
       );
-      const monthlyCustomers = customers.filter((customer) =>
-        ["active", "approved"].includes(
-          String(customer.status || "").toLowerCase(),
-        ),
-      );
+      const now = new Date();
+      const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+      const nextMonthStart = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+      const monthlyPayments = payments.filter((payment) => {
+        const paymentStatus = String(payment.status || "").toLowerCase();
+        const paymentType = String(payment.payment_type || "daily").toLowerCase().replace(/[ _-]/g, "");
+        const paidAt = new Date(payment.paid_at || payment.created_at || "");
+        return ["paid", "completed", "confirmed"].includes(paymentStatus)
+          && paymentType !== "deposit"
+          && Number.isFinite(paidAt.getTime())
+          && paidAt >= monthStart
+          && paidAt < nextMonthStart;
+      });
       const saleCommission = soldProducts.length * saleRate;
-      const monthlyCommission = monthlyCustomers.length * monthlyRate;
+      const monthlyCommission = monthlyPayments.length * monthlyRate;
       return {
         agent,
         products,
@@ -106,6 +114,7 @@ export default function CommissionsView() {
         saleValue,
         saleCommission,
         monthlyCommission,
+        monthlyPayments,
         commission: saleCommission + monthlyCommission,
       };
     });
@@ -138,7 +147,7 @@ export default function CommissionsView() {
           <span>Total commission</span>
           <strong>{money(totals.commission)}</strong>
           <small>
-            {money(commissionRules.saleCommission)} per approved tracker sale + {money(commissionRules.monthlyCustomerCommission)} per active customer this month
+            {money(commissionRules.saleCommission)} per sold tracker + {money(commissionRules.monthlyCustomerCommission)} per confirmed Lipa Mdogo Mdogo payment this month
           </small>
         </article>
         <article className="panel module-summary">

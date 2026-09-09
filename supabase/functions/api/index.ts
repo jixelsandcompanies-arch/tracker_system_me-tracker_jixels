@@ -255,6 +255,16 @@ function normalizeKenyanPhone(value: unknown) {
   return null;
 }
 
+type WifiGatewayAdapter = { activate: (session: any) => Promise<{ gatewaySessionId: string }>; revoke: (session: any) => Promise<void> };
+function wifiGateway(): WifiGatewayAdapter {
+  const adapter = (Deno.env.get("WIFI_GATEWAY_ADAPTER") ?? "mock").toLowerCase();
+  if (adapter === "mock") return {
+    activate: async (session) => ({ gatewaySessionId: `mock-${session.id}` }),
+    revoke: async () => {},
+  };
+  throw new Error("The production Wi-Fi gateway adapter is not configured. Set WIFI_GATEWAY_ADAPTER after selecting the actual gateway hardware.");
+}
+
 function decodeScreeningDocument(value: unknown) {
   if (typeof value !== "string") return null;
   const match = value.match(/^data:(image\/(?:jpeg|png));base64,([A-Za-z0-9+/=]+)$/);
@@ -770,6 +780,80 @@ Deno.serve(async (request) => {
               const { error: financeRefreshError } = await admin.rpc("materialize_tracker_sale", { p_application_id: approvedApplication.id });
               if (financeRefreshError) console.error("Finance payment materialization failed", financeRefreshError);
             }
+          }
+        }
+      }
+    }
+    return response({ ResultCode: 0, ResultDesc: "Accepted" });
+  }
+  if (route === "/v1/wifi/packages" && request.method === "GET") {
+    const { data, error } = await admin.from("wifi_packages").select("id,name,slug,price_kes,duration_minutes,description,is_active,is_popular,display_order").eq("is_active", true).order("display_order", { ascending: true });
+    if (error) return fail("Wi-Fi packages are temporarily unavailable.", 503, "WIFI_PACKAGES_UNAVAILABLE");
+    return response({ packages: data ?? [] });
+  }
+  if (route === "/v1/wifi/expire" && request.method === "POST") {
+    const secret = request.headers.get("x-wifi-expiry-secret") ?? "";
+    if (!Deno.env.get("WIFI_EXPIRY_SECRET") || secret !== Deno.env.get("WIFI_EXPIRY_SECRET")) return fail("Expiry worker authentication failed.", 401, "WIFI_EXPIRY_UNAUTHORIZED");
+    const { data: sessions } = await admin.from("wifi_sessions").select("id,gateway_session_id").eq("status", "active").lte("expires_at", new Date().toISOString()).limit(200);
+    const gateway = wifiGateway();
+    for (const session of sessions ?? []) { await gateway.revoke(session); await admin.from("wifi_sessions").update({ status: "expired", updated_at: new Date().toISOString() }).eq("id", session.id); }
+    return response({ expired: sessions?.length ?? 0 });
+  }
+  if (route === "/v1/wifi/purchase" && request.method === "POST") {
+    const packageId = String(body.packageId ?? "").trim();
+    const phone = normalizeKenyanPhone(body.phone);
+    const idempotencyKey = request.headers.get("Idempotency-Key")?.trim() || String(body.idempotencyKey ?? "").trim();
+    const deviceMac = String(body.deviceMac ?? "").trim().slice(0, 64) || null;
+    if (!packageId || !phone || !idempotencyKey) return fail("Choose a package, enter a valid Kenyan M-Pesa number, and provide a payment reference.", 422, "INVALID_WIFI_PURCHASE");
+    const { data: existing } = await admin.from("wifi_purchases").select("id,status,checkout_request_id").eq("idempotency_key", idempotencyKey).maybeSingle();
+    if (existing) return response({ purchase: existing }, existing.status === "pending" ? 202 : 200);
+    const { data: wifiPackage, error: packageError } = await admin.from("wifi_packages").select("id,name,price_kes,duration_minutes,is_active").eq("id", packageId).eq("is_active", true).maybeSingle();
+    if (packageError || !wifiPackage) return fail("That Wi-Fi package is unavailable.", 404, "WIFI_PACKAGE_UNAVAILABLE");
+    const { data: purchase, error: purchaseError } = await admin.from("wifi_purchases").insert({ package_id: wifiPackage.id, phone, device_mac: deviceMac, amount_kes: wifiPackage.price_kes, idempotency_key: idempotencyKey }).select("id,status,amount_kes").single();
+    if (purchaseError || !purchase) return fail("The Wi-Fi purchase could not be created.", 503, "WIFI_PURCHASE_UNAVAILABLE");
+    const { data: wifiSession, error: sessionError } = await admin.from("wifi_sessions").insert({ purchase_id: purchase.id, package_id: wifiPackage.id, phone, device_mac: deviceMac }).select("id").single();
+    if (sessionError) return fail("The Wi-Fi session could not be created.", 503, "WIFI_SESSION_UNAVAILABLE");
+    try {
+      const timestamp = new Date().toISOString().replace(/[-:TZ.]/g, "").slice(0, 14);
+      const callbackUrl = Deno.env.get("WIFI_MPESA_CALLBACK_URL") ?? `${Deno.env.get("SUPABASE_URL")}/functions/v1/api/v1/wifi/mpesa/callback`;
+      const result = await darajaPost("/mpesa/stkpush/v1/processrequest", { BusinessShortCode: Deno.env.get("DARAJA_SHORTCODE"), Password: stkPassword(timestamp), Timestamp: timestamp, TransactionType: "CustomerPayBillOnline", Amount: Number(wifiPackage.price_kes), PartyA: phone, PartyB: Deno.env.get("DARAJA_SHORTCODE"), PhoneNumber: phone, CallBackURL: callbackUrl, AccountReference: `WIFI-${purchase.id.slice(0, 8)}`, TransactionDesc: `Jixels Wi-Fi ${wifiPackage.name}` });
+      const checkoutRequestId = String(result.CheckoutRequestID ?? "");
+      if (!checkoutRequestId) throw new Error("M-Pesa did not return a checkout request ID.");
+      await admin.from("wifi_purchases").update({ checkout_request_id: checkoutRequestId, updated_at: new Date().toISOString() }).eq("id", purchase.id);
+      return response({ purchase: { ...purchase, status: "pending", checkoutRequestId }, sessionId: wifiSession?.id }, 202);
+    } catch (error) {
+      await admin.from("wifi_purchases").update({ status: "failed", updated_at: new Date().toISOString() }).eq("id", purchase.id);
+      return fail(error instanceof Error ? error.message : "M-Pesa request failed.", 502, "WIFI_MPESA_ERROR");
+    }
+  }
+  const wifiSessionMatch = route.match(/^\/v1\/wifi\/sessions\/([^/]+)$/);
+  if (wifiSessionMatch && request.method === "GET") {
+    const { data, error } = await admin.from("wifi_sessions").select("id,status,starts_at,expires_at,gateway_session_id,wifi_packages(name,duration_minutes)").eq("id", decodeURIComponent(wifiSessionMatch[1])).maybeSingle();
+    if (error || !data) return fail("Wi-Fi session not found.", 404, "WIFI_SESSION_NOT_FOUND");
+    return response({ session: data });
+  }
+  if (route === "/v1/wifi/mpesa/callback" && request.method === "POST") {
+    const callback = body.Body?.stkCallback ?? {};
+    const items = Object.fromEntries((callback.CallbackMetadata?.Item ?? []).map((item: { Name: string; Value?: unknown }) => [item.Name, item.Value]));
+    const completed = Number(callback.ResultCode) === 0;
+    const checkoutRequestId = String(callback.CheckoutRequestID ?? "");
+    const { data: purchase } = await admin.from("wifi_purchases").select("id,status,amount_kes,package_id,phone").eq("checkout_request_id", checkoutRequestId).maybeSingle();
+    if (purchase && purchase.status !== "completed") {
+      const receipt = String(items.MpesaReceiptNumber ?? "").trim() || null;
+      const amountMatches = Number(items.Amount ?? 0) === Number(purchase.amount_kes);
+      const nextStatus = completed && amountMatches ? "completed" : "failed";
+      await admin.from("wifi_purchases").update({ status: nextStatus, mpesa_receipt: receipt, paid_at: nextStatus === "completed" ? new Date().toISOString() : null, updated_at: new Date().toISOString() }).eq("id", purchase.id);
+      if (nextStatus === "completed") {
+        const { data: session } = await admin.from("wifi_sessions").select("id,status,package_id,phone,device_mac").eq("purchase_id", purchase.id).maybeSingle();
+        const { data: wifiPackage } = await admin.from("wifi_packages").select("duration_minutes").eq("id", purchase.package_id).single();
+        if (session && wifiPackage) {
+          try {
+            const startsAt = new Date(); const expiresAt = new Date(startsAt.getTime() + Number(wifiPackage.duration_minutes) * 60_000);
+            const gateway = await wifiGateway(); const activated = await gateway.activate(session);
+            await admin.from("wifi_sessions").update({ status: "active", starts_at: startsAt.toISOString(), expires_at: expiresAt.toISOString(), gateway_session_id: activated.gatewaySessionId, updated_at: new Date().toISOString() }).eq("id", session.id);
+          } catch (error) {
+            await admin.from("wifi_sessions").update({ status: "gateway_failed", updated_at: new Date().toISOString() }).eq("id", session.id);
+            console.error("Wi-Fi gateway activation failed", error);
           }
         }
       }

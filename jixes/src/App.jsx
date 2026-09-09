@@ -50,6 +50,7 @@ import "./styles/directory.css";
 import "./styles/details.css";
 import "./styles/errors.css";
 import "./styles/premium.css";
+import WifiPortal from "./components/WifiPortal";
 
 class AppErrorBoundary extends React.Component {
   constructor(props) {
@@ -78,6 +79,7 @@ const navigation = [
   { label: "GPS Trackers", icon: Radio, key: "GPS Trackers", section: "OPERATIONS" },
   { label: "Screening", icon: ClipboardList, key: "Screening", section: "OPERATIONS" },
   { label: "Support cases", icon: MessageCircle, key: "Support Cases", section: "OPERATIONS" },
+  { label: "Wi-Fi Packages", icon: Wifi, key: "Wi-Fi Packages", section: "OPERATIONS" },
   { label: "Payments", icon: CreditCard, key: "Payments", section: "FINANCE" },
   { label: "Commissions", icon: BadgeDollarSign, key: "Commissions", section: "FINANCE" },
   { label: "Customer accounts", icon: Users, key: "Customer Accounts", section: "ADMIN" },
@@ -356,6 +358,7 @@ function AppContent() {
 }
 
 function App() {
+  if (typeof window !== "undefined" && window.location.pathname.startsWith("/wifi")) return <WifiPortal />;
   return <AppErrorBoundary><AppContent /></AppErrorBoundary>;
 }
 

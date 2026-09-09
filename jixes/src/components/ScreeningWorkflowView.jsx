@@ -99,7 +99,7 @@ export default function ScreeningWorkflowView() {
   const [applications, setApplications] = useState([]);
   const [agents, setAgents] = useState([]);
   const [query, setQuery] = useState("");
-  const [status, setStatus] = useState("pending");
+  const [status, setStatus] = useState("");
   const [selected, setSelected] = useState(null);
   const [message, setMessage] = useState("");
   const autoScreen = async (records) => {
@@ -134,7 +134,7 @@ export default function ScreeningWorkflowView() {
   };
   useEffect(() => { load(); return subscribeToTable("screening_applications", load); }, []);
   const visible = applications.filter((application) => {
-    const normalized = statusLabel(application.status).toLowerCase();
+    const normalized = application.status === "processing" ? "processing" : statusLabel(application.status).toLowerCase();
     return (!status || normalized === status) && JSON.stringify(application).toLowerCase().includes(query.toLowerCase());
   });
   return <><section className="panel module-table"><div className="panel-heading"><div><h2>Screening applications</h2><p>Required fields and identity documents are checked automatically before review.</p></div></div><div className="directory-filters"><label className="table-search"><Search size={15}/><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search application, customer, tracker, or ID"/></label><select value={status} onChange={(event) => setStatus(event.target.value)}><option value="">All statuses</option><option value="pending">Pending</option><option value="processing">In review</option><option value="approved">Approved</option><option value="suspended">Suspended</option></select></div>{message && <div className="import-message">{message}</div>}<div className="table-wrap"><table><thead><tr><th>Application ID</th><th>Customer</th><th>National ID</th><th>Agent</th><th>Tracker</th><th>Deposit</th><th>Status</th><th>Actions</th></tr></thead><tbody>{visible.map((application) => <tr key={application.id}><td>{applicationId(application)}</td><td><strong>{application.full_name}</strong></td><td>{application.national_id || "—"}</td><td>{agents.find((agent) => agent.id === application.installer_agent_id)?.full_name || "Unassigned"}</td><td>{application.tracker_identifier || application.tracker_serial_number || "—"}</td><td>KES {Number(application.deposit_amount || 0).toLocaleString()}</td><td><span className={`screening-status ${statusLabel(application.status).toLowerCase()}`}>{statusLabel(application.status)}</span></td><td><button className="text-button screening-open" onClick={() => setSelected(application)}>Open</button></td></tr>)}</tbody></table></div></section>{selected && <ReviewDrawer application={applications.find((item) => item.id === selected.id) || selected} agents={agents} onClose={() => setSelected(null)} onChanged={load}/>}</>;

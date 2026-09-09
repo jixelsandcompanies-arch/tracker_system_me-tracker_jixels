@@ -838,12 +838,12 @@ Deno.serve(async (request) => {
     const completed = Number(callback.ResultCode) === 0;
     const checkoutRequestId = String(callback.CheckoutRequestID ?? "");
     const { data: purchase } = await admin.from("wifi_purchases").select("id,status,amount_kes,package_id,phone").eq("checkout_request_id", checkoutRequestId).maybeSingle();
-    if (purchase && purchase.status !== "completed") {
+    if (purchase && purchase.status === "pending") {
       const receipt = String(items.MpesaReceiptNumber ?? "").trim() || null;
       const amountMatches = Number(items.Amount ?? 0) === Number(purchase.amount_kes);
       const nextStatus = completed && amountMatches ? "completed" : "failed";
-      await admin.from("wifi_purchases").update({ status: nextStatus, mpesa_receipt: receipt, paid_at: nextStatus === "completed" ? new Date().toISOString() : null, updated_at: new Date().toISOString() }).eq("id", purchase.id);
-      if (nextStatus === "completed") {
+      const { data: claimed } = await admin.from("wifi_purchases").update({ status: nextStatus, mpesa_receipt: receipt, paid_at: nextStatus === "completed" ? new Date().toISOString() : null, updated_at: new Date().toISOString() }).eq("id", purchase.id).eq("status", "pending").select("id").maybeSingle();
+      if (claimed && nextStatus === "completed") {
         const { data: session } = await admin.from("wifi_sessions").select("id,status,package_id,phone,device_mac").eq("purchase_id", purchase.id).maybeSingle();
         const { data: wifiPackage } = await admin.from("wifi_packages").select("duration_minutes").eq("id", purchase.package_id).single();
         if (session && wifiPackage) {

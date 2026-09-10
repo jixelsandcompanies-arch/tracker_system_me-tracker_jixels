@@ -17,7 +17,8 @@ export default {
     updates: {
       url: "https://u.expo.dev/d39d37aa-156b-4bfd-b74d-c2fb8aed6bb6",
       checkAutomatically: "ON_LOAD",
-      fallbackToCacheTimeout: 0
+      fallbackToCacheTimeout: 0,
+      requestHeaders: { "expo-channel-name": "preview" }
     },
     runtimeVersion: {
       policy: "appVersion"
@@ -33,7 +34,7 @@ export default {
     },
     android: {
       package: "com.jixelstechnologies.agent",
-      versionCode: 2,
+      versionCode: 4,
       softwareKeyboardLayoutMode: "resize",
       adaptiveIcon: {
         foregroundImage: "./assets/jixels-agent-icon.png",

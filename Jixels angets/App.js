@@ -777,7 +777,7 @@ function Reports({ customers, profile, onRefresh, refreshing, darkMode = false }
       <View style={styles.reportBikePicker}>
         <Pressable onPress={() => setCustomerPickerOpen(open => !open)} style={[styles.reportBikePickerButton, darkMode && styles.darkInput]}>
           <View style={styles.vehicleDropdownIcon}><MaterialCommunityIcons name="motorbike" size={20} color={colors.blue} /></View>
-          <View style={styles.listBody}><Text style={[styles.vehicleDropdownPlate, darkMode && styles.darkText]}>{selectedCustomer?.bike || "No customer"}</Text><Text style={styles.vehicleDropdownModel}>{selectedCustomer ? `${selectedCustomer.name} • Tracker ${selectedCustomer.tracker}` : "Add a customer first"}</Text></View>
+          <View style={styles.listBody}><Text style={[styles.vehicleDropdownPlate, darkMode && styles.darkText]}>{selectedCustomer?.plateNumber || selectedCustomer?.bike || "No customer"}</Text><Text style={styles.vehicleDropdownModel}>{selectedCustomer ? `${selectedCustomer.name} • Tracker ${selectedCustomer.tracker}` : "Add a customer first"}</Text></View>
           <Ionicons name={customerPickerOpen ? "chevron-up" : "chevron-down"} size={18} color={colors.muted} />
         </Pressable>
         {customerPickerOpen && <View style={[styles.reportBikeDropdown, darkMode && styles.darkCard]}>

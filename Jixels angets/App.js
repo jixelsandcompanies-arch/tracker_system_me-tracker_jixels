@@ -12,7 +12,6 @@ import {
   Platform,
   Pressable,
   RefreshControl,
-  SafeAreaView,
   ScrollView,
   StyleSheet,
   Text,
@@ -22,6 +21,7 @@ import {
 } from "react-native";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import { StatusBar } from "expo-status-bar";
+import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
 import * as Haptics from "expo-haptics";
 import * as ImagePicker from "expo-image-picker";
 import * as Network from "expo-network";
@@ -1121,7 +1121,7 @@ function AgentApp({ agent, onLogout }) {
     : screen === "settings" ? <Settings agent={agentProfile} onSave={setAgentProfile} onRefresh={refresh} refreshing={refreshing} darkMode={darkMode} />
     : <Profile agent={agentProfile} onLogout={onLogout} onRefresh={refresh} refreshing={refreshing} darkMode={darkMode} />;
 
-  return <SafeAreaView style={[styles.app, darkMode && styles.darkPage]}>
+  return <View style={[styles.app, darkMode && styles.darkPage]}>
     <StatusBar style="light" />
     <View style={[styles.shell, darkMode && styles.darkPage]}>
       <View style={[styles.mainPane, darkMode && styles.darkPage]}>
@@ -1140,10 +1140,10 @@ function AgentApp({ agent, onLogout }) {
       {drawerOpen && <Drawer active={screen} unread={unread} onSelect={navigate} onLogout={onLogout} onClose={() => setDrawerOpen(false)} />}
       <DepositPrompt customer={depositCustomer} visible={!!depositCustomer} onCancel={() => setDepositCustomerId(null)} onSubmit={sendDepositPrompt} />
     </View>
-  </SafeAreaView>;
+  </View>;
 }
 
-export default function App() {
+function AppContent() {
   const [phase, setPhase] = useState("boot");
   const [agent, setAgent] = useState(null);
 
@@ -1157,6 +1157,15 @@ export default function App() {
   if (phase === "gps") return <AgentLaunch name={agent.name} onComplete={() => setPhase("skeleton")} />;
   if (phase === "skeleton") return <LaunchSkeleton onComplete={() => setPhase("app")} />;
   return <AgentApp agent={agent} onLogout={() => { setAgent(null); setPhase("login"); }} />;
+}
+
+export default function App() {
+  return <SafeAreaProvider>
+    <SafeAreaView style={{ flex: 1, backgroundColor: "#0D467D" }} edges={["top", "bottom", "left", "right"]}>
+      <StatusBar style="light" />
+      <AppContent />
+    </SafeAreaView>
+  </SafeAreaProvider>;
 }
 
 const styles = StyleSheet.create({

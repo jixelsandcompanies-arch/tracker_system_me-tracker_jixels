@@ -9,7 +9,10 @@
     "ios": "expo run:ios",
     "test": "node scripts/run-tests.mjs",
     "check": "node scripts/check-production.js",
-    "export:android": "expo export --platform android --output-dir dist/android"
+    "export:android": "expo export --platform android --output-dir dist/android",
+    "build:apk": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/customer-release.ps1 -Action build -Channel preview",
+    "update:preview": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/customer-release.ps1 -Action update -Channel preview",
+    "update:production": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/customer-release.ps1 -Action update -Channel production"
   },
   "dependencies": {
     "@expo/metro-runtime": "~6.1.2",
@@ -27,6 +30,7 @@
     "expo-secure-store": "~15.0.8",
     "expo-sharing": "~14.0.8",
     "expo-status-bar": "~3.0.9",
+    "expo-updates": "~29.0.20",
     "react": "19.1.0",
     "react-native": "0.81.5",
     "react-native-maps": "1.20.1",

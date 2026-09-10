@@ -91,10 +91,10 @@ export default function TrackerView() {
     products.find((product) => product.id === tracker.bike_id);
   const customerFor = (tracker) =>
     customers.find((customer) => customer.id === productFor(tracker)?.customer_id);
-  const linkedTrackers = trackers.filter((tracker) => productFor(tracker));
+  const linkedTrackers = trackers;
   const rows = linkedTrackers.filter((tracker) => {
     const text =
-      `${productFor(tracker)?.identifier || "Unlinked"} ${tracker.identifier}`.toLowerCase();
+      `${tracker.plate_number || ""} ${productFor(tracker)?.identifier || "Unlinked"} ${tracker.identifier}<small>Plate: {tracker.plate_number || "Not recorded"}</small>`.toLowerCase();
     return (
       text.includes(query.trim().toLowerCase()) &&
       (!status || status === trackerStatus(tracker))
@@ -179,7 +179,7 @@ export default function TrackerView() {
       })
         .addTo(allMap.current)
         .bindTooltip(
-          `${productFor(tracker)?.identifier || "Unlinked"} · ${tracker.identifier}`,
+          `${productFor(tracker)?.identifier || "Unlinked"} · ${tracker.identifier}<small>Plate: {tracker.plate_number || "Not recorded"}</small>`,
         );
       return point;
     });
@@ -267,7 +267,7 @@ export default function TrackerView() {
                     {customerFor(tracker)?.full_name || "Unassigned"}
                     <small>{customerFor(tracker)?.customer_code || ""}</small>
                   </td>
-                  <td>{tracker.identifier}</td>
+                  <td>{tracker.identifier}<small>Plate: {tracker.plate_number || "Not recorded"}</small></td>
                   <td>
                     {tracker.last_seen_at
                       ? new Date(tracker.last_seen_at).toLocaleString()

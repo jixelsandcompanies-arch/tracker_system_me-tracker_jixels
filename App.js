@@ -3,6 +3,7 @@ import { ActivityIndicator, Alert, Animated, AppState, BackHandler, Image, Keybo
 import MapView, { AnimatedRegion, Marker, Polyline, PROVIDER_GOOGLE } from "./src/components/MapComponents";
 import * as Location from "expo-location";
 import * as Notifications from "expo-notifications";
+import { AppUpdateNotice } from "./src/components/AppUpdateNotice";
 import * as Network from "expo-network";
 import * as ImagePicker from "expo-image-picker";
 import * as FileSystem from "expo-file-system";
@@ -63,8 +64,8 @@ async function customerPushToken() {
     const token = await Notifications.getExpoPushTokenAsync({ projectId: "000c3287-aab6-4be1-858a-3ddf2c670c49" });
     return token.data || null;
   } catch {
-    // Push delivery is optional. Approval and OTP delivery still work through
-    // the registered email or phone number when notifications are unavailable.
+    // Push delivery is optional. Password-verified sign-in returns the OTP
+    // privately inside this app when device notifications are unavailable.
     return null;
   }
 }
@@ -128,18 +129,14 @@ function AuthScreen({ onAuthenticated, onPendingApproval, pendingEmail, approved
     if (password.length < 8) return Alert.alert("Password too short", "Use at least 8 characters.");
     if (mode === "register" && !isStrongPassword(password)) return Alert.alert("Password is not strong enough", "Include an uppercase letter, lowercase letter, number, and special character such as @, #, !, or %. Do not use spaces.");
     if (mode === "register" && (!name.trim() || !phone.trim() || password !== confirm)) return Alert.alert("Check registration", password !== confirm ? "Passwords do not match." : "Complete your name and phone number.");
-    if (mode === "login" && pendingEmail && normalizedEmail === pendingEmail.trim().toLowerCase() && normalizedEmail !== approvedEmail?.trim().toLowerCase()) return Alert.alert("Approval pending", "Wait for Jixels approval and verify the six-digit code before signing in.");
     setBusy(true);
     try {
       if (mode === "register") {
         const pushToken = await customerPushToken();
-        if (!pushToken) {
-          Alert.alert("Notifications required", "Allow notifications for Jixels Customer Trackings before registering. Your private approval code is delivered to this app after administration approves your account.");
-          return;
-        }
         const application = await authApi.register({ name: name.trim(), email: normalizedEmail, phone: phone.trim(), password, pushToken, platform: Platform.OS });
+        if (application?.accessToken && application?.user) { onAuthenticated(application); return; }
         if (!['pending', 'submitted', 'approved'].includes(application?.status)) throw new Error("Registration was not accepted.");
-        onPendingApproval({ name: name.trim(), email: normalizedEmail, phone: phone.trim(), notificationReady: application?.notificationReady !== false });
+        onPendingApproval({ name: name.trim(), email: normalizedEmail, password, phone: phone.trim(), notificationReady: application?.notificationReady !== false });
         return;
       }
       const pushToken = await customerPushToken();
@@ -148,7 +145,7 @@ function AuthScreen({ onAuthenticated, onPendingApproval, pendingEmail, approved
       onAuthenticated(session);
     } catch (error) {
       if (error instanceof ApiError && (error.status === 423 || error.code === "ACCOUNT_LOCKED")) Alert.alert("Account locked", "Two failed login attempts were detected. Contact your Jixels administrator to have the account opened.");
-      else if (error instanceof ApiError && ["ACCOUNT_PENDING_APPROVAL", "CUSTOMER_OTP_REQUIRED"].includes(error.code)) onPendingApproval({ name: name.trim(), email: normalizedEmail, phone: phone.trim() });
+      else if (error instanceof ApiError && ["ACCOUNT_PENDING_APPROVAL", "CUSTOMER_OTP_REQUIRED"].includes(error.code)) onPendingApproval({ name: name.trim(), email: normalizedEmail, password, phone: phone.trim(), otpCode: error.details?.otpCode });
       else if (error instanceof ApiError && error.status === 401) Alert.alert("Login unsuccessful", error.details?.remainingAttempts === 1 ? "The email or password is incorrect. You have one attempt remaining before the account is locked." : "The email or password is incorrect.");
       else Alert.alert(mode === "register" ? "Registration unavailable" : "Unable to sign in", error instanceof Error ? error.message : "Check your connection and try again.");
     } finally {
@@ -178,12 +175,51 @@ function AuthScreen({ onAuthenticated, onPendingApproval, pendingEmail, approved
   </KeyboardAvoidingView>;
 }
 
-function PendingApproval({ applicant, onEnterCode, onBackToLogin }) {
-  return <View style={styles.approvalPage}><StatusBar style="light" /><View style={styles.approvalGlow} /><Logo /><View style={styles.approvalIcon}><Ionicons name="time-outline" size={46} color={colors.orange} /></View><Text style={styles.approvalTitle}>Account awaiting approval</Text><Text style={styles.approvalText}>Thanks, {applicant?.name || "customer"}. Jixels administration must approve your registration. After approval, the Jixels Customer app sends your six-digit code as a private in-app notification.</Text>{applicant?.notificationReady === false && <Text style={styles.approvalWarning}>Notifications are not enabled on this device. Enable notifications, then submit your registration again before approval so Jixels can send your code.</Text>}<View style={styles.approvalSteps}><View style={styles.approvalStep}><Ionicons name="checkmark-circle" size={21} color={colors.green} /><Text style={styles.approvalStepText}>Registration received</Text></View><View style={styles.approvalLine} /><View style={styles.approvalStep}><Ionicons name="hourglass-outline" size={21} color={colors.orange} /><Text style={styles.approvalStepText}>Admin verification and approval</Text></View><View style={styles.approvalLine} /><View style={styles.approvalStep}><Ionicons name="chatbox-ellipses-outline" size={21} color={colors.white} /><Text style={styles.approvalStepText}>In-app approval code sent</Text></View></View><Pressable onPress={onEnterCode} style={styles.approvalButton}><Text style={styles.primaryButtonText}>Enter approval code</Text><Ionicons name="keypad-outline" size={18} color={colors.white} /></Pressable><Pressable onPress={onBackToLogin} style={styles.approvalSecondary}><Text style={styles.approvalSecondaryText}>Back to login</Text></Pressable></View>;
+function PendingApproval({ applicant, onEnterCode, onBackToLogin, onApproved }) {
+  const [statusMessage, setStatusMessage] = useState("");
+  useEffect(() => {
+    let active = true, busy = false, done = false;
+    const check = async () => {
+      if (busy || done || !applicant?.email) return;
+      busy = true;
+      try {
+        const account = await authApi.accountStatus(applicant.email);
+        if (!active) return;
+        if (["rejected", "suspended", "not_found"].includes(account.status)) {
+          done = true;
+          setStatusMessage("Your account has not been approved. Contact Jixels support.");
+          Alert.alert("Account not approved", "Your account has not been approved. Contact Jixels support.", [{ text: "Back to login", onPress: onBackToLogin }]);
+        } else if (account.approved) {
+          if (!applicant.password) {
+            done = true;
+            Alert.alert("Your account has been approved", "Sign in with your password to receive your one-time verification code.", [{ text: "Sign in", onPress: onBackToLogin }]);
+          } else {
+            // This credential-checked request returns the OTP only to its owner.
+            await authApi.login(applicant.email, applicant.password);
+            if (active) { done = true; onBackToLogin(); }
+          }
+        }
+      } catch (error) {
+        if (!active) return;
+        if (error.code === "CUSTOMER_OTP_REQUIRED" && /^\d{6}$/.test(String(error.details?.otpCode || ""))) {
+          done = true;
+          onApproved(String(error.details.otpCode));
+        } else if (["INVALID_CREDENTIALS", "ACCOUNT_INACTIVE"].includes(error.code)) {
+          done = true;
+          setStatusMessage(error.message + " Return to login to try again.");
+        } else setStatusMessage(error.message || "Unable to check approval. Retrying shortly.");
+      } finally { busy = false; }
+    };
+    check();
+    const timer = setInterval(check, 10_000);
+    const subscription = AppState.addEventListener("change", state => { if (state === "active") check(); });
+    return () => { active = false; clearInterval(timer); subscription.remove(); };
+  }, [applicant, onApproved, onBackToLogin]);
+  return <View style={styles.approvalPage}><StatusBar style="light" /><View style={styles.approvalGlow} /><Logo /><View style={styles.approvalIcon}><Ionicons name="time-outline" size={46} color={colors.orange} /></View><Text style={styles.approvalTitle}>Account awaiting approval</Text><Text style={styles.approvalText}>Thanks, {applicant?.name || "customer"}. Jixels administration must approve your registration. After approval, your six-digit verification code will appear here. Keep this screen open or sign in later to receive it.</Text>{statusMessage ? <Text style={styles.approvalWarning}>{statusMessage}</Text> : null}<View style={styles.approvalSteps}><View style={styles.approvalStep}><Ionicons name="checkmark-circle" size={21} color={colors.green} /><Text style={styles.approvalStepText}>Registration received</Text></View><View style={styles.approvalLine} /><View style={styles.approvalStep}><Ionicons name="hourglass-outline" size={21} color={colors.orange} /><Text style={styles.approvalStepText}>Admin verification and approval</Text></View><View style={styles.approvalLine} /><View style={styles.approvalStep}><Ionicons name="chatbox-ellipses-outline" size={21} color={colors.white} /><Text style={styles.approvalStepText}>Verification code after approval</Text></View></View><Pressable onPress={onEnterCode} style={styles.approvalButton}><Text style={styles.primaryButtonText}>Enter approval code</Text><Ionicons name="keypad-outline" size={18} color={colors.white} /></Pressable><Pressable onPress={onBackToLogin} style={styles.approvalSecondary}><Text style={styles.approvalSecondaryText}>Back to login</Text></Pressable></View>;
 }
 
 function ApprovalNotification({ applicant, code, onEnterCode, onBack }) {
-  return <View style={styles.approvalPage}><StatusBar style="light" /><View style={styles.approvalGlow} /><Logo /><View style={styles.approvalNoticeCard}><View style={styles.approvalNoticeIcon}><Ionicons name="notifications" size={32} color={colors.white} /></View><Text style={styles.approvalNoticeTitle}>Your account has been approved</Text><Text style={styles.approvalNoticeText}>Hello {applicant?.name || "customer"}. Your verification code is</Text><View style={styles.approvalCode}><Text style={styles.approvalCodeText}>{code}</Text></View><Text style={styles.approvalNoticeHint}>Use this private six-digit code to finish signing in. It expires in five minutes.</Text><Pressable onPress={onEnterCode} style={styles.approvalButton}><Text style={styles.primaryButtonText}>Enter verification code</Text><Ionicons name="shield-checkmark-outline" size={18} color={colors.white} /></Pressable><Pressable onPress={onBack} style={styles.approvalSecondary}><Text style={styles.approvalSecondaryText}>Back to login</Text></Pressable></View></View>;
+  return <View style={styles.approvalPage}><StatusBar style="light" /><View style={styles.approvalGlow} /><Logo /><View style={styles.approvalNoticeCard}><View style={styles.approvalNoticeIcon}><Ionicons name="notifications" size={32} color={colors.white} /></View><Text style={styles.approvalNoticeTitle}>Your account has been approved</Text><Text style={styles.approvalNoticeText}>Your account has been approved. Your one-time verification code is</Text><View style={styles.approvalCode}><Text style={styles.approvalCodeText}>{code}</Text></View><Text style={styles.approvalNoticeHint}>Do not share or expose this OTP. Use it to finish verification. It expires in five minutes.</Text><Pressable onPress={onEnterCode} style={styles.approvalButton}><Text style={styles.primaryButtonText}>Enter verification code</Text><Ionicons name="shield-checkmark-outline" size={18} color={colors.white} /></Pressable><Pressable onPress={onBack} style={styles.approvalSecondary}><Text style={styles.approvalSecondaryText}>Back to login</Text></Pressable></View></View>;
 }
 
 function OtpVerification({ applicant, onVerified, onBack, initialGate = false, notificationCode = "" }) {
@@ -234,7 +270,7 @@ function OtpVerification({ applicant, onVerified, onBack, initialGate = false, n
         <TextInput ref={inputRef} editable={!expired} autoFocus value={code} onChangeText={value => setCode(value.replace(/\D/g, "").slice(0, 6))} keyboardType="number-pad" inputMode="numeric" maxLength={6} textContentType="oneTimeCode" autoComplete="sms-otp" caretHidden style={styles.otpHiddenInput} />
       </View>
       <Pressable disabled={busy} onPress={verify} style={styles.primaryButton}>{busy ? <ActivityIndicator color={colors.white} /> : <><Text style={styles.primaryButtonText}>Verify code</Text><Ionicons name="shield-checkmark-outline" size={18} color={colors.white} /></>}</Pressable>
-      <Text style={styles.otpResendText}>Your code is delivered in the approval notification from Jixels Admin.</Text>
+      <Text style={styles.otpResendText}>Your code appears on the approval screen. If it expires, go back to request a new code.</Text>
       {onBack && <Pressable onPress={onBack} style={styles.backToLogin}><Ionicons name="arrow-back" size={16} color={colors.blue} /><Text style={styles.backToLoginText}>Back</Text></Pressable>}
     </Animated.View>
   </KeyboardAvoidingView>;
@@ -1004,7 +1040,13 @@ export default function App() {
     setSession(null);
     setPhase("auth");
   };
-  return <SafeAreaProvider>{phase === "auth" && <AuthScreen pendingEmail={applicant?.email} approvedEmail={approvedEmail} onAuthenticated={authenticate} onPendingApproval={data => { setApplicant(data); setPhase("pending"); }} />}{phase === "pending" && <PendingApproval applicant={applicant} onEnterCode={() => setPhase("otp")} onBackToLogin={() => setPhase("auth")} />}{phase === "approval-notice" && <ApprovalNotification applicant={applicant} code={approvalCode} onEnterCode={() => setPhase("otp")} onBack={() => setPhase("auth")} />}{phase === "otp" && <OtpVerification applicant={applicant} notificationCode={approvalCode} initialGate={false} onVerified={() => { if (applicant) setApprovedEmail(applicant.email); setPhase("auth"); }} onBack={applicant ? () => setPhase("pending") : undefined} />}{phase === "permissions" && <PermissionGate onComplete={() => setPhase("gps")} />}{phase === "gps" && <GpsLaunch name={displayName} returning={loginCount > 0} onComplete={() => { setLoginCount(count => count + 1); setPhase("app"); }} />}{phase === "app" && session && <CustomerApp session={session} onLogout={logout} />}</SafeAreaProvider>;
+  const showApprovalCode = useCallback(code => {
+    setApprovalCode(code);
+    setPhase("approval-notice");
+    Alert.alert("Your account has been approved", `Your account has been approved. Your one-time verification code is ${code}. Do not share or expose this OTP.`, [{ text: "View code" }]);
+  }, []);
+  const backToLogin = useCallback(() => setPhase("auth"), []);
+  return <SafeAreaProvider><AppUpdateNotice />{phase === "auth" && <AuthScreen pendingEmail={applicant?.email} approvedEmail={approvedEmail} onAuthenticated={authenticate} onPendingApproval={data => { setApplicant(data); if (data.otpCode) showApprovalCode(data.otpCode); else setPhase("pending"); }} />}{phase === "pending" && <PendingApproval applicant={applicant} onApproved={showApprovalCode} onEnterCode={() => setPhase("otp")} onBackToLogin={backToLogin} />}{phase === "approval-notice" && <ApprovalNotification applicant={applicant} code={approvalCode} onEnterCode={() => setPhase("otp")} onBack={() => setPhase("auth")} />}{phase === "otp" && <OtpVerification applicant={applicant} notificationCode={approvalCode} initialGate={false} onVerified={() => { if (applicant) setApprovedEmail(applicant.email); setApplicant(null); setApprovalCode(""); Notifications.clearLastNotificationResponseAsync().catch(() => {}); setPhase("auth"); }} onBack={applicant ? () => setPhase("pending") : undefined} />}{phase === "permissions" && <PermissionGate onComplete={() => setPhase("gps")} />}{phase === "gps" && <GpsLaunch name={displayName} returning={loginCount > 0} onComplete={() => { setLoginCount(count => count + 1); setPhase("app"); }} />}{phase === "app" && session && <CustomerApp session={session} onLogout={logout} />}</SafeAreaProvider>;
 }
 
 const styles = StyleSheet.create({

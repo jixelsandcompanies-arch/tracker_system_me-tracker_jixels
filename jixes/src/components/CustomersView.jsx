@@ -32,6 +32,7 @@ const fields = [
   "town",
   "status",
   "tracker_number",
+  "plate_number",
   "created_at",
   "updated_at",
 ];
@@ -45,6 +46,7 @@ const emptyCustomer = {
   town: "",
   status: "active",
   tracker_number: "",
+  plate_number: "",
 };
 const csv = (records) =>
   [fields, ...records.map((record) => fields.map((field) => record[field]))]
@@ -186,6 +188,7 @@ function CustomerForm({ customer, onClose, onSaved }) {
                 onChange={(e) => set("town", e.target.value)}
               />
             </label>
+            <label>Plate number<input value={form.plate_number || ""} onChange={(e) => set("plate_number", e.target.value.toUpperCase())} /></label>
             <label>
               Tracker number
               <input
@@ -259,6 +262,7 @@ function CustomerDetails({ customer, onClose, onEdit }) {
     ["County", customer.county],
     ["Town", customer.town],
     ["Tracker number", customer.tracker_number],
+    ["Plate number", customer.plate_number],
     ["Account status", customerStateLabel(customer.status)],
     [
       "Registered",
@@ -571,7 +575,7 @@ export default function CustomersView({ approvalMode = false }) {
                     <th>Contact</th>
                     <th>Location</th>
                     <th>National ID</th>
-                    <th>Tracker</th>
+                    <th>Plate number</th><th>Tracker</th>
                     <th>Status</th>
                     <th>Actions</th>
                   </tr>
@@ -602,7 +606,7 @@ export default function CustomersView({ approvalMode = false }) {
                           "—"}
                       </td>
                       <td>{customer.national_id || "—"}</td>
-                      <td>{customer.tracker_number || "—"}</td>
+                      <td>{customer.plate_number || "—"}</td><td>{customer.tracker_number || "—"}</td>
                       <td>
                         <span className="account-status approved">
                           Approved
@@ -711,7 +715,7 @@ export default function CustomersView({ approvalMode = false }) {
                   <th>Contact</th>
                   <th>Location</th>
                   <th>National ID</th>
-                  <th>Tracker</th>
+                  <th>Plate number</th><th>Tracker</th>
                   <th>Status</th>
                   <th>Actions</th>
                 </tr>
@@ -735,7 +739,7 @@ export default function CustomersView({ approvalMode = false }) {
                         "—"}
                     </td>
                     <td>{customer.national_id || "—"}</td>
-                    <td>{customer.tracker_number || "—"}</td>
+                    <td>{customer.plate_number || "—"}</td><td>{customer.tracker_number || "—"}</td>
                     <td>
                       <span className="account-status approved">Approved</span>
                     </td>

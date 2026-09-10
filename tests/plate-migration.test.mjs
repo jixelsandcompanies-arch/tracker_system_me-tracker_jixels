@@ -1,0 +1,30 @@
+// Run with PGLITE_MODULE pointing to an installed @electric-sql/pglite ESM entry.
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import { pathToFileURL } from "node:url";
+const { PGlite } = await import(pathToFileURL(process.env.PGLITE_MODULE).href);
+const db = new PGlite();
+await db.exec(`
+  create role anon; create role authenticated;
+  create table customers (id uuid primary key, updated_at timestamptz default now());
+  create table bikes (id uuid primary key, customer_id uuid references customers(id));
+  create table vehicles (id uuid primary key, registration text);
+  create table trackers (id uuid primary key, bike_id uuid references bikes(id), vehicle_id uuid references vehicles(id));
+  insert into customers values ('00000000-0000-0000-0000-000000000001'), ('00000000-0000-0000-0000-000000000002');
+  insert into bikes values ('10000000-0000-0000-0000-000000000001','00000000-0000-0000-0000-000000000001');
+  insert into vehicles values ('20000000-0000-0000-0000-000000000001','KMG 123A');
+  insert into trackers values ('30000000-0000-0000-0000-000000000001','10000000-0000-0000-0000-000000000001','20000000-0000-0000-0000-000000000001');
+`);
+await db.exec(fs.readFileSync(new URL("../supabase/migrations/202609100001_tracker_plate_numbers.sql", import.meta.url), "utf8"));
+const plates = async () => (await db.query("select plate_number from customers order by id")).rows.map(r => r.plate_number);
+assert.deepEqual(await plates(), ["KMG 123A", null], "existing vehicle plate must backfill into customer directory");
+await db.exec("update trackers set plate_number = 'KMG 456B'");
+assert.deepEqual(await plates(), ["KMG 456B", null], "tracker plate changes must reach customer records");
+await db.exec("update bikes set customer_id = '00000000-0000-0000-0000-000000000002'");
+assert.deepEqual(await plates(), [null, "KMG 456B"], "ownership transfer must clear the old owner and update the new owner");
+await db.exec("insert into trackers(id,bike_id,plate_number) values ('30000000-0000-0000-0000-000000000002','10000000-0000-0000-0000-000000000001','KAA 100A')");
+assert.deepEqual(await plates(), [null, "KAA 100A, KMG 456B"], "all plates must be retained for customers with multiple trackers");
+await db.exec("delete from trackers where plate_number = 'KMG 456B'");
+assert.deepEqual(await plates(), [null, "KAA 100A"], "removing a tracker must remove its plate from the directory");
+await db.close();
+console.log("PASS PostgreSQL plate migration, backfill, edits, ownership transfer, multiple plates, and deletion");

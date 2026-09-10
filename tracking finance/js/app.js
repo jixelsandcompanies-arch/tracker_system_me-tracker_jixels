@@ -1,6 +1,26 @@
 /* Finance portal shell: no React, Babel, or CDN dependency required. */
 (function () {
   const { readData, saveData, registerFinanceUser, authenticateFinanceUser, money } = window.FinanceStore;
+
+  let approvalCheckBusy = false;
+  async function checkPendingApproval() {
+    const email = localStorage.getItem("jixels.finance.pending-email");
+    if (!email || approvalCheckBusy) return;
+    approvalCheckBusy = true;
+    try {
+      const account = await window.FinanceStore.approvalAccountStatus(email);
+      if (!["finance", "finance_officer", "admin", "super_admin"].includes(account.role)) return;
+      if (account.approved || ["rejected", "suspended"].includes(account.status)) {
+        localStorage.removeItem("jixels.finance.pending-email");
+        window.alert(account.approved ? "Your account has been approved. You can now log in." : "Your account has not been approved. Contact Jixels support.");
+        if (!session) { authMode = "login"; root.innerHTML = loginView(account.approved ? "Your account has been approved. You can now log in." : "Account not approved."); bindLoginEvents(); }
+      }
+    } catch { /* Retry when the connection returns. */ }
+    finally { approvalCheckBusy = false; }
+  }
+  window.setInterval(checkPendingApproval, 10_000);
+  window.addEventListener("focus", checkPendingApproval);
+  window.setTimeout(checkPendingApproval, 0);
   const root = document.getElementById("root");
   let data = readData();
   let page = "dashboard";
@@ -319,6 +339,7 @@
           if (password !== confirm) throw new Error("Passwords do not match.");
           if (!isStrongPassword(password)) throw new Error("Use 8+ characters with uppercase, lowercase, number, and special character.");
           const registration = await registerFinanceUser({ name, email, phone, password });
+          localStorage.setItem("jixels.finance.pending-email", email);
           root.innerHTML = loginView(registration.message || "Finance registration submitted for administrator approval."); bindLoginEvents(); return;
         } else {
           session = await authenticateFinanceUser(email, password);

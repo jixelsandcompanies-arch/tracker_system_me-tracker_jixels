@@ -36,3 +36,13 @@ finance-portal/
 supabase/
 tests/
 scripts/
+
+artifacts/
+RELEASE-*.md
+
+# Local native builds and private signing material
+android/
+ios/
+credentials/
+credentials.json
+**/credentials.json

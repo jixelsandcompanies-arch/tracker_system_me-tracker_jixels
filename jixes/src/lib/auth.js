@@ -45,7 +45,7 @@ export async function signIn(email, password) {
       if (!response.ok) {
         const payload = await response.json().catch(() => ({}));
         console.error("Admin sign-in failed", response.status, payload.message || "");
-        return { error: safeMessage(response.status, payload.message) };
+        return { error: safeMessage(response.status, payload.message), code: payload.code };
       }
       const result = await response.json();
       if (!result?.accessToken || !result?.user) return { error: "Authentication temporarily unavailable. Please try again in a few moments." };
@@ -76,3 +76,10 @@ export function touchSession() {
 }
 
 
+
+export async function accountStatus(email) {
+  if (!supabaseUrl || !supabaseKey) throw new Error("Authentication is not configured.");
+  const response = await fetch(`${supabaseUrl}/functions/v1/api/v1/auth/account-status?email=${encodeURIComponent(email)}`, { headers: { apikey: supabaseKey } });
+  if (!response.ok) throw new Error("Account status is unavailable.");
+  return response.json();
+}

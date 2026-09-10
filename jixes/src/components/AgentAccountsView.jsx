@@ -31,7 +31,8 @@ export default function AgentAccountsView({ directory = false }) {
     const result = await invokeApi(`/v1/admin/account-approvals/${encodeURIComponent(account.id)}`, { status: account_status });
     if (result.error) return setMessage(result.error.message);
     recordAudit({ action: `${account_status} ${account.role} account`, resource: "Account approvals", detail: account.full_name });
-    load();
+    await load();
+    setMessage(`${account.full_name || "User"}: account has been ${account_status}.`);
   };
   const remove = async () => {
     const result = await invokeApi(`/v1/admin/users/${encodeURIComponent(pendingDelete.id)}`, null, "DELETE");

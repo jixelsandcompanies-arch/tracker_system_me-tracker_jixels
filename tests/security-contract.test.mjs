@@ -58,7 +58,7 @@ assert.match(apiFunction, /issueCustomerApprovalCode\(admin, account\.id, accoun
 assert.match(apiFunction, /CUSTOMER_OTP_REQUIRED/, "customer access must remain blocked until the approval code is verified");
 assert.match(apiFunction, /async function saveCustomerPushToken/, "pending customer registrations must persist or refresh the registered device token");
 assert.match(apiFunction, /ticket\?\.status === "ok"/, "approval delivery must verify Expo push tickets instead of assuming an HTTP success delivered the notification");
-assert.match(apiFunction, /Your verification code is \$\{code\}/, "the approval notification must visibly include the six-digit code");
+assert.match(apiFunction, /Your one-time verification code is \$\{code\}/, "the approval notification must visibly include the six-digit code");
 assert.match(app, /function ApprovalNotification/, "the customer app must render its own approval notification screen");
 assert.match(app, /setPhase\("approval-notice"\)/, "a received approval notification must open before dashboard access");
 assert.match(app, /getLastNotificationResponseAsync/, "tapping an approval notification from a closed app must restore the in-app code screen");

@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { getSession, signIn, signOut, touchSession } from "./lib/auth";
+import { getSession, signIn, signOut, touchSession, accountStatus } from "./lib/auth";
 import { canAccess, recordAudit } from "./lib/security";
 import { createRecord, hasSupabaseConfig, listRecords, subscribeToTable, updateRecord } from "./lib/data";
 import EnhancedModuleView from "./components/EnhancedModuleView";
@@ -91,7 +91,7 @@ const navigation = [
   { label: "Audit Logs", icon: FileClock, key: "Audit Logs", section: "SYSTEM" }
 ];
 
-const quickAddPages = new Set(["Support Cases"]);
+const quickAddPages = new Set(["Support Cases", "GPS Trackers"]);
 const ADMIN_NAVIGATION_KEY = "jixels.admin.navigation.v1";
 
 function loadNavigation(role) {
@@ -212,7 +212,7 @@ function AppContent() {
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [notifications, setNotifications] = useState([]);
   const [confirmSignOut, setConfirmSignOut] = useState(false);
-  const emptyRecord = { name: "", tramigoDeviceId: "", email: "", phone: "", nationalId: "", address: "", county: "", town: "", status: "active", trackerStatus: "online", trackerNumber: "", notes: "", productType: "bike", otherType: "", customerId: "", trackerId: "", agentId: "", bikeId: "" };
+  const emptyRecord = { name: "", plateNumber: "", tramigoDeviceId: "", email: "", phone: "", nationalId: "", address: "", county: "", town: "", status: "active", trackerStatus: "online", trackerNumber: "", notes: "", productType: "bike", otherType: "", customerId: "", trackerId: "", agentId: "", bikeId: "" };
   const [newRecord, setNewRecord] = useState(emptyRecord);
   const [productLinks, setProductLinks] = useState({ customers: [], trackers: [], agents: [], products: [] });
   const [saveState, setSaveState] = useState("");
@@ -287,7 +287,7 @@ function AppContent() {
   }, []);
 
   useEffect(() => {
-    if (!showAdd || active !== "Products" || !hasSupabaseConfig) return undefined;
+    if (!showAdd || !["Products", "GPS Trackers"].includes(active) || !hasSupabaseConfig) return undefined;
     let mounted = true;
     Promise.all([listRecords("customers", { pageSize: 100 }), listRecords("trackers", { pageSize: 100 }), listRecords("profiles", { pageSize: 100 }), listRecords("bikes", { pageSize: 500 })]).then(([customers, trackers, profiles, products]) => {
       if (mounted) setProductLinks({ customers: customers.data || [], trackers: trackers.data || [], agents: (profiles.data || []).filter((profile) => ["support_agent", "Support agent"].includes(profile.role)), products: products.data || [] });
@@ -315,7 +315,8 @@ function AppContent() {
     const table = active === "Products" ? "bikes" : active === "GPS Trackers" ? "trackers" : active === "Payments" ? "payments" : active === "Support Cases" ? "support_cases" : "customers";
     const isOtherProduct = newRecord.productType === "other";
     const selectedTrackerStatus = ["online", "offline", "immobilized"].includes(newRecord.status) ? newRecord.status : newRecord.trackerStatus;
-    const record = table === "bikes" ? { identifier: newRecord.name, model: newRecord.email.trim() || "Unspecified", product_type: newRecord.productType, custom_product_type: isOtherProduct ? newRecord.otherType.trim() : null, customer_id: newRecord.customerId || null, assigned_agent_id: newRecord.agentId || null } : table === "trackers" ? { identifier: newRecord.name.trim(), tramigo_device_id: newRecord.tramigoDeviceId.trim() || null, bike_id: newRecord.bikeId || null, operational_status: selectedTrackerStatus, is_online: false } : table === "support_cases" ? { title: newRecord.name, notes: newRecord.notes || null, priority: "normal", created_by: session?.userId || null } : table === "payments" ? { amount: Number(newRecord.notes || 0), currency: "KES" } : { full_name: newRecord.name, email: newRecord.email || null, phone: newRecord.phone || null, national_id: newRecord.nationalId || null, address: newRecord.address || null, county: newRecord.county || null, town: newRecord.town || null, status: newRecord.status, tracker_number: newRecord.trackerNumber || null };
+    const record = table === "bikes" ? { identifier: newRecord.name, model: newRecord.email.trim() || "Unspecified", product_type: newRecord.productType, custom_product_type: isOtherProduct ? newRecord.otherType.trim() : null, customer_id: newRecord.customerId || null, assigned_agent_id: newRecord.agentId || null } : table === "trackers" ? { identifier: newRecord.name.trim(), plate_number: newRecord.plateNumber.trim().toUpperCase(), tramigo_device_id: newRecord.tramigoDeviceId.trim() || null, bike_id: newRecord.bikeId || null, operational_status: selectedTrackerStatus, is_online: false } : table === "support_cases" ? { title: newRecord.name, notes: newRecord.notes || null, priority: "normal", created_by: session?.userId || null } : table === "payments" ? { amount: Number(newRecord.notes || 0), currency: "KES" } : { full_name: newRecord.name, email: newRecord.email || null, phone: newRecord.phone || null, national_id: newRecord.nationalId || null, address: newRecord.address || null, county: newRecord.county || null, town: newRecord.town || null, status: newRecord.status, tracker_number: newRecord.trackerNumber || null };
+    if (table === "trackers" && !newRecord.plateNumber.trim()) { setSaveState("Enter the vehicle plate number."); return; }
     if (!newRecord.name) { setSaveState("Enter a name or identifier."); return; }
     if (table === "trackers" && newRecord.tramigoDeviceId.trim() && !/^\d{10,20}$/.test(newRecord.tramigoDeviceId.trim())) { setSaveState("Enter a valid Tramigo IMEI (10–20 digits), or leave it blank until it is assigned."); return; }
     if (table === "bikes" && isOtherProduct && !newRecord.otherType.trim()) { setSaveState("Enter the product type."); return; }
@@ -347,12 +348,12 @@ function AppContent() {
       <main className="main-content" onPointerDown={() => { if (window.innerWidth > 760 && !sidebarCollapsed) setSidebarCollapsed(true); }}>
         <header className="topbar"><button className="menu-button icon-btn" onClick={() => setSidebarOpen(true)} aria-label="Open navigation"><Menu size={20} /></button><div className="topbar-actions"><button className="icon-btn notification" onClick={() => setNotificationsOpen((open) => !open)} aria-label="Open notifications"><Bell size={18}/>{notifications.some((item) => item.unread) && <span/>}</button><div className="top-profile"><span className="user-avatar">{sessionName.slice(0, 2).toUpperCase()}</span><span><strong>{sessionName}</strong><small>{sessionRole || "Administrator"}</small></span></div></div>{notificationsOpen && <NotificationPanel notifications={notifications} onClose={() => setNotificationsOpen(false)} onRead={() => setNotifications((items) => items.map((item) => ({ ...item, unread: false })))} />}</header>
         <div className="page-content">
-          {workspaceLoading ? <WorkspaceSkeleton/> : <>{active !== "Support Cases" && <section className="page-heading"><div><div className="eyebrow"><span className="pulse" />OPERATIONS</div><h1>{active === "Dashboard" ? "Dashboard Overview" : active === "Products" ? "Product Inventory" : active}</h1><p>{active === "Dashboard" ? "Fleet-wide numbers and system health, at a glance." : active === "Products" ? "Register products, link trackers, and allocate agents." : `${active} workspace.`}</p></div><div className="heading-actions">{hasSupabaseConfig && <span className="sync-status"><span />Live data</span>}</div></section>}<ModuleErrorBoundary module={active}>{active === "Dashboard" ? <DashboardLiveView /> : <EnhancedModuleView title={active} setShowAdd={setShowAdd} />}</ModuleErrorBoundary></>}
+          {workspaceLoading ? <WorkspaceSkeleton/> : <>{active !== "Support Cases" && <section className="page-heading"><div><div className="eyebrow"><span className="pulse" />OPERATIONS</div><h1>{active === "Dashboard" ? "Dashboard Overview" : active === "Products" ? "Product Inventory" : active}</h1><p>{active === "Dashboard" ? "Fleet-wide numbers and system health, at a glance." : active === "Products" ? "Register products, link trackers, and allocate agents." : `${active} workspace.`}</p></div><div className="heading-actions">{quickAddPages.has(active) && <button className="button primary" onClick={() => setShowAdd(true)}>Add {active === "GPS Trackers" ? "tracker" : addLabel(active)}</button>}{hasSupabaseConfig && <span className="sync-status"><span />Live data</span>}</div></section>}<ModuleErrorBoundary module={active}>{active === "Dashboard" ? <DashboardLiveView /> : <EnhancedModuleView title={active} setShowAdd={setShowAdd} />}</ModuleErrorBoundary></>}
           <footer className="system-footer"><span><strong>JIXELS ADMIN</strong> · Form Ni Tenje · Operations workspace</span><span>© 2026 Jixels Technologies</span></footer>
         </div>
       </main>
       {confirmSignOut && <ConfirmDialog title="Sign out of workspace?" detail="This session will close and the Admin portal will refresh to the secure sign-in page." confirmLabel="Sign out" onCancel={() => setConfirmSignOut(false)} onConfirm={() => { recordAudit({ action: "signed out", resource: "Authentication" }); signOut(); window.location.reload(); }} />}
-      {showAdd && <div className="modal-backdrop" onClick={() => setShowAdd(false)}><div className="modal" onClick={(event) => event.stopPropagation()}><div className="modal-header"><div><span className="eyebrow">QUICK ACTION</span><h2>Add {active === "Dashboard" ? "customer" : active.slice(0, -1).toLowerCase()}</h2></div><button className="icon-btn" onClick={() => setShowAdd(false)} aria-label="Close"><X size={18} /></button></div><label>{active === "GPS Trackers" ? "Tracker code" : active === "Products" ? "Product name or ID" : "Full name or identifier"}<input value={newRecord.name} onChange={(e) => setNewRecord((r) => ({ ...r, name: e.target.value }))} placeholder={active === "GPS Trackers" ? "Internal tracker label" : active === "Products" ? "Enter a product name or ID" : "Enter a name or ID"} /></label>{active === "GPS Trackers" && <><label>Tramigo IMEI / device identifier<input value={newRecord.tramigoDeviceId} onChange={(e) => setNewRecord((r) => ({ ...r, tramigoDeviceId: e.target.value.replace(/\s/g, "") }))} inputMode="numeric" placeholder="Example: 861192078436709" /></label><label>Product<select value={newRecord.bikeId} onChange={(e) => setNewRecord((r) => ({ ...r, bikeId: e.target.value }))}><option value="">Unlinked product</option>{productLinks.products.map((product) => <option key={product.id} value={product.id}>{product.identifier}</option>)}</select></label><label>Status<select value={newRecord.status} onChange={(e) => setNewRecord((r) => ({ ...r, status: e.target.value }))}><option value="offline">Offline until Tramigo confirms it</option><option value="immobilized">Immobilized</option></select></label></>}{active !== "GPS Trackers" && <><label>{active === "Products" ? "Product model" : "Email address"}<input value={newRecord.email} onChange={(e) => setNewRecord((r) => ({ ...r, email: e.target.value }))} placeholder={active === "Products" ? "Optional product model" : "name@company.com"} type={active === "Products" ? "text" : "email"} /></label>{active !== "Products" && <label>Notes / model / amount<textarea value={newRecord.notes} onChange={(e) => setNewRecord((r) => ({ ...r, notes: e.target.value }))} placeholder="Add optional notes" rows="3" /></label>}</>}{saveState && <p className="import-message">{saveState}</p>}<div className="modal-actions"><button className="button secondary" onClick={() => setShowAdd(false)}>Cancel</button><button className="button primary" onClick={saveNewRecord}>Create record</button></div></div></div>}
+      {showAdd && <div className="modal-backdrop" onClick={() => setShowAdd(false)}><div className="modal" onClick={(event) => event.stopPropagation()}><div className="modal-header"><div><span className="eyebrow">QUICK ACTION</span><h2>Add {active === "Dashboard" ? "customer" : active.slice(0, -1).toLowerCase()}</h2></div><button className="icon-btn" onClick={() => setShowAdd(false)} aria-label="Close"><X size={18} /></button></div><label>{active === "GPS Trackers" ? "Tracker code" : active === "Products" ? "Product name or ID" : "Full name or identifier"}<input value={newRecord.name} onChange={(e) => setNewRecord((r) => ({ ...r, name: e.target.value }))} placeholder={active === "GPS Trackers" ? "Internal tracker label" : active === "Products" ? "Enter a product name or ID" : "Enter a name or ID"} /></label>{active === "GPS Trackers" && <><label>Plate number<input value={newRecord.plateNumber} onChange={(e) => setNewRecord((r) => ({ ...r, plateNumber: e.target.value.toUpperCase() }))} placeholder="Example: KMG 123A" required /></label><label>Tramigo IMEI / device identifier<input value={newRecord.tramigoDeviceId} onChange={(e) => setNewRecord((r) => ({ ...r, tramigoDeviceId: e.target.value.replace(/\s/g, "") }))} inputMode="numeric" placeholder="Example: 861192078436709" /></label><label>Product<select value={newRecord.bikeId} onChange={(e) => setNewRecord((r) => ({ ...r, bikeId: e.target.value }))}><option value="">Unlinked product</option>{productLinks.products.map((product) => <option key={product.id} value={product.id}>{product.identifier}</option>)}</select></label><label>Status<select value={newRecord.status} onChange={(e) => setNewRecord((r) => ({ ...r, status: e.target.value }))}><option value="offline">Offline until Tramigo confirms it</option><option value="immobilized">Immobilized</option></select></label></>}{active !== "GPS Trackers" && <><label>{active === "Products" ? "Product model" : "Email address"}<input value={newRecord.email} onChange={(e) => setNewRecord((r) => ({ ...r, email: e.target.value }))} placeholder={active === "Products" ? "Optional product model" : "name@company.com"} type={active === "Products" ? "text" : "email"} /></label>{active !== "Products" && <label>Notes / model / amount<textarea value={newRecord.notes} onChange={(e) => setNewRecord((r) => ({ ...r, notes: e.target.value }))} placeholder="Add optional notes" rows="3" /></label>}</>}{saveState && <p className="import-message">{saveState}</p>}<div className="modal-actions"><button className="button secondary" onClick={() => setShowAdd(false)}>Cancel</button><button className="button primary" onClick={saveNewRecord}>Create record</button></div></div></div>}
     </div>
   );
 }
@@ -400,6 +401,31 @@ function parseCsv(text) {
 }
 
 function LoginScreen({ onSignIn }) {
+  const [pendingEmail, setPendingEmail] = useState(() => localStorage.getItem("jixels.admin.pending-email") || "");
+  useEffect(() => {
+    if (!pendingEmail) return;
+    let active = true, busy = false;
+    const check = async () => {
+      if (busy) return;
+      busy = true;
+      try {
+        const account = await accountStatus(pendingEmail);
+        if (!active || !["admin", "super_admin", "operations_manager"].includes(account.role)) return;
+        if (account.approved || ["rejected", "suspended"].includes(account.status)) {
+          localStorage.removeItem("jixels.admin.pending-email");
+          setPendingEmail("");
+          const message = account.approved ? "Your account has been approved. You can now log in." : "Your account has not been approved. Contact Jixels support.";
+          setError(message);
+          window.alert(message);
+        }
+      } catch { /* Poll again when connectivity returns. */ }
+      finally { busy = false; }
+    };
+    check();
+    const timer = window.setInterval(check, 10_000);
+    return () => { active = false; window.clearInterval(timer); };
+  }, [pendingEmail]);
+
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
@@ -424,7 +450,7 @@ function LoginScreen({ onSignIn }) {
     event.preventDefault();
     setLoading(true);
     const result = await signIn(email, password);
-    if (result.error) setError(result.error);
+    if (result.error) { setError(result.error); if (result.code === "ACCOUNT_PENDING_APPROVAL") { localStorage.setItem("jixels.admin.pending-email", email.trim().toLowerCase()); setPendingEmail(email.trim().toLowerCase()); } }
     else { recordAudit({ action: "signed in", resource: "Authentication" }); onSignIn(result.data); }
     setLoading(false);
   }

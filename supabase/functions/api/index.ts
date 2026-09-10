@@ -1,12 +1,12 @@
-import { createClient } from "npm:@supabase/supabase-js@2";
+import { createClient, type SupabaseClient } from "npm:@supabase/supabase-js@2";
 
 const cors = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, idempotency-key",
   "Access-Control-Allow-Methods": "GET, POST, PATCH, DELETE, OPTIONS",
 };
-const response = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { ...cors, "Content-Type": "application/json" } });
-const fail = (message: string, status = 400, code?: string) => response({ message, code }, status);
+const response = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { ...cors, "Content-Type": "application/json", "Cache-Control": "no-store" } });
+const fail = (message: string, status = 400, code?: string, details?: Record<string, unknown>) => response({ message, code, details }, status);
 const darajaBase = Deno.env.get("DARAJA_ENV") === "production" ? "https://api.safaricom.co.ke" : "https://sandbox.safaricom.co.ke";
 async function darajaToken() {
   const key = Deno.env.get("DARAJA_CONSUMER_KEY"); const secret = Deno.env.get("DARAJA_CONSUMER_SECRET");
@@ -206,9 +206,9 @@ function routeSummary(points: Array<{ latitude: number; longitude: number; recor
   return { distanceKm: Number(distanceKm.toFixed(2)), durationMinutes, stops };
 }
 
-async function loadRoute(admin: ReturnType<typeof createClient>, vehicleId: string | null, trackerId: string | null, window: { from: string; to: string }) {
+async function loadRoute(admin: SupabaseClient, vehicleId: string | null, trackerId: string | null, window: { from: string; to: string }) {
   let query = admin.from("tracker_locations").select("latitude,longitude,recorded_at");
-  query = vehicleId ? query.eq("vehicle_id", vehicleId) : query.eq("tracker_id", trackerId);
+  query = vehicleId ? query.eq("vehicle_id", vehicleId) : query.eq("tracker_id", trackerId!);
   const { data, error } = await query
     .gte("recorded_at", window.from)
     .lte("recorded_at", window.to)
@@ -277,7 +277,7 @@ function decodeScreeningDocument(value: unknown) {
   };
 }
 
-async function uploadScreeningDocument(admin: ReturnType<typeof createClient>, applicationId: string, field: string, value: unknown) {
+async function uploadScreeningDocument(admin: SupabaseClient, applicationId: string, field: string, value: unknown) {
   const document = decodeScreeningDocument(value);
   if (!document) throw new Error("Each customer image must be a JPEG or PNG smaller than 5 MB.");
   const path = `${applicationId}/${field}-${crypto.randomUUID()}.${document.extension}`;
@@ -286,11 +286,11 @@ async function uploadScreeningDocument(admin: ReturnType<typeof createClient>, a
   return path;
 }
 
-async function removeScreeningDocuments(admin: ReturnType<typeof createClient>, paths: string[]) {
+async function removeScreeningDocuments(admin: SupabaseClient, paths: string[]) {
   if (paths.length) await admin.storage.from(screeningDocumentBucket).remove(paths);
 }
 
-async function signedScreeningDocuments(admin: ReturnType<typeof createClient>, application: Record<string, unknown>) {
+async function signedScreeningDocuments(admin: SupabaseClient, application: Record<string, unknown>) {
   const signedDocuments = await Promise.all(screeningDocumentFields.map(async (field) => {
     const path = screeningDocumentPath(application[field]);
     if (!path) return [field, null] as const;
@@ -301,11 +301,11 @@ async function signedScreeningDocuments(admin: ReturnType<typeof createClient>, 
     }
     return [field, data.signedUrl] as const;
   }));
-  return Object.fromEntries(signedDocuments.filter((entry): entry is readonly [string, string] => Boolean(entry[1])));
+  return Object.fromEntries(signedDocuments.filter((entry): entry is readonly [typeof screeningDocumentFields[number], string] => Boolean(entry[1])));
 }
 
 async function sendCustomerApprovalPush(
-  admin: ReturnType<typeof createClient>,
+  admin: SupabaseClient,
   customerIds: string[],
   code: string,
   email: string,
@@ -320,7 +320,7 @@ async function sendCustomerApprovalPush(
     to: expo_push_token,
     sound: "default",
     title: "Your account has been approved",
-    body: `Your verification code is ${code}.`,
+    body: `Your account has been approved. Your one-time verification code is ${code}. Do not share or expose this OTP. It expires in five minutes.`,
     data: { type: "customer_approval", customerId: customerIds[0], code, email },
   }));
   try {
@@ -341,7 +341,7 @@ async function sendCustomerApprovalPush(
 }
 
 async function saveCustomerPushToken(
-  admin: ReturnType<typeof createClient>,
+  admin: SupabaseClient,
   customerId: string,
   body: Record<string, unknown>,
   updatedAt: string,
@@ -362,7 +362,7 @@ async function saveCustomerPushToken(
 }
 
 async function issueCustomerApprovalCode(
-  admin: ReturnType<typeof createClient>,
+  admin: SupabaseClient,
   customerId: string,
   email: string,
 ) {
@@ -377,10 +377,10 @@ async function issueCustomerApprovalCode(
     console.error("Customer approval code creation failed", error);
     return { issued: false, pushSent: false };
   }
-  return { issued: true, pushSent: await sendCustomerApprovalPush(admin, [customerId], code, email) };
+  return { issued: true, code, pushSent: await sendCustomerApprovalPush(admin, [customerId], code, email) };
 }
 
-async function removeCustomerWorkspace(admin: ReturnType<typeof createClient>, customerId: string) {
+async function removeCustomerWorkspace(admin: SupabaseClient, customerId: string) {
   const { data: bikes, error: bikesError } = await admin.from("bikes").select("id").eq("customer_id", customerId);
   if (bikesError) throw bikesError;
   const bikeIds = (bikes ?? []).map((bike) => bike.id);
@@ -416,68 +416,32 @@ async function removeCustomerWorkspace(admin: ReturnType<typeof createClient>, c
   await remove(admin.from("customers").delete().eq("id", customerId));
 }
 
-async function registerPortalUser(client: ReturnType<typeof createClient>, admin: ReturnType<typeof createClient>, body: Record<string, unknown>, role: "customer" | "agent" | "finance") {
+async function existingCustomerRecord(admin: SupabaseClient, email: string) {
+  const pattern = email.replace(/[\\%_]/g, "\\$&");
+  const { data, error } = await admin.from("customers").select("id,status").ilike("email", pattern).limit(1).maybeSingle();
+  return { customer: data, error };
+}
+
+async function registerPortalUser(client: SupabaseClient, admin: SupabaseClient, body: Record<string, unknown>, role: "customer" | "agent" | "finance") {
   const email = String(body.email ?? "").trim().toLowerCase();
   const password = String(body.password ?? "");
   const fullName = String(body.name ?? body.fullName ?? "").trim();
   const phone = String(body.phone ?? "").trim();
   if (!email || !password || !fullName) return fail("Complete your name, email, and password.", 422, "INVALID_REGISTRATION");
+  // Only customers already onboarded in Operations may request app access.
+  if (role === "customer") {
+    const eligibility = await existingCustomerRecord(admin, email);
+    if (eligibility.error) return fail("Customer records could not be checked. Please try again.", 503, "CUSTOMER_LOOKUP_UNAVAILABLE");
+    if (!eligibility.customer) return fail("Your account details do not exist in our records. Account not approved. Contact Jixels to have your details added.", 403, "CUSTOMER_DETAILS_NOT_FOUND");
+    if (["rejected", "declined", "suspended"].includes(eligibility.customer.status)) return fail("Your account has not been approved. Contact Jixels support.", 403, "ACCOUNT_INACTIVE");
+  }
+  const { data: existing, error: existingError } = await admin.from("profiles").select("id,role,account_status").eq("email", email).maybeSingle();
+  if (existingError) return fail("Registration is temporarily unavailable.", 503, "PROFILE_UNAVAILABLE");
+  // A repeat registration must prove ownership before it can change a device
+  // token or retrieve an approval code. Never reset an existing password here.
+  if (existing) return portalSignIn(client, admin, body, new Set([role]));
   const { data, error } = await client.auth.signUp({ email, password, options: { data: { full_name: fullName, phone } } });
-  const existingProfile = async () => {
-    const { data: profile, error: profileError } = await admin
-      .from("profiles")
-      .select("id,role,account_status")
-      .eq("email", email)
-      .maybeSingle();
-    if (profileError) {
-      console.error("Existing registration lookup failed", profileError);
-      return null;
-    }
-    return profile;
-  };
-  const existing = await existingProfile();
-  const refreshExistingCustomerPushToken = async () => {
-    if (role !== "customer" || !existing?.id) return { registered: false, supplied: false };
-    return saveCustomerPushToken(admin, existing.id, body, new Date().toISOString());
-  };
-  const retryApprovedCustomerDelivery = async () => {
-    const token = await refreshExistingCustomerPushToken();
-    if (!token.registered) return response({
-      status: "approved",
-      notificationReady: false,
-      message: "Your account is approved. Enable notifications in Jixels Customer Trackings, then submit your registration again to receive the approval code.",
-    });
-    const delivery = await issueCustomerApprovalCode(admin, existing!.id, email);
-    if (!delivery.issued) return fail("Your account is approved, but the in-app approval code could not be created. Please ask an administrator to retry approval.", 503, "APPROVAL_CODE_UNAVAILABLE");
-    return response({ status: "approved", notificationReady: true, pushSent: delivery.pushSent, message: delivery.pushSent ? "Your account is approved. The six-digit approval code was sent to Jixels Customer Trackings." : "Your account is approved, but the device notification could not be delivered. Open Jixels Customer Trackings and submit your registration again." });
-  };
-  // Supabase can return an obfuscated user with no identities for an existing email.
-  // A repeat submission for the same pending account is not a technical failure.
-  // Do not overwrite an account registered for a different portal role.
-  if (data.user && data.user.identities?.length === 0) {
-    if (existing?.role === role && existing.account_status === "pending") {
-      const token = await refreshExistingCustomerPushToken();
-      return response({ status: "pending", notificationReady: role === "customer" ? token.registered : undefined, message: "Registration details were already submitted. Please wait for administrator approval before signing in." });
-    }
-    if (existing?.role === "customer" && approvedStatuses.has(existing.account_status)) return retryApprovedCustomerDelivery();
-    return fail("An account with this email already exists. Sign in or reset its password.", 409, "ACCOUNT_ALREADY_EXISTS");
-  }
-  if (error || !data.user) {
-    console.error("Portal registration failed", error);
-    const providerMessage = String(error?.message ?? "").toLowerCase();
-    if (providerMessage.includes("already") || providerMessage.includes("exists") || providerMessage.includes("registered")) {
-      if (existing?.role === role && existing.account_status === "pending") {
-        const token = await refreshExistingCustomerPushToken();
-        return response({ status: "pending", notificationReady: role === "customer" ? token.registered : undefined, message: "Registration details were already submitted. Please wait for administrator approval before signing in." });
-      }
-      if (existing?.role === "customer" && approvedStatuses.has(existing.account_status)) return retryApprovedCustomerDelivery();
-      if (existing && existing.role !== role) return fail("This email is registered for a different Jixels workspace.", 409, "PORTAL_ROLE_CONFLICT");
-      return fail("An account with this email already exists. Sign in or reset its password.", 409, "ACCOUNT_ALREADY_EXISTS");
-    }
-    if (providerMessage.includes("password")) return fail("Use a stronger password that meets the account requirements.", 422, "INVALID_PASSWORD");
-    if (providerMessage.includes("signup") && providerMessage.includes("disabled")) return fail("Registration is temporarily unavailable. Contact Jixels support.", 503, "SIGNUP_DISABLED");
-    return fail("Registration could not be completed. Please try again.", 400, "REGISTRATION_FAILED");
-  }
+  if (error || !data.user || data.user.identities?.length === 0) return fail("Registration could not be completed. If you already registered, sign in or reset your password.", 400, "REGISTRATION_FAILED");
   const rollbackAuthUser = async () => {
     const { error: deleteError } = await admin.auth.admin.deleteUser(data.user!.id);
     if (deleteError) console.error("Registration rollback failed", deleteError);
@@ -486,24 +450,7 @@ async function registerPortalUser(client: ReturnType<typeof createClient>, admin
   if (profileError) { console.error("Portal profile provisioning failed", profileError); await rollbackAuthUser(); return fail("Registration could not be completed. Please try again.", 503, "PROFILE_PROVISIONING_FAILED"); }
   if (role === "customer") {
     const now = new Date().toISOString();
-    const { data: submittedApplication, error: submittedApplicationError } = await admin
-      .from("screening_applications")
-      .select("id,customer_id")
-      .eq("email", email)
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    if (submittedApplicationError) { console.error("Customer screening lookup failed", submittedApplicationError); await rollbackAuthUser(); return fail("Registration could not be completed. Please try again.", 503, "CUSTOMER_SCREENING_LOOKUP_FAILED"); }
-    // A field-agent onboarding already owns the customer and screening record.
-    // Register only the mobile identity here so the customer does not appear twice.
-    if (submittedApplication) {
-      const { data: applicationStatus, error: applicationStatusError } = await admin.from("screening_applications").select("status").eq("id", submittedApplication.id).single();
-      if (applicationStatusError || !applicationStatus) { await rollbackAuthUser(); return fail("Registration could not be completed. Please try again.", 503, "CUSTOMER_SCREENING_LOOKUP_FAILED"); }
-      const token = await saveCustomerPushToken(admin, data.user.id, body, now);
-      return response({ status: "pending", notificationReady: token.registered, message: "Registration details submitted successfully. Please wait for administrator approval before signing in." }, 201);
-    }
-    const { error: customerError } = await admin.from("customers").upsert({ id: data.user.id, full_name: fullName, email, phone, status: "pending", created_at: now, updated_at: now }, { onConflict: "id" });
-    if (customerError) { console.error("Customer account provisioning failed", customerError); await rollbackAuthUser(); return fail("Registration could not be completed. Please try again.", 503, "CUSTOMER_PROVISIONING_FAILED"); }
+    // Keep the existing Operations customer record and its vehicle ownership.
     const token = await saveCustomerPushToken(admin, data.user.id, body, now);
     return response({ status: "pending", notificationReady: token.registered, message: "Registration details submitted successfully. Please wait for administrator approval before signing in." }, 201);
   }
@@ -514,7 +461,7 @@ const customerRoles = new Set(["customer"]);
 const agentRoles = new Set(["agent", "support_agent"]);
 const financeRoles = new Set(["finance", "finance_officer", "admin", "super_admin"]);
 const adminRoles = new Set(["admin", "super_admin", "operations_manager"]);
-const approvableStaffRoles = new Set(["agent", "support_agent", "finance", "finance_officer"]);
+const approvableStaffRoles = new Set(["agent", "support_agent", "finance", "finance_officer", "admin", "operations_manager"]);
 const approvableAccountRoles = new Set(["customer", ...approvableStaffRoles]);
 const approvedStatuses = new Set(["active", "approved"]);
 const LOGIN_LOCK_MESSAGE = "Too many failed sign-in attempts. Please try again in 15 minutes.";
@@ -523,7 +470,7 @@ async function loginAttemptKey(email: string) {
   return sha256(`jixels-login:${email}`);
 }
 
-async function getLoginLock(admin: ReturnType<typeof createClient>, accountKey: string) {
+async function getLoginLock(admin: SupabaseClient, accountKey: string) {
   const { data, error } = await admin.rpc("get_login_lock", { p_account_key: accountKey });
   if (error) {
     console.error("Login lock lookup failed", error);
@@ -532,7 +479,7 @@ async function getLoginLock(admin: ReturnType<typeof createClient>, accountKey: 
   return { error: false, locked: Boolean(data) };
 }
 
-async function recordLoginFailure(admin: ReturnType<typeof createClient>, accountKey: string) {
+async function recordLoginFailure(admin: SupabaseClient, accountKey: string) {
   const { data, error } = await admin.rpc("record_login_failure", { p_account_key: accountKey });
   if (error) {
     console.error("Login failure recording failed", error);
@@ -543,8 +490,8 @@ async function recordLoginFailure(admin: ReturnType<typeof createClient>, accoun
 }
 
 async function portalSignIn(
-  client: ReturnType<typeof createClient>,
-  admin: ReturnType<typeof createClient>,
+  client: SupabaseClient,
+  admin: SupabaseClient,
   body: Record<string, unknown>,
   allowedRoles: Set<string>,
 ) {
@@ -596,23 +543,22 @@ async function portalSignIn(
       console.error("Customer approval code lookup failed", pendingCodeError);
       return fail("Customer approval verification is temporarily unavailable.", 503, "APPROVAL_CODE_UNAVAILABLE");
     }
-    if (pendingCode && !pendingCode.used_at) {
+    if (!pendingCode || !pendingCode.used_at) {
       const delivery = await issueCustomerApprovalCode(admin, data.user.id, profile.email ?? email);
       if (!delivery.issued) return fail("A secure approval code could not be created. Contact Jixels support.", 503, "APPROVAL_CODE_UNAVAILABLE");
       return fail(
-        delivery.pushSent
-          ? "A fresh six-digit approval code was sent to this Jixels Customer app. Enter it to finish signing in."
-          : "Your account needs its six-digit approval code. Enable notifications in Jixels Customer Trackings, then sign in again.",
+        `Your account has been approved. Your one-time verification code is ${delivery.code}. Do not share or expose this OTP. It expires in five minutes.`,
         403,
         "CUSTOMER_OTP_REQUIRED",
+        { otpCode: delivery.code, expiresInSeconds: 300 },
       );
     }
   }
   let assignedVehicles: unknown[] = [];
   if (agentRoles.has(profile.role)) {
-    const { data: bikes, error: bikesError } = await admin.from("bikes").select("id,identifier,model,product_type,payable_amount,status,assigned_agent_id,trackers(identifier)").eq("assigned_agent_id", data.user.id).order("created_at", { ascending: false });
+    const { data: bikes, error: bikesError } = await admin.from("bikes").select("id,identifier,model,product_type,payable_amount,status,assigned_agent_id,trackers(identifier,plate_number)").eq("assigned_agent_id", data.user.id).order("created_at", { ascending: false });
     if (bikesError) console.error("Agent vehicle load failed", bikesError);
-    assignedVehicles = (bikes ?? []).map((bike: any) => ({ id: bike.id, registration: bike.identifier, model: bike.model, product_type: bike.product_type, payable_amount: bike.payable_amount, status: bike.status, assigned_agent_id: bike.assigned_agent_id, tracker: bike.trackers?.[0]?.identifier ?? "Pending" }));
+    assignedVehicles = (bikes ?? []).map((bike: any) => ({ id: bike.id, registration: bike.trackers?.[0]?.plate_number || bike.identifier, model: bike.model, product_type: bike.product_type, payable_amount: bike.payable_amount, status: bike.status, assigned_agent_id: bike.assigned_agent_id, tracker: bike.trackers?.[0]?.identifier ?? "Pending" }));
   }
   return response({
     accessToken: data.session.access_token,
@@ -623,8 +569,8 @@ async function portalSignIn(
 }
 
 async function requestPortalPasswordReset(
-  client: ReturnType<typeof createClient>,
-  admin: ReturnType<typeof createClient>,
+  client: SupabaseClient,
+  admin: SupabaseClient,
   body: Record<string, unknown>,
   allowedRoles: Set<string>,
 ) {
@@ -646,7 +592,7 @@ async function requestPortalPasswordReset(
   return response({ accepted: true, message: "If an approved account exists, reset instructions will be sent." });
 }
 
-async function accountStatus(admin: ReturnType<typeof createClient>, url: URL) {
+async function accountStatus(admin: SupabaseClient, url: URL) {
   const email = String(url.searchParams.get("email") ?? "").trim().toLowerCase();
   if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return fail("A valid email address is required.", 422, "INVALID_EMAIL");
 
@@ -660,16 +606,16 @@ async function accountStatus(admin: ReturnType<typeof createClient>, url: URL) {
     return fail("Account status is temporarily unavailable.", 503, "ACCOUNT_STATUS_UNAVAILABLE");
   }
 
-  const status = profile?.account_status === "active" ? "approved" : profile?.account_status ?? "pending";
+  const status = profile?.account_status === "active" ? "approved" : profile?.account_status ?? "not_found";
   return response({
     status,
     role: profile?.role ?? null,
     approved: approvedStatuses.has(profile?.account_status ?? ""),
-    message: approvedStatuses.has(profile?.account_status ?? "") ? "Your account has been approved." : "Your registration is waiting for administrator approval.",
+    message: approvedStatuses.has(profile?.account_status ?? "") ? "Your account has been approved." : ["rejected", "suspended"].includes(status) ? "Your account has not been approved. Contact Jixels support." : "Your registration is waiting for administrator approval.",
   });
 }
 
-async function financeAccountStatus(admin: ReturnType<typeof createClient>, url: URL) {
+async function financeAccountStatus(admin: SupabaseClient, url: URL) {
   const email = String(url.searchParams.get("email") ?? "").trim().toLowerCase();
   if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return fail("A valid email address is required.", 422, "INVALID_EMAIL");
 
@@ -911,14 +857,27 @@ Deno.serve(async (request) => {
     const email = String(body.email ?? "").trim().toLowerCase();
     const code = String(body.code ?? "").trim();
     if (!email || !/^\d{6}$/.test(code)) return fail("Enter your registered email address and the six-digit approval code.", 422, "INVALID_APPROVAL_CODE");
+    const otpAttemptKey = await loginAttemptKey(`approval-otp:${email}`);
+    const otpLock = await getLoginLock(admin, otpAttemptKey);
+    if (otpLock.error) return fail("Verification is temporarily unavailable.", 503, "LOGIN_SECURITY_UNAVAILABLE");
+    if (otpLock.locked) return fail("Too many incorrect codes. Please try again in 15 minutes.", 429, "OTP_TEMPORARILY_LOCKED");
     const { data: profile, error: profileError } = await admin.from("profiles").select("id,role,account_status").eq("email", email).maybeSingle();
     if (profileError || !profile || profile.role !== "customer") return fail("Customer account not found. Register an account or contact Jixels support.", 404, "ACCOUNT_NOT_FOUND");
     if (!approvedStatuses.has(profile.account_status)) return fail("This account is still awaiting administrator approval.", 403, "ACCOUNT_PENDING_APPROVAL");
     const { data: stored, error: storedError } = await admin.from("customer_approval_codes").select("code_hash,expires_at,used_at").eq("customer_id", profile.id).maybeSingle();
     if (storedError || !stored || stored.used_at || new Date(stored.expires_at).getTime() <= Date.now()) return fail("The approval code is unavailable or expired. Ask an administrator to issue a new code.", 401, "APPROVAL_CODE_EXPIRED");
-    if (stored.code_hash !== await sha256(code)) return fail("The approval code is incorrect.", 401, "APPROVAL_CODE_INVALID");
-    const { error: useError } = await admin.from("customer_approval_codes").update({ used_at: new Date().toISOString() }).eq("customer_id", profile.id);
+    if (stored.code_hash !== await sha256(code)) {
+      const failure = await recordLoginFailure(admin, otpAttemptKey);
+      if (failure.error) return fail("Verification is temporarily unavailable.", 503, "LOGIN_SECURITY_UNAVAILABLE");
+      return fail("The approval code is incorrect.", 401, "APPROVAL_CODE_INVALID");
+    }
+    const { data: usedCode, error: useError } = await admin.from("customer_approval_codes")
+      .update({ used_at: new Date().toISOString() }).eq("customer_id", profile.id)
+      .eq("code_hash", stored.code_hash).is("used_at", null).gt("expires_at", new Date().toISOString())
+      .select("customer_id").maybeSingle();
     if (useError) return fail("The approval code could not be verified. Please try again.", 503, "APPROVAL_CODE_UNAVAILABLE");
+    if (!usedCode) return fail("The approval code has expired or was already used.", 401, "APPROVAL_CODE_EXPIRED");
+    await admin.rpc("clear_login_failures", { p_account_key: otpAttemptKey });
     return response({ verified: true, message: "Account verified. Sign in with your registered email and password." });
   }
 
@@ -935,7 +894,7 @@ Deno.serve(async (request) => {
   if (!user) return fail("Authentication is required.", 401, "UNAUTHORIZED");
 
   if (route === "/v1/admin/trackers/refresh" && request.method === "POST") {
-    const { data: manager, error: managerError } = await admin.from("profiles").select("role").eq("id", user.id).maybeSingle();
+    const { data: manager, error: managerError } = await admin.from("profiles").select("role,account_status").eq("id", user.id).maybeSingle();
     if (managerError || !manager || !adminRoles.has(manager.role)) return fail("Administrator permission is required to refresh trackers.", 403, "FORBIDDEN");
     const { data: claimed, error: claimError } = await admin.rpc("claim_tracker_refresh", { p_lock_key: "operations-tracker-refresh", p_seconds: 20 });
     if (claimError) return fail("Tracker refresh protection is unavailable.", 503, "REFRESH_GUARD_UNAVAILABLE");
@@ -1006,10 +965,10 @@ Deno.serve(async (request) => {
 
   const adminRouteMatch = route.match(/^\/v1\/admin\/trackers\/([^/]+)\/route$/);
   if (adminRouteMatch && request.method === "GET") {
-    const { data: manager, error: managerError } = await admin.from("profiles").select("role").eq("id", user.id).maybeSingle();
+    const { data: manager, error: managerError } = await admin.from("profiles").select("role,account_status").eq("id", user.id).maybeSingle();
     if (managerError || !manager || !adminRoles.has(manager.role)) return fail("Administrator permission is required to view tracker routes.", 403, "FORBIDDEN");
     const window = routeWindow(url);
-    if ("error" in window) return fail(window.error, 422, "INVALID_ROUTE_WINDOW");
+    if ("error" in window) return fail(window.error || "Invalid route window.", 422, "INVALID_ROUTE_WINDOW");
     const trackerId = decodeURIComponent(adminRouteMatch[1]);
     const { data: tracker, error: trackerError } = await admin.from("trackers").select("id,identifier,tramigo_device_id,bike_id,vehicle_id").eq("id", trackerId).maybeSingle();
     if (trackerError) return fail("Tracker route could not be loaded.", 503, "ROUTE_UNAVAILABLE");
@@ -1049,7 +1008,7 @@ Deno.serve(async (request) => {
 
   const screeningDocumentMatch = route.match(/^\/v1\/admin\/screening\/([^/]+)\/documents$/);
   if (screeningDocumentMatch && request.method === "GET") {
-    const { data: manager, error: managerError } = await admin.from("profiles").select("role").eq("id", user.id).maybeSingle();
+    const { data: manager, error: managerError } = await admin.from("profiles").select("role,account_status").eq("id", user.id).maybeSingle();
     if (managerError || !manager || !adminRoles.has(manager.role)) return fail("Administrator permission is required to view identity documents.", 403, "FORBIDDEN");
     const applicationId = decodeURIComponent(screeningDocumentMatch[1]);
     const { data: application, error: applicationError } = await admin
@@ -1058,12 +1017,12 @@ Deno.serve(async (request) => {
       .eq("id", applicationId)
       .maybeSingle();
     if (applicationError || !application) return fail("Screening application not found.", 404, "NOT_FOUND");
-    return response({ documents: await signedScreeningDocuments(admin, application) });
+    return response({ documents: await signedScreeningDocuments(admin, application as unknown as Record<string, unknown>) });
   }
 
   const screeningUpdateMatch = route.match(/^\/v1\/admin\/screening\/([^/]+)$/);
   if (screeningUpdateMatch && request.method === "PATCH") {
-    const { data: manager, error: managerError } = await admin.from("profiles").select("role").eq("id", user.id).maybeSingle();
+    const { data: manager, error: managerError } = await admin.from("profiles").select("role,account_status").eq("id", user.id).maybeSingle();
     if (managerError || !manager || !adminRoles.has(manager.role)) return fail("Administrator permission is required to update customer records.", 403, "FORBIDDEN");
     const applicationId = decodeURIComponent(screeningUpdateMatch[1]);
     const { data: application, error: applicationError } = await admin
@@ -1241,8 +1200,8 @@ Deno.serve(async (request) => {
 
   const accountApprovalMatch = route.match(/^\/v1\/admin\/account-approvals\/([^/]+)$/);
   if ((route === "/v1/admin/account-approvals" && request.method === "GET") || (accountApprovalMatch && request.method === "POST")) {
-    const { data: manager, error: managerError } = await admin.from("profiles").select("role").eq("id", user.id).maybeSingle();
-    if (managerError || !manager || !adminRoles.has(manager.role)) return fail("Administrator approval permission is required.", 403, "FORBIDDEN");
+    const { data: manager, error: managerError } = await admin.from("profiles").select("role,account_status").eq("id", user.id).maybeSingle();
+    if (managerError || !manager || !adminRoles.has(manager.role) || !approvedStatuses.has(manager.account_status)) return fail("Administrator approval permission is required.", 403, "FORBIDDEN");
 
     if (request.method === "GET") {
       const directory = url.searchParams.get("status") === "directory";
@@ -1275,6 +1234,12 @@ Deno.serve(async (request) => {
       .eq("id", accountId)
       .maybeSingle();
     if (accountError || !account || !approvableAccountRoles.has(account.role)) return fail("Pending account not found.", 404, "ACCOUNT_NOT_FOUND");
+    if (["admin", "operations_manager"].includes(account.role) && manager.role !== "super_admin") return fail("Only a super administrator can approve administrator accounts.", 403, "PORTAL_ACCESS_DENIED");
+    if (account.role === "customer" && nextStatus === "approved") {
+      const eligibility = await existingCustomerRecord(admin, String(account.email ?? "").trim().toLowerCase());
+      if (eligibility.error) return fail("Customer records could not be checked.", 503, "CUSTOMER_LOOKUP_UNAVAILABLE");
+      if (!eligibility.customer || ["rejected", "declined", "suspended"].includes(eligibility.customer.status)) return fail("Account not approved: eligible customer details do not exist in the system.", 403, "CUSTOMER_DETAILS_NOT_FOUND");
+    }
     const { data: updated, error: updateError } = await admin
       .from("profiles")
       .update({ account_status: nextStatus, updated_at: new Date().toISOString() })
@@ -1314,7 +1279,7 @@ Deno.serve(async (request) => {
   const deleteMatch = route.match(/^\/v1\/admin\/users\/([^/]+)$/);
   const deleteProductMatch = route.match(/^\/v1\/admin\/products\/([^/]+)$/);
   if (deleteProductMatch && request.method === "DELETE") {
-    const { data: manager, error: managerError } = await admin.from("profiles").select("role").eq("id", user.id).maybeSingle();
+    const { data: manager, error: managerError } = await admin.from("profiles").select("role,account_status").eq("id", user.id).maybeSingle();
     if (managerError || !manager || !adminRoles.has(manager.role)) return fail("Administrator permission is required to delete inventory.", 403, "FORBIDDEN");
     const productId = decodeURIComponent(deleteProductMatch[1]);
     const { data: applications, error: applicationsError } = await admin.from("screening_applications").select("customer_id").eq("product_id", productId);
@@ -1336,7 +1301,7 @@ Deno.serve(async (request) => {
   }
   if (deleteMatch && request.method === "DELETE") {
     const targetId = decodeURIComponent(deleteMatch[1]);
-    const { data: manager, error: managerError } = await admin.from("profiles").select("role").eq("id", user.id).maybeSingle();
+    const { data: manager, error: managerError } = await admin.from("profiles").select("role,account_status").eq("id", user.id).maybeSingle();
     if (managerError || !manager || !adminRoles.has(manager.role)) return fail("Administrator permission is required to delete an account.", 403, "FORBIDDEN");
     if (targetId === user.id) return fail("You cannot delete the account currently signed in to Admin.", 422, "CANNOT_DELETE_SELF");
     try {
@@ -1373,7 +1338,7 @@ Deno.serve(async (request) => {
   }
 
   if (route === "/v1/admin/screening/approve" && request.method === "POST") {
-    const { data: manager, error: managerError } = await admin.from("profiles").select("role").eq("id", user.id).maybeSingle();
+    const { data: manager, error: managerError } = await admin.from("profiles").select("role,account_status").eq("id", user.id).maybeSingle();
     if (managerError || !manager || !["admin", "super_admin", "operations_manager"].includes(manager.role)) return fail("Administrator approval is required.", 403, "FORBIDDEN");
     const applicationId = String(body.applicationId ?? "").trim();
     const customerId = String(body.customerId ?? "").trim();
@@ -1402,7 +1367,7 @@ Deno.serve(async (request) => {
     if (agentError || !agentProfile || !agentRoles.has(agentProfile.role)) return fail("This account does not have permission to onboard customers.", 403, "PORTAL_ACCESS_DENIED");
     if (!approvedStatuses.has(agentProfile.account_status)) return fail("Your agent account is awaiting administrator approval.", 403, "ACCOUNT_PENDING_APPROVAL");
     if (request.method === "GET") {
-      const { data: applications, error } = await admin.from("screening_applications").select("id,customer_id,full_name,email,phone,payment_phone,national_id,location,product_identifier,product_type,product_model,tracker_identifier,deposit_amount,requested_deposit_amount,status,created_at,customers(email,address,customer_code),bikes(id,identifier,model,payable_amount,trackers(identifier))").eq("installer_agent_id", user.id).order("created_at", { ascending: false });
+      const { data: applications, error } = await admin.from("screening_applications").select("id,customer_id,full_name,email,phone,payment_phone,national_id,location,product_identifier,product_type,product_model,tracker_identifier,deposit_amount,requested_deposit_amount,status,created_at,customers(email,address,customer_code,plate_number),bikes(id,identifier,model,payable_amount,trackers(identifier,plate_number))").eq("installer_agent_id", user.id).order("created_at", { ascending: false });
       if (error) return fail("Agent customers could not be loaded.", 503, "CUSTOMERS_UNAVAILABLE");
       const customerIds = [...new Set((applications ?? []).map((item: any) => item.customer_id).filter(Boolean))];
       const { data: payments, error: paymentsError } = customerIds.length
@@ -1442,6 +1407,7 @@ Deno.serve(async (request) => {
           location: item.location ?? item.customers?.address ?? "",
           payerPhone: processing?.payer_phone ?? confirmed[0]?.payer_phone ?? item.payment_phone ?? "",
           idNumber: item.national_id ?? "",
+          plateNumber: item.bikes?.trackers?.[0]?.plate_number ?? item.customers?.plate_number ?? item.bikes?.identifier ?? "",
           bike: item.product_identifier ?? item.bikes?.identifier ?? "Pending assignment",
           vehicleModel: item.product_model ?? item.bikes?.model ?? "Assigned bike",
           tracker: item.tracker_identifier ?? item.bikes?.trackers?.[0]?.identifier ?? "Pending",
@@ -1469,7 +1435,7 @@ Deno.serve(async (request) => {
     if (!name || !phone || !email || !nationalId || !bikeId || !body.customerPhoto || !body.idFrontPhoto || !body.idBackPhoto) return fail("Enter the customer name, phone number, email address, national ID, assigned bike, and all three images.", 422, "INVALID_CUSTOMER_REGISTRATION");
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return fail("Enter a valid customer email address.", 422, "INVALID_EMAIL");
     if (!Number.isFinite(depositAmount) || depositAmount < 0) return fail("Enter a valid customer deposit amount.", 422, "INVALID_DEPOSIT");
-    const { data: bike, error: bikeError } = await admin.from("bikes").select("id,identifier,model,product_type,payable_amount,status,customer_id,trackers(identifier)").eq("id", bikeId).eq("assigned_agent_id", user.id).maybeSingle();
+    const { data: bike, error: bikeError } = await admin.from("bikes").select("id,identifier,model,product_type,payable_amount,status,customer_id,trackers(identifier,plate_number)").eq("id", bikeId).eq("assigned_agent_id", user.id).maybeSingle();
     if (bikeError || !bike) return fail("This bike is not assigned to your agent account.", 403, "BIKE_NOT_ASSIGNED");
     if (bike.customer_id || ["pending", "sold"].includes(String(bike.status).toLowerCase())) return fail("This tracker is already linked to another customer sale.", 409, "TRACKER_ALREADY_SOLD");
     if (depositAmount > Number(bike.payable_amount ?? 0)) return fail("The deposit cannot be higher than the total payable amount.", 422, "INVALID_DEPOSIT");
@@ -1516,7 +1482,7 @@ Deno.serve(async (request) => {
       await admin.from("customers").delete().eq("id", customer.id);
       return fail("Customer images could not be saved. The registration was not submitted; capture the three images again.", 503, "SCREENING_DOCUMENTS_FAILED");
     }
-    return response({ customer: { id: customer.id, customerCode: customer.customer_code ?? "", vehicleId: bike.id, name, phone, email, idNumber: nationalId, location: location || "Field location", bike: bike.identifier, vehicleModel: bike.model, tracker: bike.trackers?.[0]?.identifier ?? "Pending", kyc: "Submitted", install: "Pending", payment: "Pending", requestedDepositAmount: depositAmount, payableAmount: Number(bike.payable_amount ?? 0), amount: 0, balance: Number(bike.payable_amount ?? 0), commission: 0, receipt: "", date: now.slice(0, 10), screeningStatus: "pending" } }, 201);
+    return response({ customer: { id: customer.id, customerCode: customer.customer_code ?? "", vehicleId: bike.id, name, phone, email, idNumber: nationalId, location: location || "Field location", plateNumber: bike.trackers?.[0]?.plate_number || bike.identifier, bike: bike.identifier, vehicleModel: bike.model, tracker: bike.trackers?.[0]?.identifier ?? "Pending", kyc: "Submitted", install: "Pending", payment: "Pending", requestedDepositAmount: depositAmount, payableAmount: Number(bike.payable_amount ?? 0), amount: 0, balance: Number(bike.payable_amount ?? 0), commission: 0, receipt: "", date: now.slice(0, 10), screeningStatus: "pending" } }, 201);
   }
 
   if (route === "/v1/agent/assignments" && request.method === "GET") {
@@ -1530,7 +1496,7 @@ Deno.serve(async (request) => {
 
     const { data: bikes, error } = await admin
       .from("bikes")
-      .select("id,identifier,model,product_type,payable_amount,status,assigned_agent_id,trackers(identifier)")
+      .select("id,identifier,model,product_type,payable_amount,status,assigned_agent_id,trackers(identifier,plate_number)")
       .eq("assigned_agent_id", user.id)
       .order("created_at", { ascending: false });
     if (error) {
@@ -1539,7 +1505,7 @@ Deno.serve(async (request) => {
     }
     return response({ assignments: (bikes ?? []).map((bike: any) => ({
       id: bike.id,
-      registration: bike.identifier,
+      registration: bike.trackers?.[0]?.plate_number || bike.identifier,
       model: bike.model,
       product_type: bike.product_type,
       payable_amount: bike.payable_amount,
@@ -1635,7 +1601,7 @@ Deno.serve(async (request) => {
     const { data: vehicle } = await admin.from("vehicles").select("id").eq("id", vehicleId).eq("owner_id", user.id).maybeSingle();
     if (!vehicle) return fail("Vehicle not found.", 404, "NOT_FOUND");
     const window = routeWindow(url);
-    if ("error" in window) return fail(window.error, 422, "INVALID_ROUTE_WINDOW");
+    if ("error" in window) return fail(window.error || "Invalid route window.", 422, "INVALID_ROUTE_WINDOW");
     try { return response(await loadRoute(admin, vehicleId, null, window)); }
     catch (error) { console.error("Customer route load failed", vehicleId, error); return fail("Route history is temporarily unavailable.", 503, "ROUTE_UNAVAILABLE"); }
   }

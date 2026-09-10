@@ -3,7 +3,7 @@ export default {
     owner: "jixels-2026",
     name: "Jixels Agent Trackings",
     slug: "jixels-agent-trackings",
-    version: "1.0.0",
+    version: "1.0.1",
     scheme: "jixelsagenttrackings",
     orientation: "portrait",
     platforms: ["android", "ios"],
@@ -15,7 +15,9 @@ export default {
       backgroundColor: "#0D467D"
     },
     updates: {
-      url: "https://u.expo.dev/d39d37aa-156b-4bfd-b74d-c2fb8aed6bb6"
+      url: "https://u.expo.dev/d39d37aa-156b-4bfd-b74d-c2fb8aed6bb6",
+      checkAutomatically: "ON_LOAD",
+      fallbackToCacheTimeout: 0
     },
     runtimeVersion: {
       policy: "appVersion"

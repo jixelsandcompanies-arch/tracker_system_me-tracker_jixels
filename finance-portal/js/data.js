@@ -122,5 +122,10 @@
     return { id: result.user.id, name: result.user.name || result.user.email.split("@")[0], email: result.user.email, phone: result.user.phone || "", role: result.user.role, accessToken: result.accessToken };
   }
   const money = value => new Intl.NumberFormat("en-KE", { style: "currency", currency: "KES", maximumFractionDigits: 0 }).format(Number(value || 0));
-  window.FinanceStore = { emptyData, readData, saveData, registerFinanceUser, financeAccountStatus, authenticateFinanceUser, hydrate, refreshLive, hydrateSupplementary, money };
+  async function approvalAccountStatus(email) {
+    const response = await fetch(`${SUPABASE_URL}/functions/v1/api/v1/auth/account-status?email=${encodeURIComponent(email)}`, { headers: { apikey: SUPABASE_KEY } });
+    if (!response.ok) throw new Error("Account status unavailable.");
+    return response.json();
+  }
+  window.FinanceStore = { approvalAccountStatus, emptyData, readData, saveData, registerFinanceUser, financeAccountStatus, authenticateFinanceUser, hydrate, refreshLive, hydrateSupplementary, money };
 })();

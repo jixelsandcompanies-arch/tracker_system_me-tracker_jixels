@@ -1,0 +1,68 @@
+name: Customer Android APK
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: customer-android-release
+  cancel-in-progress: false
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      EXPO_PUBLIC_JIXELS_API_URL: https://tpzebfvhvjsezynqgdns.supabase.co/functions/v1/api
+      EXPO_PUBLIC_EAS_PROJECT_ID: 000c3287-aab6-4be1-858a-3ddf2c670c49
+      EXPO_PUBLIC_DEMO_MODE: 'false'
+      CI: '1'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22'
+          cache: npm
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3
+        with:
+          distribution: temurin
+          java-version: '17'
+      - run: npm ci
+      - run: npm test && npm run check
+      - run: npx expo prebuild --platform android --no-install
+      - name: Build with original release signing key
+        env:
+          NODE_ENV: production
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          node scripts/configure-github-android.mjs
+          cd android
+          chmod +x gradlew
+          ./gradlew :app:assembleRelease -PreactNativeArchitectures=arm64-v8a,armeabi-v7a --max-workers=2 --no-daemon --console=plain
+      - name: Verify signature and package
+        run: |
+          BUILD_TOOLS=$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -1)
+          APK=android/app/build/outputs/apk/release/app-release.apk
+          "$BUILD_TOOLS/apksigner" verify --print-certs "$APK" | tee certificate.txt
+          grep -qi 'a57c3d1f9900e351e2c40586e0fc6edbd5972f325b69ed537005d176074c50d0' certificate.txt
+          "$BUILD_TOOLS/aapt" dump badging "$APK" | head -1 | tee package.txt
+          grep -q "name='com.jixelstechnologies.customer' versionCode='5' versionName='1.0.3'" package.txt
+          "$BUILD_TOOLS/aapt" dump xmltree "$APK" AndroidManifest.xml > manifest.txt
+          grep -q 'expo-channel-name' manifest.txt
+          grep -q 'preview' manifest.txt
+          cp "$APK" Jixels-Customer-1.0.3.apk
+          sha256sum Jixels-Customer-1.0.3.apk > SHA256SUMS.txt
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: Jixels-Customer-1.0.3
+          path: |
+            Jixels-Customer-1.0.3.apk
+            SHA256SUMS.txt
+          retention-days: 30
+      - name: Publish download
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="customer-1.0.3-build-${GITHUB_RUN_NUMBER}"
+          gh release create "$TAG" Jixels-Customer-1.0.3.apk SHA256SUMS.txt --target "$GITHUB_SHA" --title "Jixels Customer 1.0.3" --notes "Customer approval OTP display, existing-customer registration checks, and automatic app updates. Signed with the existing customer Android signing key. Install this APK once to enable future compatible over-the-air updates."

@@ -1,5 +1,7 @@
 # Jixels Customer Tracking App
 
+Latest changes and APK/OTA release instructions: [2026-09-10 release](RELEASE-2026-09-10.md).
+
 New JavaScript React Native customer app for Jixels Technologies. It displays a real interactive map with a custom motorcycle marker, tracker status, map controls, device location, and route history.
 
 ## Run locally

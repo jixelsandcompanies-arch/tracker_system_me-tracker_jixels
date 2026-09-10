@@ -10,6 +10,26 @@
   window.addEventListener("unhandledrejection", event => showFatalError(event.reason));
   try {
   const { readData, saveData, registerFinanceUser, financeAccountStatus, authenticateFinanceUser, hydrate, refreshLive, hydrateSupplementary, money } = window.FinanceStore;
+
+  let approvalCheckBusy = false;
+  async function checkPendingApproval() {
+    const email = localStorage.getItem("jixels.finance.pending-email");
+    if (!email || approvalCheckBusy) return;
+    approvalCheckBusy = true;
+    try {
+      const account = await window.FinanceStore.approvalAccountStatus(email);
+      if (!["finance", "finance_officer", "admin", "super_admin"].includes(account.role)) return;
+      if (account.approved || ["rejected", "suspended"].includes(account.status)) {
+        localStorage.removeItem("jixels.finance.pending-email");
+        window.alert(account.approved ? "Your account has been approved. You can now log in." : "Your account has not been approved. Contact Jixels support.");
+        if (!session) { authMode = "login"; root.innerHTML = loginView(account.approved ? "Your account has been approved. You can now log in." : "Account not approved."); bindLoginEvents(); }
+      }
+    } catch { /* Retry when the connection returns. */ }
+    finally { approvalCheckBusy = false; }
+  }
+  window.setInterval(checkPendingApproval, 10_000);
+  window.addEventListener("focus", checkPendingApproval);
+  window.setTimeout(checkPendingApproval, 0);
   const root = document.getElementById("root");
   let data = readData();
   let page = "dashboard";
@@ -219,7 +239,7 @@
 
   function customerDirectoryTable(rows) {
     if (!rows.length) return empty("No customer registrations", "New customer registrations will appear here.");
-    return `<div class="table-wrap"><table><thead><tr><th>Customer</th><th>Contact</th><th>Registration</th><th>Approval status</th></tr></thead><tbody>${rows.map(customer => `<tr><td><strong>${escapeHtml(customer.full_name)}</strong></td><td>${escapeHtml(customer.email || "-")}<br><small>${escapeHtml(customer.phone || "-")}</small></td><td>${registrationDate(customer.created_at)}</td><td>${status(customer.status || "pending")}</td></tr>`).join("")}</tbody></table></div>`;
+    return `<div class="table-wrap"><table><thead><tr><th>Customer</th><th>Contact</th><th>Plate number</th><th>Tracker number</th><th>Registration</th><th>Approval status</th></tr></thead><tbody>${rows.map(customer => `<tr><td><strong>${escapeHtml(customer.full_name)}</strong></td><td>${escapeHtml(customer.email || "-")}<br><small>${escapeHtml(customer.phone || "-")}</small></td><td>${escapeHtml(customer.plate_number || "-")}</td><td>${escapeHtml(customer.tracker_number || "-")}</td><td>${registrationDate(customer.created_at)}</td><td>${status(customer.status || "pending")}</td></tr>`).join("")}</tbody></table></div>`;
   }
 
   function customersPage() {
@@ -420,6 +440,7 @@
           setAuthButtonLoading(submit, "Creating account...");
           await paintLoadingFrame();
           const registration = await registerFinanceUser({ name, email, phone, password });
+          localStorage.setItem("jixels.finance.pending-email", email);
           if (!registration.pending) throw new Error("Registration was not submitted. Please try again.");
           showRegistrationPending(); return;
         } else {

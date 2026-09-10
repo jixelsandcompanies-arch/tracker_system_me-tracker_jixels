@@ -90,7 +90,7 @@ function money(value) {
 function normalizeAssignedVehicle(record = {}) {
   const id = record.id || record.productId || record.vehicleId || record.identifier || record.registration || record.plate;
   if (!id) return null;
-  const registration = String(record.registration || record.plate || record.identifier || record.tracker_number || id).toUpperCase();
+  const registration = String(record.plateNumber || record.plate_number || record.registration || record.plate || record.identifier || record.tracker_number || id).toUpperCase();
   const tracker = String(record.tracker || record.trackerNumber || record.tracker_number || record.trackerId || "Pending").toUpperCase();
   const payableAmount = Number(record.payableAmount ?? record.payable_amount ?? record.totalPayable ?? record.total ?? record.price ?? 0);
   return {
@@ -569,7 +569,7 @@ function Customers({ customers, onDeposit, onRefresh, refreshing, darkMode = fal
       <View style={styles.listIcon}><Ionicons name="person" color={colors.blue} size={20} /></View>
       <View style={styles.listBody}>
         <Text numberOfLines={1} style={[styles.listTitle, darkMode && styles.darkText]}>{customer.name}</Text>
-        <Text style={styles.listSub}>{customer.phone} • {customer.bike}</Text>
+        <Text style={styles.listSub}>{customer.phone} • Plate {customer.plateNumber || customer.bike} • Tracker {customer.tracker}</Text>
         <Text style={styles.listMeta}>{customer.location} • Balance {money(customerBalance(customer))} • Sale {customerSaleStatus(customer)}</Text>
       </View>
       <View style={styles.listStatus}>
@@ -675,8 +675,8 @@ function Trackers({ customers, onInstallComplete, onRefresh, refreshing, darkMod
     <Text style={[styles.sectionTitle, darkMode && styles.darkText]}>Customer installs</Text>
     {installCustomers.length === 0 && <View style={[styles.empty, darkMode && styles.darkCard]}><Ionicons name="checkmark-circle-outline" color={colors.green} size={42} /><Text style={[styles.emptyText, darkMode && styles.darkText]}>No assigned installs pending</Text><Text style={styles.emptySub}>Sold bikes assigned to this agent will appear here until installation is complete.</Text></View>}
     {customers.map(customer => <View key={`${customer.id}-install`} style={[styles.installRow, darkMode && styles.darkCard]}>
-      <Text style={[styles.installName, darkMode && styles.darkText]}>{customer.bike}</Text>
-      <Text style={styles.installSub}>{customer.name} • {customer.tracker} • Sale {customerSaleStatus(customer)}</Text>
+      <Text style={[styles.installName, darkMode && styles.darkText]}>{customer.plateNumber || customer.bike}</Text>
+      <Text style={styles.installSub}>{customer.name} • Plate {customer.plateNumber || customer.bike} • Tracker {customer.tracker} • Sale {customerSaleStatus(customer)}</Text>
       <View style={styles.installActions}>
         <Pill value={customer.install} />
         {customer.install !== "Complete" && <Pressable onPress={() => onInstallComplete(customer.id)} style={styles.miniButton}><Text style={styles.miniButtonText}>Mark installed</Text></Pressable>}
@@ -705,7 +705,7 @@ function Commissions({ customers, onRefresh, refreshing, darkMode = false }) {
       <View style={styles.listIcon}><Ionicons name="cash" color={colors.green} size={20} /></View>
       <View style={styles.listBody}>
         <Text style={[styles.listTitle, darkMode && styles.darkText]}>{customer.name}</Text>
-        <Text style={styles.listSub}>{customer.bike} • Payable {money(customer.payableAmount)} • Deposit {money(customer.amount)}</Text>
+        <Text style={styles.listSub}>{customer.plateNumber || customer.bike} • Payable {money(customer.payableAmount)} • Deposit {money(customer.amount)}</Text>
         <Text style={styles.listMeta}>Commission {money(customer.commission)} • Balance {money(balance)} • {customer.receipt || "Waiting for M-Pesa callback"}</Text>
       </View>
       <View style={styles.listStatus}>
@@ -729,7 +729,7 @@ function Reports({ customers, profile, onRefresh, refreshing, darkMode = false }
   const [reportAccessBlocked, setReportAccessBlocked] = useState(false);
   const [passwordPromptVisible, setPasswordPromptVisible] = useState(false);
   const selectedCustomer = customers.find(customer => customer.id === selectedCustomerId) || customers[0];
-  const matchingCustomers = customers.filter(customer => `${customer.name} ${customer.bike} ${customer.tracker}`.toLowerCase().includes(customerSearch.trim().toLowerCase()));
+  const matchingCustomers = customers.filter(customer => `${customer.name} ${customer.plateNumber || customer.bike} ${customer.tracker}`.toLowerCase().includes(customerSearch.trim().toLowerCase()));
   function downloadReport() {
     if (!selectedCustomer) return Alert.alert("Choose customer", "Select a customer before downloading the report.");
     if (!/^\d{4}-\d{2}-\d{2}$/.test(routeDate)) return Alert.alert("Check date", "Enter the route date as YYYY-MM-DD.");
@@ -782,7 +782,7 @@ function Reports({ customers, profile, onRefresh, refreshing, darkMode = false }
         </Pressable>
         {customerPickerOpen && <View style={[styles.reportBikeDropdown, darkMode && styles.darkCard]}>
           <View style={[styles.reportBikeSearch, darkMode && styles.darkInput]}><Ionicons name="search" size={18} color={colors.muted} /><TextInput value={customerSearch} onChangeText={setCustomerSearch} placeholder="Search name, plate or tracker" placeholderTextColor="#94A3B8" autoCapitalize="characters" style={[styles.reportBikeSearchInput, darkMode && styles.darkText]} /></View>
-          <ScrollView nestedScrollEnabled keyboardShouldPersistTaps="handled" style={styles.reportBikeList} showsVerticalScrollIndicator>{matchingCustomers.map(customer => <Pressable key={customer.id} onPress={() => { setSelectedCustomerId(customer.id); setCustomerPickerOpen(false); setCustomerSearch(""); }} style={[styles.reportBikeOption, selectedCustomer?.id === customer.id && styles.reportBikeOptionActive]}><View style={styles.vehicleDropdownIcon}><MaterialCommunityIcons name="motorbike" size={19} color={colors.blue} /></View><View style={styles.listBody}><Text style={[styles.vehicleDropdownPlate, darkMode && styles.darkText]}>{customer.bike}</Text><Text style={styles.vehicleDropdownModel}>{customer.name} • Tracker {customer.tracker}</Text></View>{selectedCustomer?.id === customer.id && <Ionicons name="checkmark-circle" size={20} color={colors.blue} />}</Pressable>)}{matchingCustomers.length === 0 && <Text style={styles.noVehicleText}>No customer matches your search.</Text>}</ScrollView>
+          <ScrollView nestedScrollEnabled keyboardShouldPersistTaps="handled" style={styles.reportBikeList} showsVerticalScrollIndicator>{matchingCustomers.map(customer => <Pressable key={customer.id} onPress={() => { setSelectedCustomerId(customer.id); setCustomerPickerOpen(false); setCustomerSearch(""); }} style={[styles.reportBikeOption, selectedCustomer?.id === customer.id && styles.reportBikeOptionActive]}><View style={styles.vehicleDropdownIcon}><MaterialCommunityIcons name="motorbike" size={19} color={colors.blue} /></View><View style={styles.listBody}><Text style={[styles.vehicleDropdownPlate, darkMode && styles.darkText]}>{customer.plateNumber || customer.bike}</Text><Text style={styles.vehicleDropdownModel}>{customer.name} • Tracker {customer.tracker}</Text></View>{selectedCustomer?.id === customer.id && <Ionicons name="checkmark-circle" size={20} color={colors.blue} />}</Pressable>)}{matchingCustomers.length === 0 && <Text style={styles.noVehicleText}>No customer matches your search.</Text>}</ScrollView>
         </View>}
       </View>
       <Field label="Route date (YYYY-MM-DD)" value={routeDate} onChangeText={setRouteDate} placeholder="2026-08-24" />
@@ -980,7 +980,7 @@ function AgentApp({ agent, onLogout }) {
 
   const agentAlerts = useMemo(() => customers.flatMap(customer => [
     ...(!customerPaymentComplete(customer) ? [{ id: `${customer.id}-payment`, type: "payment", icon: "wallet-outline", title: "Payment pending", message: `${customer.name} has no confirmed deposit.`, age: "now", customerName: customer.name }] : []),
-    ...(customer.install !== "Complete" ? [{ id: `${customer.id}-install`, type: "install", icon: "radio-outline", title: "Install pending", message: `${customer.bike} tracker installation is not complete.`, age: "today", customerName: customer.name }] : []),
+    ...(customer.install !== "Complete" ? [{ id: `${customer.id}-install`, type: "install", icon: "radio-outline", title: "Install pending", message: `${customer.plateNumber || customer.bike} tracker installation is not complete.`, age: "today", customerName: customer.name }] : []),
     ...(customer.kyc !== "Approved" ? [{ id: `${customer.id}-kyc`, type: "kyc", icon: "id-card-outline", title: "KYC review", message: `${customer.name} is waiting for admin KYC approval.`, age: "today", customerName: customer.name }] : [])
   ]).filter(alert => !deletedAlertIds.has(alert.id)).map(alert => ({ ...alert, unread: !readAlertIds.has(alert.id) })), [customers, deletedAlertIds, readAlertIds]);
   const unread = agentAlerts.filter(alert => alert.unread).length;

@@ -1385,23 +1385,6 @@ Deno.serve(async (request) => {
     return response({ customer: { id: customer.id, vehicleId: bike.id, name: customer.full_name, phone: customer.phone, email: customer.email, plateNumber, bike: bike.identifier, vehicleModel: bike.model, tracker: (bike as any).trackers?.[0]?.identifier ?? bike.identifier, payment: "Pending", install: "Pending", requestedDepositAmount: Number.isFinite(depositAmount) ? depositAmount : 0, payableAmount: Number(bike.payable_amount ?? 0), screeningStatus: "pending" } }, 201);
   }
 
-  const adminAddVehicleMatch = route.match(/^\/v1\/admin\/customers\/([^/]+)\/vehicles$/);
-  if (adminAddVehicleMatch && request.method === "POST") {
-    const { data: manager } = await admin.from("profiles").select("role,account_status").eq("id", user.id).maybeSingle();
-    if (!manager || !adminRoles.has(manager.role) || !approvedStatuses.has(manager.account_status)) return fail("Administrator permission is required.", 403, "FORBIDDEN");
-    const customerId = decodeURIComponent(adminAddVehicleMatch[1]); const bikeId = String(body.bikeId ?? "").trim();
-    if (!bikeId) return fail("Choose the tracker product to assign.", 422, "INVALID_VEHICLE_ASSIGNMENT");
-    const { data: customer } = await admin.from("customers").select("id,full_name,email,phone,national_id,address").eq("id", customerId).maybeSingle();
-    const { data: bike } = await admin.from("bikes").select("id,identifier,model,product_type,payable_amount,trackers(identifier)").eq("id", bikeId).is("customer_id", null).maybeSingle();
-    if (!customer || !bike) return fail("The customer or available tracker product could not be found.", 404, "ASSIGNMENT_NOT_FOUND");
-    const now = new Date().toISOString();
-    const { data: assigned, error } = await admin.from("bikes").update({ customer_id: customer.id, status: "pending", updated_at: now }).eq("id", bike.id).is("customer_id", null).select("id").maybeSingle();
-    if (error || !assigned) return fail("That tracker product is no longer available.", 409, "TRACKER_ALREADY_SOLD");
-    const { error: applicationError } = await admin.from("screening_applications").insert({ customer_id: customer.id, product_id: bike.id, full_name: customer.full_name, email: customer.email, phone: customer.phone, national_id: customer.national_id, location: customer.address, product_identifier: bike.identifier, product_type: bike.product_type, product_model: bike.model, tracker_identifier: (bike as any).trackers?.[0]?.identifier ?? bike.identifier, deposit_amount: 0, requested_deposit_amount: Number(body.depositAmount ?? 0) || 0, payment_phone: customer.phone, status: "pending", created_at: now, updated_at: now });
-    if (applicationError) { await admin.from("bikes").update({ customer_id: null, status: "available", updated_at: now }).eq("id", bike.id); return fail("The vehicle screening record could not be created.", 503, "SCREENING_REGISTRATION_FAILED"); }
-    return response({ customerId: customer.id, bikeId: bike.id }, 201);
-  }
-
   if (route === "/v1/agent/customers" && (request.method === "GET" || request.method === "POST")) {
     const { data: agentProfile, error: agentError } = await admin.from("profiles").select("role,account_status").eq("id", user.id).maybeSingle();
     if (agentError || !agentProfile || !agentRoles.has(agentProfile.role)) return fail("This account does not have permission to onboard customers.", 403, "PORTAL_ACCESS_DENIED");

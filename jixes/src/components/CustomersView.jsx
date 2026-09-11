@@ -576,6 +576,7 @@ export default function CustomersView({ approvalMode = false }) {
                     <th>Location</th>
                     <th>National ID</th>
                     <th>Plate number</th><th>Tracker</th>
+                    <th>Vehicles</th>
                     <th>Status</th>
                     <th>Actions</th>
                   </tr>
@@ -607,6 +608,7 @@ export default function CustomersView({ approvalMode = false }) {
                       </td>
                       <td>{customer.national_id || "—"}</td>
                       <td>{customer.plate_number || "—"}</td><td>{customer.tracker_number || "—"}</td>
+                      <td>{screeningApplications.filter((application) => application.customer_id === customer.id).length || 1}</td>
                       <td>
                         <span className="account-status approved">
                           Approved

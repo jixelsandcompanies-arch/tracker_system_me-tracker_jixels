@@ -74,7 +74,6 @@ class AppErrorBoundary extends React.Component {
 const navigation = [
   { label: "Dashboard", icon: LayoutDashboard, key: "Dashboard", section: "OVERVIEW" },
   { label: "Product inventory", icon: Bike, key: "Products", section: "OPERATIONS" },
-  { label: "Customer vehicle assignments", icon: Link2, key: "Customer Vehicle Assignments", section: "OPERATIONS" },
   { label: "GPS Trackers", icon: Radio, key: "GPS Trackers", section: "OPERATIONS" },
   { label: "Screening", icon: ClipboardList, key: "Screening", section: "OPERATIONS" },
   { label: "Support cases", icon: MessageCircle, key: "Support Cases", section: "OPERATIONS" },

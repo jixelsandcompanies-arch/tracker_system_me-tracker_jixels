@@ -1587,6 +1587,27 @@ Deno.serve(async (request) => {
   const locationMatch = route.match(/^\/v1\/customer\/motorcycles\/([^/]+)\/location$/);
   if (locationMatch && request.method === "GET") {
     const vehicleId = decodeURIComponent(locationMatch[1]);
+    // New customer onboarding assigns a bike to a customer record rather than
+    // creating the legacy owner-scoped `vehicles` record. Resolve that path
+    // first, so the customer app receives the same live tracker data.
+    const { data: customerProfile } = await admin.from("profiles").select("email").eq("id", user.id).maybeSingle();
+    const { data: assignedCustomer } = customerProfile?.email
+      ? await admin.from("customers").select("id").ilike("email", String(customerProfile.email).trim()).maybeSingle()
+      : { data: null };
+    const { data: assignedBike } = assignedCustomer?.id
+      ? await admin.from("bikes").select("id,identifier,model,product_type,trackers(id,identifier,plate_number,latitude,longitude,last_seen_at,is_online)").eq("id", vehicleId).eq("customer_id", assignedCustomer.id).maybeSingle()
+      : { data: null };
+    if (assignedBike) {
+      const tracker = (assignedBike as any).trackers?.[0] ?? null;
+      let location = tracker && Number.isFinite(Number(tracker.latitude)) && Number.isFinite(Number(tracker.longitude))
+        ? { latitude: Number(tracker.latitude), longitude: Number(tracker.longitude), speedKph: 0, recordedAt: tracker.last_seen_at, trackerStatus: tracker.is_online ? "online" : "offline" }
+        : null;
+      if (!location && tracker?.id) {
+        const { data: saved } = await admin.from("tracker_locations").select("latitude,longitude,speed_kph,heading,accuracy_meters,recorded_at").eq("tracker_id", tracker.id).order("recorded_at", { ascending: false }).limit(1).maybeSingle();
+        location = saved && { latitude: saved.latitude, longitude: saved.longitude, speedKph: saved.speed_kph, heading: saved.heading, accuracyMeters: saved.accuracy_meters, recordedAt: saved.recorded_at, trackerStatus: tracker.is_online ? "online" : "offline" };
+      }
+      return response({ id: assignedBike.id, registration: tracker?.plate_number || assignedBike.identifier, model: assignedBike.model, vehicle_type: assignedBike.product_type, location });
+    }
     const { data: vehicle } = await admin.from("vehicles").select("id,registration,model,vehicle_type,tracker_imei").eq("id", vehicleId).eq("owner_id", user.id).single();
     if (!vehicle) return fail("Vehicle not found.", 404, "NOT_FOUND");
     let location = null;

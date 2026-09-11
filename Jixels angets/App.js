@@ -62,6 +62,7 @@ const screens = [
   { key: "dashboard", label: "Home", icon: "grid-outline" },
   { key: "customers", label: "Customers", icon: "people-outline" },
   { key: "onboard", label: "New customer", icon: "person-add-outline" },
+  { key: "existing", label: "Add vehicle to customer", icon: "add-circle-outline" },
   { key: "payments", label: "Commissions", icon: "cash-outline" },
   { key: "alerts", label: "Alerts", icon: "notifications-outline" }
 ];
@@ -659,6 +660,29 @@ function Onboarding({ addCustomer, navigate, assignedVehicles, accessToken, onRe
   </ScrollView>;
 }
 
+function AddVehicleToCustomer({ customers, assignedVehicles, accessToken, addCustomer, navigate, onRefresh, refreshing, darkMode = false }) {
+  const uniqueCustomers = useMemo(() => [...new Map(customers.map(customer => [customer.id, customer])).values()], [customers]);
+  const [customerId, setCustomerId] = useState(uniqueCustomers[0]?.id || "");
+  const [vehicleId, setVehicleId] = useState(assignedVehicles[0]?.id || "");
+  const [plateNumber, setPlateNumber] = useState("");
+  const [depositAmount, setDepositAmount] = useState("");
+  const [saving, setSaving] = useState(false);
+  const customer = uniqueCustomers.find(item => item.id === customerId);
+  const vehicle = assignedVehicles.find(item => item.id === vehicleId);
+  async function submit() {
+    if (!customerId || !vehicleId || !plateNumber.trim()) return Alert.alert("Complete vehicle details", "Choose the existing customer and available tracker, then enter the vehicle plate number.");
+    setSaving(true);
+    try {
+      const result = await authApi.addVehicleToCustomer(accessToken, customerId, { bikeId: vehicleId, plateNumber: plateNumber.trim().toUpperCase(), depositAmount: Number(depositAmount || 0) });
+      addCustomer(result.customer);
+      Alert.alert("Vehicle added", `${plateNumber.trim().toUpperCase()} is now linked to ${customer?.name || "the customer"}. A separate payment and screening record was created for this vehicle.`);
+      navigate("customers");
+    } catch (error) { Alert.alert("Vehicle could not be added", error instanceof Error ? error.message : "Try again."); }
+    finally { setSaving(false); }
+  }
+  return <ScrollView style={darkMode && styles.darkPage} contentContainerStyle={styles.page} refreshControl={pullRefresh(onRefresh, refreshing)}><Text style={[styles.sectionTitle, darkMode && styles.darkText]}>Add vehicle to existing customer</Text><Text style={styles.emptySub}>Select a customer, then assign another available tracker. Every vehicle keeps its own payment record.</Text><View style={[styles.formCard, darkMode && styles.darkCard]}><Text style={styles.fieldLabel}>Existing customer</Text>{uniqueCustomers.map(item => <Pressable key={item.id} onPress={() => setCustomerId(item.id)} style={[styles.reportBikeOption, item.id === customerId && styles.reportBikeOptionActive]}><View style={styles.listBody}><Text style={[styles.vehicleDropdownPlate, darkMode && styles.darkText]}>{item.name}</Text><Text style={styles.vehicleDropdownModel}>{item.phone} • {item.customerCode || "Existing customer"}</Text></View>{item.id === customerId && <Ionicons name="checkmark-circle" color={colors.blue} size={20}/>}</Pressable>)}<Text style={[styles.fieldLabel, { marginTop: 14 }]}>Available tracker</Text>{assignedVehicles.map(item => <Pressable key={item.id} onPress={() => setVehicleId(item.id)} style={[styles.reportBikeOption, item.id === vehicleId && styles.reportBikeOptionActive]}><View style={styles.listBody}><Text style={[styles.vehicleDropdownPlate, darkMode && styles.darkText]}>{item.tracker || item.identifier}</Text><Text style={styles.vehicleDropdownModel}>{item.model} • {money(item.payableAmount)} payable</Text></View>{item.id === vehicleId && <Ionicons name="checkmark-circle" color={colors.blue} size={20}/>}</Pressable>)}{assignedVehicles.length === 0 && <Text style={styles.emptySub}>No unassigned trackers are available to you.</Text>}<Field label="Vehicle plate number" value={plateNumber} onChangeText={value => setPlateNumber(value.toUpperCase())} placeholder="Example: KMG 123A" autoCapitalize="characters"/><Field label="Deposit amount to prompt" value={depositAmount} onChangeText={setDepositAmount} keyboardType="numeric"/><Pressable disabled={saving || !assignedVehicles.length} onPress={submit} style={styles.primaryButton}><Ionicons name="add-circle-outline" size={18} color={colors.white}/><Text style={styles.primaryButtonText}>{saving ? "Adding vehicle…" : "Add vehicle and payment record"}</Text></Pressable></View></ScrollView>;
+}
+
 function Trackers({ customers, onInstallComplete, onRefresh, refreshing, darkMode = false }) {
   const installCustomers = customers.filter(customer => customer.install !== "Complete");
   return <ScrollView style={darkMode && styles.darkPage} contentContainerStyle={styles.page} refreshControl={pullRefresh(onRefresh, refreshing)}>
@@ -1115,6 +1139,7 @@ function AgentApp({ agent, onLogout }) {
   const body = screen === "dashboard" ? <Dashboard compact={compact} customers={customers} navigate={navigate} isOnline={isOnline} onRefresh={refresh} refreshing={refreshing} darkMode={darkMode} />
     : screen === "customers" ? <Customers customers={customers} onDeposit={requestDeposit} onRefresh={refresh} refreshing={refreshing} darkMode={darkMode} />
     : screen === "onboard" ? <Onboarding addCustomer={addCustomer} navigate={navigate} assignedVehicles={availableAssignedVehicles} accessToken={agent.accessToken} onRefresh={refresh} refreshing={refreshing} darkMode={darkMode} />
+    : screen === "existing" ? <AddVehicleToCustomer customers={customers} assignedVehicles={availableAssignedVehicles} accessToken={agent.accessToken} addCustomer={addCustomer} navigate={navigate} onRefresh={refresh} refreshing={refreshing} darkMode={darkMode} />
     : screen === "payments" ? <Commissions customers={customers} onRefresh={refresh} refreshing={refreshing} darkMode={darkMode} />
     : screen === "alerts" ? <Alerts alerts={agentAlerts} markAllRead={() => setDeletedAlertIds(new Set(agentAlerts.map(alert => alert.id)))} markAlertRead={id => setReadAlertIds(current => new Set(current).add(id))} deleteAlerts={ids => setDeletedAlertIds(current => new Set([...current, ...ids]))} onRefresh={refresh} refreshing={refreshing} darkMode={darkMode} />
     : screen === "trackers" ? <Trackers customers={customers} onInstallComplete={markInstallComplete} onRefresh={refresh} refreshing={refreshing} darkMode={darkMode} />

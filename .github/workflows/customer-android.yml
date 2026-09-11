@@ -49,22 +49,22 @@ jobs:
           "$BUILD_TOOLS/apksigner" verify --print-certs "$APK" | tee certificate.txt
           grep -qi 'a57c3d1f9900e351e2c40586e0fc6edbd5972f325b69ed537005d176074c50d0' certificate.txt
           "$BUILD_TOOLS/aapt" dump badging "$APK" | head -1 | tee package.txt
-          grep -q "name='com.jixelstechnologies.customer' versionCode='5' versionName='1.0.3'" package.txt
+          grep -q "name='com.jixelstechnologies.customer' versionCode='6' versionName='1.0.4'" package.txt
           "$BUILD_TOOLS/aapt" dump xmltree "$APK" AndroidManifest.xml > manifest.txt
           grep -q 'expo-channel-name' manifest.txt
           grep -q 'preview' manifest.txt
-          cp "$APK" Jixels-Customer-1.0.3.apk
-          sha256sum Jixels-Customer-1.0.3.apk > SHA256SUMS.txt
+          cp "$APK" Jixels-Customer-1.0.4.apk
+          sha256sum Jixels-Customer-1.0.4.apk > SHA256SUMS.txt
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: Jixels-Customer-1.0.3
+          name: Jixels-Customer-1.0.4
           path: |
-            Jixels-Customer-1.0.3.apk
+            Jixels-Customer-1.0.4.apk
             SHA256SUMS.txt
           retention-days: 30
       - name: Publish download
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          TAG="customer-1.0.3-build-${GITHUB_RUN_NUMBER}"
-          gh release create "$TAG" Jixels-Customer-1.0.3.apk SHA256SUMS.txt --target "$GITHUB_SHA" --title "Jixels Customer 1.0.3" --notes "Customer approval OTP display, existing-customer registration checks, and automatic app updates. Signed with the existing customer Android signing key. Install this APK once to enable future compatible over-the-air updates."
+          TAG="customer-1.0.4-build-${GITHUB_RUN_NUMBER}"
+          gh release create "$TAG" Jixels-Customer-1.0.4.apk SHA256SUMS.txt --target "$GITHUB_SHA" --title "Jixels Customer 1.0.4" --notes "Customer live tracker map, multi-vehicle view, approval OTP, and automatic updates. Signed with the existing customer Android signing key."

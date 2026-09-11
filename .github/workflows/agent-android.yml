@@ -51,22 +51,22 @@ jobs:
           "$BUILD_TOOLS/apksigner" verify --print-certs "$APK" | tee certificate.txt
           grep -qi 'bd7151d1fd4b56613206b9513dafa91b6f5a874bb94fcf34653f38303f881dc9' certificate.txt
           "$BUILD_TOOLS/aapt" dump badging "$APK" | head -1 | tee package.txt
-          grep -q "name='com.jixelstechnologies.agent' versionCode='4' versionName='1.0.1'" package.txt
+          grep -q "name='com.jixelstechnologies.agent' versionCode='5' versionName='1.0.2'" package.txt
           "$BUILD_TOOLS/aapt" dump xmltree "$APK" AndroidManifest.xml > manifest.txt
           grep -q 'expo-channel-name' manifest.txt
           grep -q 'preview' manifest.txt
-          cp "$APK" Jixels-Agent-1.0.1.apk
-          sha256sum Jixels-Agent-1.0.1.apk > SHA256SUMS.txt
+          cp "$APK" Jixels-Agent-1.0.2.apk
+          sha256sum Jixels-Agent-1.0.2.apk > SHA256SUMS.txt
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: Jixels-Agent-1.0.1
+          name: Jixels-Agent-1.0.2
           path: |
-            Jixels angets/Jixels-Agent-1.0.1.apk
+            Jixels angets/Jixels-Agent-1.0.2.apk
             Jixels angets/SHA256SUMS.txt
           retention-days: 30
       - name: Publish download
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          TAG="agent-1.0.1-build-${GITHUB_RUN_NUMBER}"
-          gh release create "$TAG" Jixels-Agent-1.0.1.apk SHA256SUMS.txt --target "$GITHUB_SHA" --title "Jixels Agent 1.0.1" --notes "Vehicle plate numbers and tracker numbers in agent customer and installation views, plus automatic app updates. Signed with the existing agent Android signing key. Install this APK once to enable future compatible over-the-air updates."
+          TAG="agent-1.0.2-build-${GITHUB_RUN_NUMBER}"
+          gh release create "$TAG" Jixels-Agent-1.0.2.apk SHA256SUMS.txt --target "$GITHUB_SHA" --title "Jixels Agent 1.0.2" --notes "Customer search, vehicle assignment activity, plates, tracker numbers, and automatic updates. Signed with the existing agent Android signing key."

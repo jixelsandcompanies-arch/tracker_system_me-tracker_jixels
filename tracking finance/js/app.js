@@ -343,6 +343,7 @@
           root.innerHTML = loginView(registration.message || "Finance registration submitted for administrator approval."); bindLoginEvents(); return;
         } else {
           session = await authenticateFinanceUser(email, password);
+          page = "dashboard";
         }
         startWorkspaceLoading();
       } catch (error) {
@@ -465,7 +466,7 @@
       saveData(data);
       render();
     }));
-    document.querySelector("[data-logout]")?.addEventListener("click", () => { session = null; render(); });
+    document.querySelector("[data-logout]")?.addEventListener("click", () => { page = "dashboard"; session = null; render(); });
     document.querySelector("[data-print-reconciliation]")?.addEventListener("click", printReconciliationPdf);
     document.querySelector("[data-export-report]")?.addEventListener("click", exportFinanceReport);
     document.querySelector(".commission-table")?.addEventListener("click", event => {

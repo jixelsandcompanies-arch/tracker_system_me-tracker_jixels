@@ -455,6 +455,7 @@
           }
           if (!account.approved) throw new Error(account.message || "Your Finance registration is waiting for administrator approval. You can sign in after the account is approved.");
           session = await authenticateFinanceUser(email, password);
+          page = "dashboard";
           root.innerHTML = authLoadingView();
         }
         startWorkspaceLoading();
@@ -594,7 +595,7 @@
         document.querySelector(".sidebar")?.classList.add("collapsed");
       }
     });
-    document.querySelector("[data-logout]")?.addEventListener("click", () => { authDraft = { name: "", phone: "", email: "", password: "", confirm: "" }; session = null; if (liveRefreshTimer) { window.clearInterval(liveRefreshTimer); liveRefreshTimer = null; } render(); });
+    document.querySelector("[data-logout]")?.addEventListener("click", () => { authDraft = { name: "", phone: "", email: "", password: "", confirm: "" }; page = "dashboard"; session = null; if (liveRefreshTimer) { window.clearInterval(liveRefreshTimer); liveRefreshTimer = null; } render(); });
     document.querySelector("[data-export-report]")?.addEventListener("click", () => { void exportFinanceReport(); });
     document.querySelector(".commission-table")?.addEventListener("click", event => {
       const viewButton = event.target.closest("[data-view-agent]");

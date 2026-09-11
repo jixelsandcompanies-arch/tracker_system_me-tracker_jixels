@@ -98,9 +98,9 @@ function loadNavigation(role) {
   const fallback = canAccess(role, "Dashboard") ? "Dashboard" : "Payments";
   try {
     const saved = JSON.parse(localStorage.getItem(ADMIN_NAVIGATION_KEY) || "{}");
-    const requested = saved.active === "Customers" ? "Customer Accounts" : saved.active;
-    const page = navigation.some((item) => item.key === requested) && canAccess(role, requested) ? requested : fallback;
-    return { active: page, sidebarCollapsed: Boolean(saved.sidebarCollapsed) };
+    // Every new sign-in starts from the operational overview. A previous
+    // Payments page remains available from the navigation menu.
+    return { active: fallback, sidebarCollapsed: Boolean(saved.sidebarCollapsed) };
   } catch (error) {
     console.error("Could not restore admin navigation", error);
     return { active: fallback, sidebarCollapsed: false };

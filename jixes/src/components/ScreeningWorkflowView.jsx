@@ -3,7 +3,7 @@ import { Pencil, Search, ShieldCheck, Trash2, UserRound, X } from "lucide-react"
 import { hasSupabaseConfig, invokeApi, listRecords, subscribeToTable, updateRecord } from "../lib/data";
 import { recordAudit } from "../lib/security";
 
-const statusLabel = (status) => status === "approved" ? "Approved" : status === "processing" ? "In review" : status === "suspended" || status === "declined" ? "Suspended" : "Pending";
+const statusLabel = (status) => status === "approved" ? "Approved" : status === "processing" ? "In review" : status === "declined" ? "Declined" : status === "suspended" ? "Suspended" : "Pending";
 const applicationId = (application) => `APP-${application.id.replaceAll("-", "").slice(0, 10).toUpperCase()}`;
 
 function Document({ src, label, fallback = "Not submitted" }) {

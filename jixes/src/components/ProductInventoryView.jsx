@@ -3,7 +3,7 @@ import { Bike, Radio, Search, Trash2, UserRound, X } from "lucide-react";
 import { createRecord, hasSupabaseConfig, invokeApi, listRecords, subscribeToTable, updateRecord } from "../lib/data";
 import { recordAudit } from "../lib/security";
 
-const empty = { product_type: "bike", tracker_number: "", plate_number: "", assigned_agent_id: "", payable_amount: "" };
+const empty = { product_type: "bike", tracker_number: "", assigned_agent_id: "", payable_amount: "" };
 
 function money(value) {
   return `KES ${Number(value || 0).toLocaleString("en-KE")}`;
@@ -44,7 +44,6 @@ export default function ProductInventoryView() {
     setForm(product ? {
       product_type: product.product_type,
       assigned_agent_id: product.assigned_agent_id || "",
-      plate_number: data.trackers.find((tracker) => tracker.bike_id === product.id)?.plate_number || "",
       tracker_number: data.trackers.find((tracker) => tracker.bike_id === product.id)?.identifier || "",
       payable_amount: product.payable_amount == null ? "" : String(product.payable_amount),
     } : empty);
@@ -73,7 +72,6 @@ export default function ProductInventoryView() {
       setSaving(false);
       return setMessage("Payable amount must be zero or a positive number.");
     }
-    if (trackerNumber && !form.plate_number.trim()) { setSaving(false); return setMessage("Enter the plate number for this tracker."); }
     const identifier = trackerNumber || `${form.product_type.toUpperCase()}-${Date.now().toString(36).toUpperCase()}`;
     const payload = {
       ...(editing ? {} : { identifier, model: form.product_type }),
@@ -88,7 +86,7 @@ export default function ProductInventoryView() {
       if (previousTracker) await updateRecord("trackers", previousTracker.id, { bike_id: null });
       if (trackerNumber) {
         const tracker = data.trackers.find((item) => item.identifier.toLowerCase() === trackerNumber.toLowerCase());
-        const trackerPayload = { bike_id: productId, plate_number: form.plate_number.trim().toUpperCase() };
+        const trackerPayload = { bike_id: productId };
         const trackerResult = tracker ? await updateRecord("trackers", tracker.id, trackerPayload) : await createRecord("trackers", { identifier: trackerNumber, ...trackerPayload, is_online: false });
         if (trackerResult.error) { setSaving(false); return setMessage(trackerResult.error.message); }
       }
@@ -145,7 +143,6 @@ export default function ProductInventoryView() {
           <div className="customer-form-grid">
             <label>Product type<select value={form.product_type} onChange={(event) => set("product_type", event.target.value)}><option>bike</option><option>car</option><option>tuktuk</option><option>device</option><option>other</option></select></label>
             <label><Radio size={14}/> Tracker number<input value={form.tracker_number} onChange={(event) => set("tracker_number", event.target.value)} placeholder="Type tracker number"/></label>
-            <label>Plate number<input value={form.plate_number} onChange={(event) => set("plate_number", event.target.value.toUpperCase())} placeholder="Example: KMG 123A" required={Boolean(form.tracker_number.trim())}/></label>
             <label>Payable amount<input value={form.payable_amount} onChange={(event) => set("payable_amount", event.target.value)} inputMode="numeric" placeholder="Total customer payable"/></label>
             <label className="wide"><UserRound size={14}/> Assigned agent<select value={form.assigned_agent_id} onChange={(event) => set("assigned_agent_id", event.target.value)}><option value="">No agent</option>{agents.map((agent) => <option key={agent.id} value={agent.id}>{agent.full_name}</option>)}</select></label>
           </div>

@@ -32,7 +32,6 @@ import {
   Settings,
   ShieldCheck,
   Users,
-  Wifi,
   X,
   Zap
 } from "lucide-react";
@@ -50,7 +49,6 @@ import "./styles/directory.css";
 import "./styles/details.css";
 import "./styles/errors.css";
 import "./styles/premium.css";
-import WifiPortal from "./components/WifiPortal";
 
 class AppErrorBoundary extends React.Component {
   constructor(props) {
@@ -79,7 +77,6 @@ const navigation = [
   { label: "GPS Trackers", icon: Radio, key: "GPS Trackers", section: "OPERATIONS" },
   { label: "Screening", icon: ClipboardList, key: "Screening", section: "OPERATIONS" },
   { label: "Support cases", icon: MessageCircle, key: "Support Cases", section: "OPERATIONS" },
-  { label: "Wi-Fi Packages", icon: Wifi, key: "Wi-Fi Packages", section: "OPERATIONS" },
   { label: "Payments", icon: CreditCard, key: "Payments", section: "FINANCE" },
   { label: "Commissions", icon: BadgeDollarSign, key: "Commissions", section: "FINANCE" },
   { label: "Customer accounts", icon: Users, key: "Customer Accounts", section: "ADMIN" },
@@ -188,7 +185,7 @@ function DashboardSkeleton() {
 }
 
 function OfflineGate({ onRetry, onContinue }) {
-  return <main className="admin-offline-gate" aria-live="assertive"><div className="offline-cloud"><Wifi size={34}/><X size={16}/></div><div className="offline-road"><span className="offline-car">●</span><span className="offline-bike">●</span><span className="offline-tuktuk">●</span></div><h1>Network is down</h1><p>Check your internet connection.</p><button className="offline-retry" onClick={onRetry}>Check connection</button><button className="offline-continue" onClick={onContinue}>Continue offline <ArrowUpRight size={16}/></button></main>;
+  return <main className="admin-offline-gate" aria-live="assertive"><div className="offline-cloud"><Radio size={34}/><X size={16}/></div><div className="offline-road"><span className="offline-car">●</span><span className="offline-bike">●</span><span className="offline-tuktuk">●</span></div><h1>Network is down</h1><p>Check your internet connection.</p><button className="offline-retry" onClick={onRetry}>Check connection</button><button className="offline-continue" onClick={onContinue}>Continue offline <ArrowUpRight size={16}/></button></main>;
 }
 
 function addLabel(page) {
@@ -358,10 +355,7 @@ function AppContent() {
   );
 }
 
-function App() {
-  if (typeof window !== "undefined" && window.location.pathname.startsWith("/wifi")) return <WifiPortal />;
-  return <AppErrorBoundary><AppContent /></AppErrorBoundary>;
-}
+function App() { return <AppErrorBoundary><AppContent /></AppErrorBoundary>; }
 
 function NotificationPanel({ notifications, onClose, onRead }) {
   return <div className="notification-panel"><div className="notification-panel-heading"><div><span className="eyebrow">ACTIVITY CENTER</span><h2>Notifications</h2></div><button className="text-button" onClick={onRead}>Mark all read</button></div><div className="notification-list">{notifications.map((item) => <button className={`notification-item ${item.unread ? "unread" : ""}`} key={item.id} onClick={onRead}><span className="notification-icon"><Bell size={14} /></span><span><strong>{item.title}</strong><small>{item.detail}</small><time>{item.time}</time></span>{item.unread && <i />}</button>)}</div><button className="notification-footer" onClick={() => { onRead(); onClose(); }}>View alert center <ArrowUpRight size={14} /></button></div>;

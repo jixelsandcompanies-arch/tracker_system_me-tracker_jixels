@@ -641,6 +641,7 @@ Deno.serve(async (request) => {
   const url = new URL(request.url);
   const routeIndex = url.pathname.indexOf("/v1/");
   const route = routeIndex >= 0 ? url.pathname.slice(routeIndex) : url.pathname;
+  if (route.startsWith("/v1/wifi/")) return fail("Wi-Fi services are not part of this tracking system.", 404, "WIFI_FEATURE_REMOVED");
   const authHeader = request.headers.get("Authorization") ?? "";
   const admin = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
   const client = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_ANON_KEY")!, { global: { headers: { Authorization: authHeader } } });
@@ -1430,6 +1431,7 @@ Deno.serve(async (request) => {
     const email = String(body.email ?? "").trim().toLowerCase();
     const nationalId = String(body.nationalId ?? "").trim();
     const location = String(body.location ?? "").trim();
+    const plateNumber = String(body.plateNumber ?? "").trim().toUpperCase();
     const bikeId = String(body.bikeId ?? "").trim();
     const depositAmount = Number(body.depositAmount ?? 0);
     if (!name || !phone || !email || !nationalId || !bikeId || !body.customerPhoto || !body.idFrontPhoto || !body.idBackPhoto) return fail("Enter the customer name, phone number, email address, national ID, assigned bike, and all three images.", 422, "INVALID_CUSTOMER_REGISTRATION");
@@ -1440,7 +1442,7 @@ Deno.serve(async (request) => {
     if (bike.customer_id || ["pending", "sold"].includes(String(bike.status).toLowerCase())) return fail("This tracker is already linked to another customer sale.", 409, "TRACKER_ALREADY_SOLD");
     if (depositAmount > Number(bike.payable_amount ?? 0)) return fail("The deposit cannot be higher than the total payable amount.", 422, "INVALID_DEPOSIT");
     const now = new Date().toISOString();
-    const { data: customer, error: customerError } = await admin.from("customers").insert({ full_name: name, email, phone, national_id: nationalId, address: location || null, status: "pending", created_at: now, updated_at: now }).select("id,customer_code").single();
+    const { data: customer, error: customerError } = await admin.from("customers").insert({ full_name: name, email, phone, national_id: nationalId, address: location || null, plate_number: plateNumber || null, status: "pending", created_at: now, updated_at: now }).select("id,customer_code").single();
     if (customerError || !customer) return fail("Customer registration could not be saved.", 503, "CUSTOMER_REGISTRATION_FAILED");
 
     // This conditional update is the transaction boundary that prevents two
@@ -1455,6 +1457,15 @@ Deno.serve(async (request) => {
     if (reservationError || !reservedBike) {
       await admin.from("customers").delete().eq("id", customer.id);
       return fail("The tracker was just assigned to another customer. Choose another assigned tracker.", 409, "TRACKER_ALREADY_SOLD");
+    }
+
+    if (plateNumber) {
+      const { error: plateError } = await admin.from("trackers").update({ plate_number: plateNumber, updated_at: now }).eq("bike_id", bike.id);
+      if (plateError) {
+        await admin.from("bikes").update({ customer_id: null, status: "available", updated_at: now }).eq("id", bike.id).eq("customer_id", customer.id);
+        await admin.from("customers").delete().eq("id", customer.id);
+        return fail("The vehicle plate number could not be saved.", 503, "PLATE_UPDATE_FAILED");
+      }
     }
 
     const { data: application, error: applicationError } = await admin.from("screening_applications").insert({ customer_id: customer.id, product_id: bike.id, installer_agent_id: user.id, full_name: name, email, phone, national_id: nationalId, location: location || null, product_identifier: bike.identifier, product_type: bike.product_type, product_model: bike.model, tracker_identifier: bike.trackers?.[0]?.identifier ?? bike.identifier, deposit_amount: 0, requested_deposit_amount: depositAmount, payment_phone: phone, status: "pending", created_at: now, updated_at: now }).select("id").single();
@@ -1482,7 +1493,7 @@ Deno.serve(async (request) => {
       await admin.from("customers").delete().eq("id", customer.id);
       return fail("Customer images could not be saved. The registration was not submitted; capture the three images again.", 503, "SCREENING_DOCUMENTS_FAILED");
     }
-    return response({ customer: { id: customer.id, customerCode: customer.customer_code ?? "", vehicleId: bike.id, name, phone, email, idNumber: nationalId, location: location || "Field location", plateNumber: bike.trackers?.[0]?.plate_number || bike.identifier, bike: bike.identifier, vehicleModel: bike.model, tracker: bike.trackers?.[0]?.identifier ?? "Pending", kyc: "Submitted", install: "Pending", payment: "Pending", requestedDepositAmount: depositAmount, payableAmount: Number(bike.payable_amount ?? 0), amount: 0, balance: Number(bike.payable_amount ?? 0), commission: 0, receipt: "", date: now.slice(0, 10), screeningStatus: "pending" } }, 201);
+    return response({ customer: { id: customer.id, customerCode: customer.customer_code ?? "", vehicleId: bike.id, name, phone, email, idNumber: nationalId, location: location || "Field location", plateNumber: plateNumber || bike.trackers?.[0]?.plate_number || bike.identifier, bike: bike.identifier, vehicleModel: bike.model, tracker: bike.trackers?.[0]?.identifier ?? "Pending", kyc: "Submitted", install: "Pending", payment: "Pending", requestedDepositAmount: depositAmount, payableAmount: Number(bike.payable_amount ?? 0), amount: 0, balance: Number(bike.payable_amount ?? 0), commission: 0, receipt: "", date: now.slice(0, 10), screeningStatus: "pending" } }, 201);
   }
 
   if (route === "/v1/agent/assignments" && request.method === "GET") {
@@ -1516,13 +1527,16 @@ Deno.serve(async (request) => {
   }
 
   if (route === "/v1/customer/overview" && request.method === "GET") {
-    const [{ data: profile, error: profileError }, { data: vehicles, error: vehiclesError }] = await Promise.all([
-      client.from("profiles").select("full_name,phone,avatar_url").single(),
-      admin.from("vehicles").select("id,registration,model,vehicle_type,monitoring_armed,immobilized").eq("owner_id", user.id),
-    ]);
+    const { data: profile, error: profileError } = await client.from("profiles").select("full_name,email,phone,avatar_url").single();
     if (profileError || !profile) return fail("This customer account is no longer available.", 404, "ACCOUNT_NOT_FOUND");
-    if (vehiclesError) return fail("Customer vehicles could not be loaded.", 503, "CUSTOMER_RECORDS_UNAVAILABLE");
-    return response({ profile, vehicles: vehicles ?? [] });
+    const { data: customer, error: customerError } = await admin.from("customers").select("id").ilike("email", String(profile.email ?? "").trim()).maybeSingle();
+    if (customerError) return fail("Customer vehicles could not be loaded.", 503, "CUSTOMER_RECORDS_UNAVAILABLE");
+    const { data: bikes, error: bikesError } = customer?.id
+      ? await admin.from("bikes").select("id,identifier,model,product_type,payable_amount,status,trackers(identifier,plate_number,is_online,latitude,longitude,last_seen_at)").eq("customer_id", customer.id)
+      : { data: [], error: null };
+    if (bikesError) return fail("Customer vehicles could not be loaded.", 503, "CUSTOMER_RECORDS_UNAVAILABLE");
+    const vehicles = (bikes ?? []).map((bike: any) => ({ id: bike.id, registration: bike.trackers?.[0]?.plate_number || bike.identifier, identifier: bike.identifier, model: bike.model || "Jixels vehicle", vehicle_type: bike.product_type, product_type: bike.product_type, tracker: bike.trackers?.[0]?.identifier ?? "Pending", status: bike.trackers?.[0]?.is_online ? "online" : "offline", is_online: Boolean(bike.trackers?.[0]?.is_online), latitude: bike.trackers?.[0]?.latitude, longitude: bike.trackers?.[0]?.longitude, last_seen_at: bike.trackers?.[0]?.last_seen_at, balance: Number(bike.payable_amount ?? 0), payable_amount: Number(bike.payable_amount ?? 0), monitoring_armed: false, immobilized: false }));
+    return response({ profile, vehicles });
   }
   if (route === "/v1/customer/payments/mpesa" && request.method === "POST") {
     const idempotencyKey = request.headers.get("Idempotency-Key")?.trim(); const amount = Number(body.amount); const phone = String(body.phone ?? "").replace(/\D/g, "");

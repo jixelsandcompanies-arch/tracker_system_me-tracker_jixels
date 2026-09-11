@@ -204,6 +204,7 @@
   }
 
   function accountTable(accounts, allowRemove) {
+    allowRemove = true;
     if (!accounts.length) return empty("No finance accounts", "Add an account to start tracking finance.");
     return `<div class="table-wrap"><table><thead><tr>${allowRemove ? `<th>${selectAll("accounts")}</th>` : ""}<th>Customer</th><th>Bike</th><th>Account</th><th>Total</th><th>Paid</th><th>Balance</th><th>Status</th>${allowRemove ? "<th>Actions</th>" : ""}</tr></thead><tbody>${accounts.map(account => `<tr>${allowRemove ? `<td>${rowCheck("accounts", account.id)}</td>` : ""}<td><strong>${escapeHtml(account.customer)}</strong><br><small>${escapeHtml(account.phone)}</small></td><td>${escapeHtml(account.bike)}<br><small>${escapeHtml(account.model)}</small></td><td>${escapeHtml(account.id)}</td><td>${money(account.total)}</td><td>${money(account.paid)}</td><td>${money(account.balance)}</td><td>${status(account.status)}</td>${allowRemove ? `<td><div class="row-actions"><button class="button button-secondary" data-edit-account="${escapeHtml(account.id)}" type="button">Modify</button><button class="button danger-button" data-remove-account="${escapeHtml(account.id)}" type="button">Delete</button></div></td>` : ""}</tr>`).join("")}</tbody></table></div>`;
   }
@@ -542,9 +543,11 @@
 
   async function deleteByScope(scope, ids) {
     if (!ids.length) return;
+    if (scope === "accounts") data.accounts = data.accounts.filter(item => !ids.includes(item.id));
+    if (scope === "payments") data.payments = data.payments.filter(item => !ids.includes(item.id));
     if (scope === "alerts") data.alerts = data.alerts.filter(item => !ids.includes(item.id));
-    if (scope !== "alerts") return;
-    addAudit("Alerts deleted", `${ids.length} record${ids.length === 1 ? "" : "s"}`);
+    if (!["alerts", "accounts", "payments"].includes(scope)) return;
+    addAudit(`${scope} deleted`, `${ids.length} record${ids.length === 1 ? "" : "s"}`);
     if (await persistChanges()) render();
   }
 
@@ -646,6 +649,18 @@
     });
     const search = document.getElementById("account-search"); const filter = document.getElementById("account-filter");
     if (search) search.addEventListener("input", updateAccountList); if (filter) filter.addEventListener("change", updateAccountList);
+    document.querySelectorAll("[data-remove-account]").forEach(button => button.addEventListener("click", async () => {
+      if (!window.confirm("Delete this finance account from the database?")) return;
+      await deleteByScope("accounts", [button.dataset.removeAccount]);
+    }));
+    document.querySelectorAll("[data-edit-account]").forEach(button => button.addEventListener("click", async () => {
+      const account = data.accounts.find(item => item.id === button.dataset.editAccount);
+      if (!account) return;
+      const nextStatus = window.prompt("Account status", account.status || "On Track");
+      if (nextStatus == null) return;
+      data.accounts = data.accounts.map(item => item.id === account.id ? { ...item, status: nextStatus.trim() || item.status } : item);
+      if (await persistChanges()) render();
+    }));
     const paymentSearch = document.getElementById("payment-search");
     if (paymentSearch) paymentSearch.addEventListener("input", () => {
       const visible = data.payments.filter(payment => `${payment.id || ""} ${payment.account || ""} ${payment.customer || ""} ${payment.phone || ""}`.toLowerCase().includes(paymentSearch.value.toLowerCase()));

@@ -582,7 +582,7 @@ function Customers({ customers, onDeposit, onRefresh, refreshing, darkMode = fal
 }
 
 function Onboarding({ addCustomer, navigate, assignedVehicles, accessToken, onRefresh, refreshing, darkMode = false }) {
-  const [form, setForm] = useState({ name: "", phone: "", email: "", idNumber: "", location: "", depositAmount: "" });
+  const [form, setForm] = useState({ name: "", phone: "", email: "", idNumber: "", location: "", plateNumber: "", depositAmount: "" });
   const [selectedVehicleId, setSelectedVehicleId] = useState(assignedVehicles[0]?.id || "");
   const [vehiclePickerOpen, setVehiclePickerOpen] = useState(false);
   const [vehicleSearch, setVehicleSearch] = useState("");
@@ -612,7 +612,7 @@ function Onboarding({ addCustomer, navigate, assignedVehicles, accessToken, onRe
     if (selectedVehicle.payableAmount > 0 && depositAmount > selectedVehicle.payableAmount) return Alert.alert("Check deposit", "The deposit cannot be higher than the total payable amount.");
     setSaving(true);
     try {
-      const result = await authApi.onboardCustomer(accessToken, { name: form.name.trim(), phone: form.phone.trim(), email: form.email.trim(), nationalId: form.idNumber.trim(), location: form.location.trim(), bikeId: selectedVehicle.id, depositAmount, customerPhoto, idFrontPhoto, idBackPhoto });
+      const result = await authApi.onboardCustomer(accessToken, { name: form.name.trim(), phone: form.phone.trim(), email: form.email.trim(), nationalId: form.idNumber.trim(), location: form.location.trim(), plateNumber: form.plateNumber.trim().toUpperCase(), bikeId: selectedVehicle.id, depositAmount, customerPhoto, idFrontPhoto, idBackPhoto });
       addCustomer(result.customer);
       Alert.alert("Customer registration received", "The customer now appears in Admin and Finance as pending. An administrator must approve the screening before account access is available.");
       navigate("customers");
@@ -629,6 +629,7 @@ function Onboarding({ addCustomer, navigate, assignedVehicles, accessToken, onRe
       <Field label="Email address" value={form.email} onChangeText={email => setForm({ ...form, email })} keyboardType="email-address" />
       <Field label="National ID or passport (enter once)" value={form.idNumber} onChangeText={idNumber => setForm({ ...form, idNumber })} />
       <Field label="Location" value={form.location} onChangeText={location => setForm({ ...form, location })} />
+      <Field label="Vehicle plate number" value={form.plateNumber} onChangeText={plateNumber => setForm({ ...form, plateNumber: plateNumber.toUpperCase() })} placeholder="Example: KMG 123A" autoCapitalize="characters" />
       <Text style={styles.fieldLabel}>Assigned bike to sell</Text>
       <View style={styles.reportBikePicker}>
         <Pressable onPress={() => setVehiclePickerOpen(open => !open)} style={[styles.reportBikePickerButton, darkMode && styles.darkInput]}>

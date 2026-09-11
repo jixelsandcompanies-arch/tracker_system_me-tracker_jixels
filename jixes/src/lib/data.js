@@ -5,7 +5,7 @@ const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
 const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
 export const hasSupabaseConfig = Boolean(supabaseUrl && supabaseKey);
 export const supabase = hasSupabaseConfig ? createClient(supabaseUrl, supabaseKey, { auth: { persistSession: false, autoRefreshToken: false } }) : null;
-const allowedTables = new Set(["customers", "bikes", "trackers", "tracker_heartbeats", "payments", "finance_accounts", "finance_settings", "wifi_packages", "screening_applications", "support_cases", "support_case_history", "alerts", "audit_logs", "chat_messages", "reports", "service_status", "workspace_settings", "profiles"]);
+const allowedTables = new Set(["customers", "bikes", "trackers", "tracker_heartbeats", "payments", "finance_accounts", "finance_settings", "screening_applications", "support_cases", "support_case_history", "alerts", "audit_logs", "chat_messages", "reports", "service_status", "workspace_settings", "profiles"]);
 export const DATA_BATCH_SIZE = 1000;
 let appliedSessionKey = null;
 const asError = (error, fallback) => error instanceof Error ? error : new Error(error?.message || fallback);

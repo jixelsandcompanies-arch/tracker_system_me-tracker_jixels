@@ -3,7 +3,7 @@ import { Bike, Radio, Search, Trash2, UserRound, X } from "lucide-react";
 import { createRecord, hasSupabaseConfig, invokeApi, listRecords, subscribeToTable, updateRecord } from "../lib/data";
 import { recordAudit } from "../lib/security";
 
-const empty = { product_type: "bike", tracker_number: "", assigned_agent_id: "", customer_id: "", payable_amount: "" };
+const empty = { product_type: "bike", tracker_number: "", assigned_agent_id: "", payable_amount: "" };
 
 function money(value) {
   return `KES ${Number(value || 0).toLocaleString("en-KE")}`;
@@ -44,7 +44,6 @@ export default function ProductInventoryView() {
     setForm(product ? {
       product_type: product.product_type,
       assigned_agent_id: product.assigned_agent_id || "",
-      customer_id: product.customer_id || "",
       tracker_number: data.trackers.find((tracker) => tracker.bike_id === product.id)?.identifier || "",
       payable_amount: product.payable_amount == null ? "" : String(product.payable_amount),
     } : empty);
@@ -91,10 +90,6 @@ export default function ProductInventoryView() {
         const trackerResult = tracker ? await updateRecord("trackers", tracker.id, trackerPayload) : await createRecord("trackers", { identifier: trackerNumber, ...trackerPayload, is_online: false });
         if (trackerResult.error) { setSaving(false); return setMessage(trackerResult.error.message); }
       }
-      if (form.customer_id && (!editing || editing.customer_id !== form.customer_id)) {
-        const assignment = await invokeApi(`/v1/admin/customers/${encodeURIComponent(form.customer_id)}/vehicles`, { bikeId: productId, depositAmount: 0 });
-        if (assignment.error) { setSaving(false); return setMessage(assignment.error.message); }
-      }
     }
     setSaving(false);
     if (result.error) return setMessage(result.error.message);
@@ -118,8 +113,8 @@ export default function ProductInventoryView() {
   return <>
     <section className="panel module-table">
       <div className="panel-heading">
-        <div><h2>Product inventory</h2><p>Add tracker products and assign additional vehicles to existing customers.</p></div>
-        <button className="button primary" onClick={() => open()}>+ Add vehicle</button>
+        <div><h2>Product inventory</h2><p>Add tracker products and allocate agents. Use Customer vehicle assignments to sell to an existing customer.</p></div>
+        <button className="button primary" onClick={() => open()}>+ Add product</button>
       </div>
       <div className="directory-filters inventory-filters"><label className="table-search"><Search size={15}/><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search products, trackers, or agents"/></label><button className="button secondary" onClick={() => remove(selectedIds)}>Delete selected</button><button className="button danger" onClick={() => remove(visibleProducts.map((product) => product.id))}>Delete all</button></div>
       {message && <div className="import-message">{message}</div>}
@@ -149,7 +144,6 @@ export default function ProductInventoryView() {
             <label>Product type<select value={form.product_type} onChange={(event) => set("product_type", event.target.value)}><option>bike</option><option>car</option><option>tuktuk</option><option>device</option><option>other</option></select></label>
             <label><Radio size={14}/> Tracker number<input value={form.tracker_number} onChange={(event) => set("tracker_number", event.target.value)} placeholder="Type tracker number"/></label>
             <label>Payable amount<input value={form.payable_amount} onChange={(event) => set("payable_amount", event.target.value)} inputMode="numeric" placeholder="Total customer payable"/></label>
-            <label className="wide"><UserRound size={14}/> Existing customer<select value={form.customer_id} onChange={(event) => set("customer_id", event.target.value)}><option value="">Keep in inventory</option>{data.customers.map((customer) => <option key={customer.id} value={customer.id}>{customer.full_name} · {customer.phone || customer.email || "Customer"}</option>)}</select></label>
             <label className="wide"><UserRound size={14}/> Assigned agent<select value={form.assigned_agent_id} onChange={(event) => set("assigned_agent_id", event.target.value)}><option value="">No agent</option>{agents.map((agent) => <option key={agent.id} value={agent.id}>{agent.full_name}</option>)}</select></label>
           </div>
           <div className="detail-actions"><button className="button secondary" type="button" onClick={() => setEditing(undefined)}>Cancel</button><button className="button primary" disabled={saving}><Bike size={15}/>{saving ? "Saving…" : editing ? "Update product" : "Add to inventory"}</button></div>

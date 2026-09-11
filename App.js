@@ -607,7 +607,8 @@ function PhoneLocationTrackingScreen() {
   return <View style={styles.mapContainer}><MapView ref={mapRef} provider={Platform.OS === "android" ? PROVIDER_GOOGLE : undefined} style={StyleSheet.absoluteFill} initialRegion={{ ...center, latitudeDelta: phoneLocation ? .08 : 7.5, longitudeDelta: phoneLocation ? .08 : 7.5 }} showsCompass showsMyLocationButton={false}>{phoneLocation && <Marker coordinate={phoneLocation} title="Your current location"><View style={styles.phoneMarker}><View style={styles.phoneMarkerInner} /></View></Marker>}</MapView><View style={styles.noVehicleMapCard}><View style={styles.waitingTrackerIcon}><Ionicons name="location" size={22} color={colors.blue} /></View><View style={{ flex: 1 }}><Text style={styles.waitingTrackerTitle}>{phoneLocation ? "Your current location" : "Finding your location"}</Text><Text style={styles.waitingTrackerText}>{locationError ?? "No vehicle is linked yet. After a tracker-equipped vehicle is added to your account, it will appear here automatically."}</Text></View></View><View style={styles.mapControls}><RoundButton label="Find my location" onPress={locatePhone}>{locating ? <ActivityIndicator size="small" color={colors.blue} /> : <Ionicons name="locate" size={20} color={colors.blue} />}</RoundButton></View></View>;
 }
 
-function TrackingScreen({ selectedBike, onSelectBike, accessToken }) {
+function TrackingScreen({ selectedBike, onSelectBike, accessToken, vehicles = [] }) {
+  const allVehicles = vehicles.length ? vehicles : bikes;
   const mapRef = useRef(null);
   const sheetY = useRef(new Animated.Value(0)).current;
   const refreshSpin = useRef(new Animated.Value(0)).current;
@@ -642,10 +643,10 @@ function TrackingScreen({ selectedBike, onSelectBike, accessToken }) {
   const routeCoordinates = useMemo(() => route?.points?.map(({ latitude, longitude }) => ({ latitude, longitude })) ?? [], [route]);
   const matchingVehicles = useMemo(() => {
     const query = vehicleSearch.trim().toLowerCase();
-    return query ? bikes.filter(vehicle => `${vehicle.registration} ${vehicle.model}`.toLowerCase().includes(query)) : bikes;
+    return query ? allVehicles.filter(vehicle => `${vehicle.registration} ${vehicle.model}`.toLowerCase().includes(query)) : allVehicles;
   }, [vehicleSearch]);
   useEffect(() => { if (!vehiclePickerOpen) setVehicleSearch(`${selectedBike.registration} • ${selectedBike.model}`); }, [selectedBike.id, vehiclePickerOpen]);
-  const fleetMarkers = useMemo(() => bikes.filter(vehicle => vehicle.id !== selectedBike.id && Number.isFinite(vehicle.location?.latitude) && Number.isFinite(vehicle.location?.longitude)).map(vehicle => ({ vehicle, coordinate: vehicle.location })), [selectedBike.id]);
+  const fleetMarkers = useMemo(() => allVehicles.filter(vehicle => vehicle.id !== selectedBike.id && Number.isFinite(vehicle.location?.latitude) && Number.isFinite(vehicle.location?.longitude)).map(vehicle => ({ vehicle, coordinate: vehicle.location })), [selectedBike.id, allVehicles]);
   useEffect(() => { if (routeCoordinates.length > 1) mapRef.current?.fitToCoordinates(routeCoordinates, { edgePadding: { top: 80, right: 55, bottom: expanded ? 345 : 215, left: 40 }, animated: true }); }, [expanded, routeCoordinates]);
   const locatePhone = async () => Alert.alert("Allow Jixels to access your location?", "This shows your position relative to your motorcycle. Tracking the bike does not require your phone location.", [{ text: "Not now", style: "cancel" }, { text: "Continue", onPress: async () => { const permission = await Location.requestForegroundPermissionsAsync(); if (permission.status !== "granted") return; const result = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced }); const point = { latitude: result.coords.latitude, longitude: result.coords.longitude }; setPhoneLocation(point); mapRef.current?.animateCamera({ center: point, zoom: 15 }, { duration: 700 }); } }]);
   const refreshLocation = useCallback(async () => { if (refreshing) return; setRefreshing(true); refreshSpin.setValue(0); const spin = Animated.loop(Animated.timing(refreshSpin, { toValue: 1, duration: 800, useNativeDriver: true })); spin.start(); try { await refresh(); } finally { spin.stop(); setRefreshing(false); } }, [refresh, refreshing, refreshSpin]);
@@ -771,6 +772,7 @@ function CustomerApp({ session, onLogout }) {
           monitoringArmed: Boolean(vehicle.monitoring_armed),
           immobilized: Boolean(vehicle.immobilized),
           tamperStatus: vehicle.tamper_status || "unknown",
+          location: Number.isFinite(Number(vehicle.latitude)) && Number.isFinite(Number(vehicle.longitude)) ? { latitude: Number(vehicle.latitude), longitude: Number(vehicle.longitude), speedKph: 0, recordedAt: vehicle.last_seen_at } : null,
         }));
         const firstVehicle = bikes[0] || null;
         setSelectedBike((current) => bikes.find((vehicle) => vehicle.id === current?.id) || firstVehicle);
@@ -800,7 +802,7 @@ function CustomerApp({ session, onLogout }) {
         }
       } catch (error) {
         if (!active) return;
-        const accountRemoved = error instanceof ApiError && [401, 403, 404].includes(error.status);
+        const accountRemoved = error instanceof ApiError && [401, 403].includes(error.status);
         if (accountRemoved) {
           clearCustomerRecords();
           await AsyncStorage.multiRemove(["jixels:profile", "jixels:sync-queue"]).catch(() => {});

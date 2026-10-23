@@ -9,7 +9,7 @@
   window.addEventListener("error", event => showFatalError(event.error || event.message));
   window.addEventListener("unhandledrejection", event => showFatalError(event.reason));
   try {
-  const { readData, saveData, registerFinanceUser, financeAccountStatus, authenticateFinanceUser, hydrate, refreshLive, hydrateSupplementary, money } = window.FinanceStore;
+  const { readData, saveData, registerFinanceUser, financeAccountStatus, authenticateFinanceUser, hydrate, refreshLive, hydrateSupplementary, currentAccessToken, money } = window.FinanceStore;
 
   let approvalCheckBusy = false;
   async function checkPendingApproval() {
@@ -528,7 +528,7 @@
     } catch (error) {
       console.error("Finance data was not saved", error);
       try {
-        await hydrate(session.accessToken);
+        await hydrate(currentAccessToken() || session.accessToken);
         await hydrateSupplementary();
         data = readData();
       } catch (reloadError) {

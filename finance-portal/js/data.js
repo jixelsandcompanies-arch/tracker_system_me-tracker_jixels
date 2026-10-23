@@ -4,7 +4,7 @@
   // Never manufacture finance settings or operational records in the browser.
   // Settings are empty until an authorized Finance user saves them to Supabase.
   const emptyData = { accounts: [], payments: [], agents: [], customers: [], staff: [], alerts: [], auditLogs: [], settings: { workspaceName: "", saleCommission: "", monthlyCustomerCommission: "" } };
-  let memoryData = JSON.parse(JSON.stringify(emptyData)); let accessToken = null;
+  let memoryData = JSON.parse(JSON.stringify(emptyData)); let accessToken = null; let refreshToken = null; let realtimeClient = null;
   const tables = { accounts: "finance_accounts", payments: "finance_payments", agents: "finance_agents", alerts: "finance_alerts", auditLogs: "finance_audit_logs" };
   const dashboardTables = { accounts: tables.accounts, payments: tables.payments };
   const supplementalTables = { agents: tables.agents, alerts: tables.alerts, auditLogs: tables.auditLogs };
@@ -21,6 +21,22 @@
     let response;
     try { response = await fetch(`${SUPABASE_URL}${path}`, { ...options, headers: { apikey: SUPABASE_KEY, ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}), ...(options.body ? { "Content-Type": "application/json" } : {}), ...(options.headers || {}) } }); }
     catch (error) { console.error("Finance network request failed", path, error); throw new Error("Unable to connect to the server. Check your internet connection and try again."); }
+    if (!response.ok && response.status === 401 && refreshToken && options.retryAuth !== false) {
+      try {
+        const refreshed = await fetch(`${SUPABASE_URL}/functions/v1/api/v1/auth/refresh`, {
+          method: "POST",
+          headers: { apikey: SUPABASE_KEY, "Content-Type": "application/json" },
+          body: JSON.stringify({ refreshToken }),
+        });
+        const session = await refreshed.json().catch(() => ({}));
+        if (refreshed.ok && session.accessToken && session.refreshToken) {
+          accessToken = session.accessToken;
+          refreshToken = session.refreshToken;
+          realtimeClient?.realtime.setAuth(accessToken);
+          return request(path, { ...options, retryAuth: false });
+        }
+      } catch (error) { console.error("Finance session refresh failed", error); }
+    }
     if (!response.ok) { console.error("Finance API request failed", path, response.status, await response.text().catch(() => "")); throw new Error(safeError(response.status)); }
     return response.status === 204 ? null : response.json();
   }
@@ -35,8 +51,8 @@
       const writes = [...nextRows.entries()].flatMap(([externalId, item]) => {
         if (JSON.stringify(previousRows.get(externalId)) === JSON.stringify(item)) return [];
         const customer = key === "accounts" ? nextData.customers.find(candidate => candidate.id === item.customerId || (candidate.full_name === item.customer && candidate.phone === item.phone)) : null;
-        const record = { external_id: externalId, data: item, due_at: item.dueAt || null, updated_at: new Date().toISOString() };
-        if (key === "accounts") Object.assign(record, { customer_id: customer?.id || item.customerId || null, outstanding: Math.max(0, Number(item.balance || 0)), status: item.status || "active" });
+        const record = { external_id: externalId, data: item, updated_at: new Date().toISOString() };
+        if (key === "accounts") Object.assign(record, { due_at: item.dueAt || null, customer_id: customer?.id || item.customerId || null, outstanding: Math.max(0, Number(item.balance || 0)), status: item.status || "active" });
         const options = key === "auditLogs"
           ? { method: "POST", body: JSON.stringify(record) }
           : { method: "POST", headers: { Prefer: "resolution=merge-duplicates" }, body: JSON.stringify(record) };
@@ -56,10 +72,11 @@
     }
   }
   async function loadStoredTables(tableMap) {
-    return Promise.all(Object.entries(tableMap).map(async ([key, table]) => [key, await request(`/rest/v1/${table}?select=external_id,data,due_at,outstanding,status&order=updated_at.desc`)]));
+    return Promise.all(Object.entries(tableMap).map(async ([key, table]) => [key, await request(`/rest/v1/${table}?select=${key === "accounts" ? "external_id,data,due_at,outstanding,status" : "external_id,data"}&order=updated_at.desc`)]));
   }
   function applyStoredTables(rows) {
     rows.forEach(([key, values]) => { memoryData[key] = (values || []).map(row => {
+      if (key !== "accounts") return { ...(row.data || {}), id: row.data?.id || row.external_id };
       const dueAt = row.due_at || row.data?.dueAt || null;
       const balance = Number(row.outstanding ?? row.data?.balance ?? 0);
       const overdue = balance > 0 && dueAt && new Date(dueAt).getTime() < Date.now();
@@ -72,6 +89,7 @@
       global: { headers: { Authorization: `Bearer ${accessToken}` } },
       auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false }
     });
+    realtimeClient = client;
     const channel = client.channel(`finance-live-${crypto.randomUUID()}`)
       .on("postgres_changes", { event: "*", schema: "public", table: "finance_payments" }, onUpdate)
       .on("postgres_changes", { event: "*", schema: "public", table: "finance_accounts" }, onUpdate)
@@ -137,7 +155,8 @@
     });
     const result = await response.json().catch(() => ({}));
     if (!response.ok || !result.accessToken || !result.user) throw portalError(result, "Incorrect email or password. Please check your details and try again.");
-    return { id: result.user.id, name: result.user.name || result.user.email.split("@")[0], email: result.user.email, phone: result.user.phone || "", role: result.user.role, accessToken: result.accessToken };
+    refreshToken = result.refreshToken || null;
+    return { id: result.user.id, name: result.user.name || result.user.email.split("@")[0], email: result.user.email, phone: result.user.phone || "", role: result.user.role, accessToken: result.accessToken, refreshToken: result.refreshToken || null, expiresAt: result.expiresAt || null };
   }
   const money = value => new Intl.NumberFormat("en-KE", { style: "currency", currency: "KES", maximumFractionDigits: 0 }).format(Number(value || 0));
   async function approvalAccountStatus(email) {
@@ -145,5 +164,5 @@
     if (!response.ok) throw new Error("Account status unavailable.");
     return response.json();
   }
-  window.FinanceStore = { approvalAccountStatus, emptyData, readData, saveData, registerFinanceUser, financeAccountStatus, authenticateFinanceUser, hydrate, refreshLive, hydrateSupplementary, subscribeToFinanceUpdates, money };
+  window.FinanceStore = { approvalAccountStatus, emptyData, readData, saveData, registerFinanceUser, financeAccountStatus, authenticateFinanceUser, hydrate, refreshLive, hydrateSupplementary, subscribeToFinanceUpdates, currentAccessToken: () => accessToken, money };
 })();

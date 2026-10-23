@@ -15,15 +15,21 @@ export const sessionStore = {
   async get() {
     const value = await SecureStore.getItemAsync(SESSION_KEY);
     if (!value) return null;
+    let session;
     try {
-      const session = JSON.parse(value);
+      session = JSON.parse(value);
       if (isUsableSession(session)) return session;
-      if (session?.refreshToken) return await this.refresh(session);
+      if (session?.refreshToken) {
+        const refreshed = await this.refresh(session);
+        if (refreshed) return refreshed;
+        await SecureStore.deleteItemAsync(SESSION_KEY);
+        return null;
+      }
       await SecureStore.deleteItemAsync(SESSION_KEY);
       return null;
     } catch {
-      // Preserve a refreshable session when the device is temporarily offline.
-      return null;
+      // Preserve the saved login when a refresh attempt failed due to network.
+      return session?.refreshToken ? session : null;
     }
   },
   set(session) {

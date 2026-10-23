@@ -49,7 +49,8 @@ export default function PaymentsView() {
   };
   useEffect(() => {
     load();
-    return subscribeToTable("payments", load);
+    const subscriptions = ["payments", "finance_accounts"].map((table) => subscribeToTable(table, load));
+    return () => subscriptions.forEach((unsubscribe) => unsubscribe());
   }, []);
   const details = (payment) => {
     const customer = data.customers.find(

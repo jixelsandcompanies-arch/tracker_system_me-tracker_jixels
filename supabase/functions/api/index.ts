@@ -945,6 +945,7 @@ Deno.serve(async (request) => {
             .select("amount")
             .eq("customer_id", promptedPayment.customer_id)
             .eq("product_id", promptedPayment.product_id)
+            .eq("payment_type", "deposit")
             .in("status", ["paid", "completed", "confirmed"]);
           if (paidPaymentsError) console.error("Prompted deposit total failed", paidPaymentsError);
           else {
@@ -1131,7 +1132,8 @@ Deno.serve(async (request) => {
     const { data, error } = await client.auth.refreshSession({ refresh_token: refreshToken });
     if (error || !data.session || !data.user) return fail("Your session has expired. Please sign in again.", 401, "SESSION_EXPIRED");
     const { data: profile, error: profileError } = await admin.from("profiles").select("full_name,email,phone,role,account_status").eq("id", data.user.id).maybeSingle();
-    if (profileError || !profile || profile.role !== "customer" || !approvedStatuses.has(profile.account_status)) return fail("This customer account is not active.", 403, "ACCOUNT_INACTIVE");
+    const refreshableRoles = new Set([...approvableAccountRoles, ...financeRoles, ...adminRoles]);
+    if (profileError || !profile || !refreshableRoles.has(profile.role) || !approvedStatuses.has(profile.account_status)) return fail("This account is not active.", 403, "ACCOUNT_INACTIVE");
     return response({
       accessToken: data.session.access_token,
       refreshToken: data.session.refresh_token,
@@ -1846,7 +1848,11 @@ Deno.serve(async (request) => {
     if (error) return fail("Payment history is temporarily unavailable.", 503, "PAYMENT_HISTORY_UNAVAILABLE");
     const { data: profile } = await admin.from("profiles").select("email").eq("id", user.id).maybeSingle();
     const { data: customer } = profile?.email ? await admin.from("customers").select("id").ilike("email", String(profile.email).trim()).maybeSingle() : { data: null };
-    const bikeIds = [...new Set((data ?? []).map((payment: any) => payment.bike_id).filter(Boolean))];
+    const { data: customerBikes, error: customerBikesError } = customer?.id
+      ? await admin.from("bikes").select("id").eq("customer_id", customer.id)
+      : { data: [], error: null };
+    if (customerBikesError) return fail("Payment history is temporarily unavailable.", 503, "PAYMENT_HISTORY_UNAVAILABLE");
+    const bikeIds = [...new Set([...(data ?? []).map((payment: any) => payment.bike_id), ...(customerBikes ?? []).map((bike: any) => bike.id)].filter(Boolean))];
     const { data: businessPayments, error: businessPaymentError } = customer?.id && bikeIds.length
       ? await admin.from("payments").select("id,product_id,amount,status,receipt_number,payment_reference,payment_type,paid_at,created_at,payer_phone,bikes(identifier,trackers(plate_number))").eq("customer_id", customer.id).in("product_id", bikeIds).order("created_at", { ascending: false }).limit(200)
       : { data: [], error: null };

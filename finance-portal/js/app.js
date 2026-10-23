@@ -481,6 +481,9 @@
         render();
       }).catch(error => console.error("Finance supplementary data loading failed", error));
       if (!liveRefreshTimer) liveRefreshTimer = window.setInterval(refreshLiveWorkspace, 5_000);
+      FinanceStore.subscribeToFinanceUpdates(() => refreshLiveWorkspace())
+        .then(unsubscribe => { if (session) window.financeRealtimeUnsubscribe = unsubscribe; else unsubscribe(); })
+        .catch(error => console.error("Finance realtime subscription failed", error));
     } catch (error) {
       console.error("Finance workspace loading failed", error);
       loading = false;
@@ -598,7 +601,7 @@
         document.querySelector(".sidebar")?.classList.add("collapsed");
       }
     });
-    document.querySelector("[data-logout]")?.addEventListener("click", () => { authDraft = { name: "", phone: "", email: "", password: "", confirm: "" }; page = "dashboard"; session = null; if (liveRefreshTimer) { window.clearInterval(liveRefreshTimer); liveRefreshTimer = null; } render(); });
+    document.querySelector("[data-logout]")?.addEventListener("click", () => { authDraft = { name: "", phone: "", email: "", password: "", confirm: "" }; page = "dashboard"; session = null; window.financeRealtimeUnsubscribe?.(); window.financeRealtimeUnsubscribe = null; if (liveRefreshTimer) { window.clearInterval(liveRefreshTimer); liveRefreshTimer = null; } render(); });
     document.querySelector("[data-export-report]")?.addEventListener("click", () => { void exportFinanceReport(); });
     document.querySelector(".commission-table")?.addEventListener("click", event => {
       const viewButton = event.target.closest("[data-view-agent]");

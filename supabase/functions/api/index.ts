@@ -340,6 +340,203 @@ async function sendCustomerApprovalPush(
   }
 }
 
+async function sendCustomerPaymentPush(admin: SupabaseClient, customerId: string, title: string, body: string, data: Record<string, unknown>) {
+  const { data: tokens, error } = await admin.from("customer_push_tokens").select("expo_push_token").eq("customer_id", customerId);
+  if (error || !tokens?.length) return false;
+  const messages = tokens.filter((row: any) => isExpoPushToken(row.expo_push_token)).map((row: any) => ({
+    to: row.expo_push_token,
+    sound: "default",
+    title,
+    body,
+    data,
+  }));
+  if (!messages.length) return false;
+  try {
+    const result = await fetch("https://exp.host/--/api/v2/push/send", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify(messages),
+    });
+    const payload = await result.json().catch(() => null);
+    const tickets = Array.isArray(payload?.data) ? payload.data : [];
+    const accepted = result.ok && tickets.length === messages.length && tickets.every((ticket: any) => ticket?.status === "ok");
+    if (!accepted) console.error("Customer payment push failed", payload);
+    return accepted;
+  } catch (error) {
+    console.error("Customer payment push failed", error);
+    return false;
+  }
+}
+
+async function recordPaymentNotices(admin: SupabaseClient, paymentId: string, ownerId: string, amount: number, registration: string, receipt: string, phone: string, paidAt: string) {
+  const detail = `KES ${Number(amount).toLocaleString("en-KE")} received for ${registration}${receipt ? ` · M-Pesa receipt ${receipt}` : ""}.`;
+  const financeAlertId = `PAYMENT-RECEIVED-${paymentId}`;
+  const { error: financeAlertError } = await admin.from("finance_alerts").upsert({
+    external_id: financeAlertId,
+    data: { id: financeAlertId, title: "Customer payment received", detail, severity: "normal", status: "Open", time: paidAt, paymentId },
+    updated_at: paidAt,
+  }, { onConflict: "external_id" });
+  if (financeAlertError) console.error("Finance payment notification failed", paymentId, financeAlertError);
+
+  const { data: existingCustomerAlert } = await admin.from("alerts").select("id").eq("id", paymentId).maybeSingle();
+  const { error: customerAlertError } = await admin.from("alerts").upsert({
+    id: paymentId,
+    owner_id: ownerId,
+    title: "Payment received",
+    body: detail,
+    detail,
+    kind: "payment",
+    severity: "info",
+    created_at: paidAt,
+  }, { onConflict: "id" });
+  if (customerAlertError) console.error("Customer payment message save failed", paymentId, customerAlertError);
+  if (!existingCustomerAlert) await sendCustomerPaymentPush(admin, ownerId, "Payment received", detail, { type: "payment", screen: "history", eventId: paymentId, inAppRecorded: true });
+
+  return detail;
+}
+
+async function syncCustomerPaymentToPortals(admin: SupabaseClient, paymentRequestId: string, receipt: string, paidAt: string) {
+  const { data: payment, error: paymentError } = await admin.from("payment_requests")
+    .select("id,owner_id,vehicle_id,bike_id,amount,phone,status,provider_reference")
+    .eq("id", paymentRequestId).maybeSingle();
+  if (paymentError || !payment || payment.status !== "paid") {
+    if (paymentError) console.error("Confirmed customer payment lookup failed", paymentRequestId, paymentError);
+    return;
+  }
+
+  const [{ data: profile }, { data: vehicle }, { data: bike }] = await Promise.all([
+    admin.from("profiles").select("full_name,email,phone").eq("id", payment.owner_id).maybeSingle(),
+    payment.vehicle_id ? admin.from("vehicles").select("registration,tracker_imei,model").eq("id", payment.vehicle_id).maybeSingle() : Promise.resolve({ data: null }),
+    payment.bike_id ? admin.from("bikes").select("id,identifier,model,customer_id,payable_amount").eq("id", payment.bike_id).maybeSingle() : Promise.resolve({ data: null }),
+  ]);
+
+  let tracker: any = null;
+  if (bike?.id) {
+    const { data } = await admin.from("trackers").select("id,identifier,plate_number").eq("bike_id", bike.id).order("created_at", { ascending: true }).limit(1).maybeSingle();
+    tracker = data;
+  } else if (vehicle?.tracker_imei) {
+    const { data } = await admin.from("trackers").select("id,bike_id,identifier,plate_number").eq("identifier", vehicle.tracker_imei).maybeSingle();
+    tracker = data;
+    if (!tracker && vehicle.registration) {
+      const { data: plateTracker } = await admin.from("trackers").select("id,bike_id,identifier,plate_number").eq("plate_number", vehicle.registration).maybeSingle();
+      tracker = plateTracker;
+    }
+    if (tracker?.bike_id) {
+      const { data: linkedBike } = await admin.from("bikes").select("id,identifier,model,customer_id,payable_amount").eq("id", tracker.bike_id).maybeSingle();
+      if (linkedBike) Object.assign(tracker, { bike: linkedBike });
+    }
+  }
+
+  const normalizedEmail = String(profile?.email ?? "").trim();
+  const { data: customer } = normalizedEmail
+    ? await admin.from("customers").select("id,full_name,email,phone,customer_code").ilike("email", normalizedEmail).maybeSingle()
+    : { data: null };
+  const linkedBike = bike ?? tracker?.bike ?? null;
+  const customerId = linkedBike?.customer_id ?? customer?.id ?? null;
+  const productId = linkedBike?.id ?? tracker?.bike_id ?? null;
+  const registration = String(tracker?.plate_number || vehicle?.registration || linkedBike?.identifier || "Vehicle");
+  const paymentReference = `MOBILE-${payment.id}`;
+  const { data: existingBusinessPayment } = await admin.from("payments").select("id").eq("payment_reference", paymentReference).maybeSingle();
+  if (existingBusinessPayment?.id) {
+    await admin.from("payments").update({ status: "paid", paid_at: paidAt, receipt_number: receipt || null }).eq("id", existingBusinessPayment.id);
+  } else {
+    const { error } = await admin.from("payments").insert({
+      customer_id: customerId,
+      product_id: productId,
+      amount: Number(payment.amount),
+      currency: "KES",
+      status: "paid",
+      paid_at: paidAt,
+      receipt_number: receipt || null,
+      payment_reference: paymentReference,
+      payment_type: "daily",
+      payer_phone: payment.phone,
+    });
+    if (error) console.error("Admin payment sync failed", payment.id, error);
+  }
+
+  let materialized = false;
+  if (customerId && productId) {
+    const { data: application } = await admin.from("screening_applications").select("id,status").eq("customer_id", customerId).eq("product_id", productId).maybeSingle();
+    if (application?.status === "approved") {
+      const { error } = await admin.rpc("materialize_tracker_sale", { p_application_id: application.id });
+      materialized = !error;
+      if (error) console.error("Finance account refresh failed", payment.id, error);
+    }
+  }
+
+  // Reconcile the approved sale account from canonical confirmed payments. The
+  // sale materializer is idempotent and may re-run after a receipt arrives, so
+  // account totals must be based on recorded receipts instead of additive edits.
+  if (customerId && productId) {
+    const { data: account } = await admin.from("finance_accounts").select("external_id,data,outstanding")
+      .eq("customer_id", customerId).contains("data", { bike: linkedBike?.identifier }).maybeSingle();
+    if (account?.external_id) {
+      const { data: receipts, error: receiptError } = await admin.from("payments").select("amount")
+        .eq("customer_id", customerId).eq("product_id", productId).in("status", ["paid", "completed", "confirmed"]);
+      if (receiptError) console.error("Finance account payment reconciliation failed", payment.id, receiptError);
+      else {
+        const paid = (receipts ?? []).reduce((sum: number, row: any) => sum + Number(row.amount ?? 0), 0);
+        const total = Number(account.data?.total ?? linkedBike?.payable_amount ?? 0);
+        const balance = Math.max(0, total - paid);
+        const status = balance <= 0 ? "Completed" : "On Track";
+        const { error } = await admin.from("finance_accounts").update({
+          outstanding: balance,
+          status: balance <= 0 ? "completed" : "active",
+          data: { ...account.data, paid, balance, status },
+          updated_at: paidAt,
+        }).eq("external_id", account.external_id);
+        if (error) console.error("Finance account balance update failed", payment.id, error);
+      }
+    }
+  }
+
+  if (!materialized) {
+    const financePaymentId = `MOBILE-PAY-${payment.id}`;
+    const { error } = await admin.from("finance_payments").upsert({
+      external_id: financePaymentId,
+      data: {
+        id: financePaymentId,
+        account: customer?.customer_code ? `ACC-${customer.customer_code}` : `VEH-${registration}`,
+        customerId,
+        customer: customer?.full_name || profile?.full_name || "Customer",
+        phone: payment.phone || profile?.phone || "",
+        product: registration,
+        tracker: tracker?.identifier ?? vehicle?.tracker_imei ?? "Pending",
+        receipt: receipt || null,
+        amount: Number(payment.amount),
+        status: "Confirmed",
+        paymentType: "Daily payment",
+        date: paidAt,
+      },
+      updated_at: paidAt,
+    }, { onConflict: "external_id" });
+    if (error) console.error("Finance payment sync failed", payment.id, error);
+  }
+
+  await recordPaymentNotices(admin, payment.id, payment.owner_id, Number(payment.amount), registration, receipt, payment.phone, paidAt);
+}
+
+async function resolvePaybillReference(admin: SupabaseClient, reference: string) {
+  const { data: vehicles } = await admin.from("vehicles").select("id,owner_id,registration").eq("registration", reference).limit(2);
+  if (vehicles?.length === 1) return { vehicleId: vehicles[0].id as string, bikeId: null, ownerId: vehicles[0].owner_id as string, registration: vehicles[0].registration as string };
+  if (vehicles?.length) return null;
+
+  const { data: directBikes } = await admin.from("bikes").select("id,identifier,customer_id").eq("identifier", reference).limit(2);
+  const { data: plateTrackers } = await admin.from("trackers").select("bike_id,plate_number").eq("plate_number", reference).limit(3);
+  const bikeIds = [...new Set([...(directBikes ?? []).map((bike: any) => String(bike.id)), ...(plateTrackers ?? []).map((tracker: any) => String(tracker.bike_id ?? "")).filter(Boolean)])];
+  if (bikeIds.length !== 1) return null;
+  const { data: bike } = await admin.from("bikes").select("id,identifier,customer_id").eq("id", bikeIds[0]).maybeSingle();
+  if (!bike?.customer_id) return null;
+  const { data: customer } = await admin.from("customers").select("email").eq("id", bike.customer_id).maybeSingle();
+  const { data: profile } = customer?.email
+    ? await admin.from("profiles").select("id").ilike("email", String(customer.email).trim()).maybeSingle()
+    : { data: null };
+  if (!profile?.id) return null;
+  const tracker = (plateTrackers ?? []).find((item: any) => String(item.bike_id) === String(bike.id));
+  return { vehicleId: null, bikeId: bike.id as string, ownerId: profile.id as string, registration: String(tracker?.plate_number || bike.identifier) };
+}
+
 async function saveCustomerPushToken(
   admin: SupabaseClient,
   customerId: string,
@@ -654,8 +851,8 @@ Deno.serve(async (request) => {
     if (!reference) return response({ ResultCode: 1, ResultDesc: "Missing account reference" });
     const { data: requestRecord } = await admin.from("payment_requests").select("id").eq("idempotency_key", reference).maybeSingle();
     if (requestRecord) return response({ ResultCode: 0, ResultDesc: "Accepted" });
-    const { data: vehicles, error } = await admin.from("vehicles").select("id").eq("registration", reference).limit(2);
-    return response(!error && vehicles?.length === 1 ? { ResultCode: 0, ResultDesc: "Accepted" } : { ResultCode: 1, ResultDesc: "Unknown or ambiguous account reference" });
+    const target = await resolvePaybillReference(admin, reference);
+    return response(target ? { ResultCode: 0, ResultDesc: "Accepted" } : { ResultCode: 1, ResultDesc: "Unknown or ambiguous account reference" });
   }
   if (route === "/v1/mpesa/c2b/confirmation" && request.method === "POST") {
     const transactionId = String(body.TransID ?? "").trim();
@@ -664,11 +861,12 @@ Deno.serve(async (request) => {
     const phone = String(body.MSISDN ?? "").replace(/\D/g, "");
     await admin.from("daraja_transactions").upsert({ direction: "C2B", transaction_id: transactionId || null, account_reference: reference || null, phone: body.MSISDN ?? null, amount, status: "completed", payload: body, updated_at: new Date().toISOString() }, { onConflict: "transaction_id" });
     if (transactionId && reference && Number.isFinite(amount) && amount > 0 && /^254\d{9}$/.test(phone)) {
-      const { data: vehicles } = await admin.from("vehicles").select("id,owner_id").eq("registration", reference).limit(2);
-      if (vehicles?.length === 1) {
-        const vehicle = vehicles[0];
-        const { error } = await admin.from("payment_requests").upsert({ owner_id: vehicle.owner_id, vehicle_id: vehicle.id, idempotency_key: `C2B-${transactionId}`, provider_reference: transactionId, amount, phone, status: "paid", updated_at: new Date().toISOString() }, { onConflict: "idempotency_key" });
+      const target = await resolvePaybillReference(admin, reference);
+      if (target) {
+        const paidAt = new Date().toISOString();
+        const { data: paymentRequest, error } = await admin.from("payment_requests").upsert({ owner_id: target.ownerId, vehicle_id: target.vehicleId, bike_id: target.bikeId, idempotency_key: `C2B-${transactionId}`, provider_reference: transactionId, amount, phone, status: "paid", updated_at: paidAt }, { onConflict: "idempotency_key" }).select("id").single();
         if (error) console.error("C2B payment reconciliation failed", transactionId, error);
+        else if (paymentRequest?.id) await syncCustomerPaymentToPortals(admin, paymentRequest.id, transactionId, paidAt);
       }
     }
     return response({ ResultCode: 0, ResultDesc: "Accepted" });
@@ -686,10 +884,16 @@ Deno.serve(async (request) => {
     const callback = body.Body?.stkCallback ?? {}; const items = Object.fromEntries((callback.CallbackMetadata?.Item ?? []).map((item: { Name: string; Value?: unknown }) => [item.Name, item.Value]));
     const completed = Number(callback.ResultCode) === 0;
     const checkoutRequestId = String(callback.CheckoutRequestID ?? "");
-    await admin.from("daraja_transactions").upsert({ direction: "C2B", checkout_request_id: checkoutRequestId || null, transaction_id: items.MpesaReceiptNumber ?? null, phone: items.PhoneNumber ?? null, amount: Number(items.Amount ?? 0), status: completed ? "completed" : "failed", payload: body, updated_at: new Date().toISOString() }, { onConflict: "transaction_id" });
+    const paidAt = new Date().toISOString();
+    const receipt = String(items.MpesaReceiptNumber ?? "").trim();
+    await admin.from("daraja_transactions").upsert({ direction: "C2B", checkout_request_id: checkoutRequestId || null, transaction_id: receipt || null, phone: items.PhoneNumber ?? null, amount: Number(items.Amount ?? 0), status: completed ? "completed" : "failed", payload: body, updated_at: paidAt }, { onConflict: "transaction_id" });
     if (checkoutRequestId) {
-      const { data: customerPayment } = await admin.from("payment_requests").select("id").eq("provider_reference", checkoutRequestId).maybeSingle();
-      if (customerPayment) await admin.from("payment_requests").update({ status: completed ? "paid" : "failed", provider_reference: completed ? String(items.MpesaReceiptNumber ?? checkoutRequestId) : checkoutRequestId, updated_at: new Date().toISOString() }).eq("id", customerPayment.id);
+      const { data: customerPayment } = await admin.from("payment_requests").select("id,owner_id,vehicle_id,bike_id,amount,phone").eq("provider_reference", checkoutRequestId).maybeSingle();
+      if (customerPayment) {
+        const { error } = await admin.from("payment_requests").update({ status: completed ? "paid" : "failed", provider_reference: completed ? (receipt || checkoutRequestId) : checkoutRequestId, updated_at: paidAt }).eq("id", customerPayment.id);
+        if (error) console.error("Customer STK payment update failed", customerPayment.id, error);
+        if (completed) await syncCustomerPaymentToPortals(admin, customerPayment.id, receipt, paidAt);
+      }
     }
     if (checkoutRequestId) {
       const { data: promptedPayment, error: promptedPaymentError } = await admin
@@ -746,6 +950,14 @@ Deno.serve(async (request) => {
               if (financeRefreshError) console.error("Finance payment materialization failed", financeRefreshError);
             }
           }
+        }
+        if (completed && promptedPayment.customer_id) {
+          const { data: customer } = await admin.from("customers").select("email,full_name,phone").eq("id", promptedPayment.customer_id).maybeSingle();
+          const { data: customerProfile } = customer?.email
+            ? await admin.from("profiles").select("id,phone").ilike("email", String(customer.email).trim()).maybeSingle()
+            : { data: null };
+          const { data: product } = promptedPayment.product_id ? await admin.from("bikes").select("identifier").eq("id", promptedPayment.product_id).maybeSingle() : { data: null };
+          if (customerProfile?.id) await recordPaymentNotices(admin, promptedPayment.id, customerProfile.id, Number(items.Amount ?? 0), product?.identifier ?? "your vehicle", receipt, String(items.PhoneNumber ?? customer.phone ?? customerProfile.phone ?? ""), paidAt);
         }
       }
     }
@@ -1575,22 +1787,54 @@ Deno.serve(async (request) => {
       ? await admin.from("bikes").select("id,identifier,model,product_type,payable_amount,status,trackers(identifier,plate_number,is_online,latitude,longitude,last_seen_at)").eq("customer_id", customer.id)
       : { data: [], error: null };
     if (bikesError) return fail("Customer vehicles could not be loaded.", 503, "CUSTOMER_RECORDS_UNAVAILABLE");
-    const vehicles = (bikes ?? []).map((bike: any) => ({ id: bike.id, registration: bike.trackers?.[0]?.plate_number || bike.identifier, identifier: bike.identifier, model: bike.model || "Jixels vehicle", vehicle_type: bike.product_type, product_type: bike.product_type, tracker: bike.trackers?.[0]?.identifier ?? "Pending", status: bike.trackers?.[0]?.is_online ? "online" : "offline", is_online: Boolean(bike.trackers?.[0]?.is_online), latitude: bike.trackers?.[0]?.latitude, longitude: bike.trackers?.[0]?.longitude, last_seen_at: bike.trackers?.[0]?.last_seen_at, balance: Number(bike.payable_amount ?? 0), payable_amount: Number(bike.payable_amount ?? 0), monitoring_armed: false, immobilized: false }));
+    const bikeIds = (bikes ?? []).map((bike: any) => bike.id);
+    const [{ data: confirmedPayments }, { data: financeAccounts }, { data: applications }] = await Promise.all([
+      customer?.id && bikeIds.length ? admin.from("payments").select("product_id,amount").eq("customer_id", customer.id).in("product_id", bikeIds).in("status", ["paid", "completed", "confirmed"]) : Promise.resolve({ data: [] }),
+      customer?.id ? admin.from("finance_accounts").select("external_id,due_at,outstanding,status,data").eq("customer_id", customer.id) : Promise.resolve({ data: [] }),
+      customer?.id && bikeIds.length ? admin.from("screening_applications").select("product_id,monthly_service_amount").eq("customer_id", customer.id).in("product_id", bikeIds) : Promise.resolve({ data: [] }),
+    ]);
+    const paidByBike = new Map<string, number>();
+    for (const payment of confirmedPayments ?? []) paidByBike.set(String(payment.product_id), (paidByBike.get(String(payment.product_id)) ?? 0) + Number(payment.amount ?? 0));
+    const accountByBike = new Map<string, any>();
+    for (const account of financeAccounts ?? []) {
+      const product = String(account.data?.productId ?? account.data?.product ?? account.data?.bike ?? "");
+      if (product) accountByBike.set(product, account);
+    }
+    const monthlyByBike = new Map((applications ?? []).map((application: any) => [String(application.product_id), Number(application.monthly_service_amount ?? 0)]));
+    const now = Date.now();
+    const vehicles = (bikes ?? []).map((bike: any) => {
+      const total = Number(bike.payable_amount ?? 0);
+      const account = accountByBike.get(String(bike.id)) ?? accountByBike.get(String(bike.identifier));
+      const paid = paidByBike.get(String(bike.id)) ?? 0;
+      const balance = Math.max(0, Number(account?.outstanding ?? total - paid));
+      const dueAt = account?.due_at ?? account?.data?.dueAt ?? null;
+      const financeStatus = balance <= 0 ? "Completed" : dueAt && new Date(dueAt).getTime() < now ? "Overdue" : account?.data?.status ?? "On Track";
+      return { id: bike.id, registration: bike.trackers?.[0]?.plate_number || bike.identifier, identifier: bike.identifier, model: bike.model || "Jixels vehicle", vehicle_type: bike.product_type, product_type: bike.product_type, tracker: bike.trackers?.[0]?.identifier ?? "Pending", status: bike.trackers?.[0]?.is_online ? "online" : "offline", is_online: Boolean(bike.trackers?.[0]?.is_online), latitude: bike.trackers?.[0]?.latitude, longitude: bike.trackers?.[0]?.longitude, last_seen_at: bike.trackers?.[0]?.last_seen_at, total, payable_amount: total, paid, balance, outstanding: balance, finance_status: financeStatus, monthly_payment: monthlyByBike.get(String(bike.id)) ?? 0, next_payment: dueAt ? new Date(dueAt).toLocaleDateString("en-KE", { timeZone: "Africa/Nairobi" }) : "", monitoring_armed: false, immobilized: false };
+    });
     return response({ profile, vehicles });
   }
   if (route === "/v1/customer/payments" && request.method === "GET") {
-    const { data, error } = await admin.from("payment_requests").select("id,vehicle_id,amount,phone,status,provider_reference,created_at,vehicles(registration)").eq("owner_id", user.id).order("created_at", { ascending: false }).limit(200);
+    const { data, error } = await admin.from("payment_requests").select("id,vehicle_id,bike_id,amount,phone,status,provider_reference,created_at,vehicles(registration),bikes(identifier,trackers(plate_number))").eq("owner_id", user.id).order("created_at", { ascending: false }).limit(200);
     if (error) return fail("Payment history is temporarily unavailable.", 503, "PAYMENT_HISTORY_UNAVAILABLE");
-    return response({ payments: (data ?? []).map((payment: any) => ({ id: payment.id, vehicleId: payment.vehicle_id, registration: payment.vehicles?.registration ?? "Vehicle", date: payment.created_at, amount: Number(payment.amount), status: payment.status === "paid" ? "Confirmed" : payment.status, mpesaReceiptNumber: payment.provider_reference ?? "Pending", payerPhone: payment.phone })) });
+    return response({ payments: (data ?? []).map((payment: any) => ({ id: payment.id, vehicleId: payment.vehicle_id ?? payment.bike_id, registration: payment.vehicles?.registration ?? payment.bikes?.trackers?.[0]?.plate_number ?? payment.bikes?.identifier ?? "Vehicle", date: payment.created_at, amount: Number(payment.amount), status: payment.status === "paid" ? "Confirmed" : payment.status, mpesaReceiptNumber: payment.status === "paid" ? payment.provider_reference ?? "Confirmed" : "Pending", payerPhone: payment.phone })) });
   }
   if (route === "/v1/customer/payments/mpesa" && request.method === "POST") {
     const idempotencyKey = request.headers.get("Idempotency-Key")?.trim(); const amount = Number(body.amount); const phone = String(body.phone ?? "").replace(/\D/g, "");
     if (!idempotencyKey || !Number.isFinite(amount) || amount <= 0 || !/^254\d{9}$/.test(phone)) return fail("Valid amount, Kenyan phone number, and Idempotency-Key are required.", 422, "INVALID_PAYMENT");
-    const { data: existing } = await client.from("payment_requests").select("id,status").eq("idempotency_key", idempotencyKey).maybeSingle(); if (existing) return response(existing);
-    const { data: vehicle } = await admin.from("vehicles").select("id").eq("id", body.vehicleId).eq("owner_id", user.id).single(); if (!vehicle) return fail("Vehicle not found.", 404, "NOT_FOUND");
-    const { data: payment, error } = await client.from("payment_requests").insert({ owner_id: user.id, vehicle_id: vehicle.id, idempotency_key: idempotencyKey, amount, phone, status: "processing" }).select("id,status").single(); if (error) return fail(error.message, 400);
-    try { const timestamp = new Date().toISOString().replace(/[-:TZ.]/g, "").slice(0, 14); const result = await darajaPost("/mpesa/stkpush/v1/processrequest", { BusinessShortCode: Deno.env.get("DARAJA_SHORTCODE"), Password: stkPassword(timestamp), Timestamp: timestamp, TransactionType: "CustomerPayBillOnline", Amount: amount, PartyA: phone, PartyB: Deno.env.get("DARAJA_SHORTCODE"), PhoneNumber: phone, CallBackURL: Deno.env.get("DARAJA_STK_CALLBACK_URL"), AccountReference: Deno.env.get("DARAJA_SHORTCODE"), TransactionDesc: "Tracker service payment" }); const checkoutRequestId = String(result.CheckoutRequestID ?? ""); if (!checkoutRequestId) throw new Error("M-Pesa did not return a checkout request ID."); await client.from("payment_requests").update({ provider_reference: checkoutRequestId, status: "processing", updated_at: new Date().toISOString() }).eq("id", payment.id); await client.from("daraja_transactions").insert({ direction: "C2B", checkout_request_id: checkoutRequestId, account_reference: idempotencyKey, phone, amount, status: "submitted", payload: result }); return response({ ...payment, ...result }, 202); }
-    catch (cause) { await client.from("payment_requests").update({ status: "failed", updated_at: new Date().toISOString() }).eq("id", payment.id); return fail(cause instanceof Error ? cause.message : "M-Pesa request failed.", 502, "MPESA_ERROR"); }
+    const { data: existing } = await admin.from("payment_requests").select("id,status").eq("owner_id", user.id).eq("idempotency_key", idempotencyKey).maybeSingle(); if (existing) return response(existing);
+    const { data: vehicle } = await admin.from("vehicles").select("id").eq("id", body.vehicleId).eq("owner_id", user.id).maybeSingle();
+    let vehicleId = vehicle?.id ?? null;
+    let bikeId: string | null = null;
+    if (!vehicleId) {
+      const { data: profile } = await admin.from("profiles").select("email").eq("id", user.id).maybeSingle();
+      const { data: customer } = profile?.email ? await admin.from("customers").select("id").ilike("email", String(profile.email).trim()).maybeSingle() : { data: null };
+      const { data: bike } = await admin.from("bikes").select("id,customer_id").eq("id", body.vehicleId).maybeSingle();
+      if (!bike || !customer?.id || bike.customer_id !== customer.id) return fail("Vehicle not found.", 404, "NOT_FOUND");
+      bikeId = bike.id;
+    }
+    const { data: payment, error } = await admin.from("payment_requests").insert({ owner_id: user.id, vehicle_id: vehicleId, bike_id: bikeId, idempotency_key: idempotencyKey, amount, phone, status: "processing" }).select("id,status").single(); if (error) return fail("The payment could not be recorded.", 503, "PAYMENT_RECORD_FAILED");
+    try { const timestamp = new Date().toISOString().replace(/[-:TZ.]/g, "").slice(0, 14); const result = await darajaPost("/mpesa/stkpush/v1/processrequest", { BusinessShortCode: Deno.env.get("DARAJA_SHORTCODE"), Password: stkPassword(timestamp), Timestamp: timestamp, TransactionType: "CustomerPayBillOnline", Amount: amount, PartyA: phone, PartyB: Deno.env.get("DARAJA_SHORTCODE"), PhoneNumber: phone, CallBackURL: Deno.env.get("DARAJA_STK_CALLBACK_URL"), AccountReference: Deno.env.get("DARAJA_SHORTCODE"), TransactionDesc: "Tracker service payment" }); const checkoutRequestId = String(result.CheckoutRequestID ?? ""); if (!checkoutRequestId) throw new Error("M-Pesa did not return a checkout request ID."); const { error: linkError } = await admin.from("payment_requests").update({ provider_reference: checkoutRequestId, status: "processing", updated_at: new Date().toISOString() }).eq("id", payment.id); if (linkError) throw linkError; await admin.from("daraja_transactions").insert({ direction: "C2B", checkout_request_id: checkoutRequestId, account_reference: idempotencyKey, phone, amount, status: "submitted", payload: result }); return response({ ...payment, ...result }, 202); }
+    catch (cause) { await admin.from("payment_requests").update({ status: "failed", updated_at: new Date().toISOString() }).eq("id", payment.id); return fail(cause instanceof Error ? cause.message : "M-Pesa request failed.", 502, "MPESA_ERROR"); }
   }
   const statusMatch = route.match(/^\/v1\/customer\/motorcycles\/([^/]+)\/security-status$/);
   if (statusMatch && request.method === "GET") {
@@ -1628,6 +1872,23 @@ Deno.serve(async (request) => {
   if (route === "/v1/customer/profile" && request.method === "PATCH") {
     const { data, error } = await client.from("profiles").update({ full_name: body.fullName, phone: body.phone, avatar_url: body.avatarUrl, updated_at: new Date().toISOString() }).eq("id", user.id).select().single();
     return error ? fail(error.message, 400) : response(data);
+  }
+  if (route === "/v1/customer/alerts" && request.method === "GET") {
+    const { data, error } = await admin.from("alerts").select("id,title,body,detail,kind,severity,created_at,read_at").eq("owner_id", user.id).order("created_at", { ascending: false }).limit(100);
+    if (error) return fail("Your notifications are temporarily unavailable.", 503, "ALERTS_UNAVAILABLE");
+    return response({ alerts: (data ?? []).map((alert: any) => ({ id: alert.id, title: alert.title, message: alert.detail || alert.body, type: alert.kind || "notification", icon: alert.kind === "payment" ? "wallet-outline" : "notifications-outline", severity: alert.severity, age: new Date(alert.created_at).toLocaleString("en-KE", { timeZone: "Africa/Nairobi" }), unread: !alert.read_at, createdAt: alert.created_at })) });
+  }
+  if (route === "/v1/customer/alerts/read" && request.method === "POST") {
+    const ids = Array.isArray(body.ids) ? body.ids.map(String).filter(Boolean).slice(0, 100) : [];
+    if (!ids.length) return fail("Choose at least one notification.", 422, "INVALID_ALERT_IDS");
+    const { error } = await admin.from("alerts").update({ read_at: new Date().toISOString() }).eq("owner_id", user.id).in("id", ids);
+    return error ? fail("Notifications could not be marked as read.", 503, "ALERT_UPDATE_FAILED") : response({ updated: ids.length });
+  }
+  if (route === "/v1/customer/alerts" && request.method === "DELETE") {
+    const ids = Array.isArray(body.ids) ? body.ids.map(String).filter(Boolean).slice(0, 100) : [];
+    if (!ids.length) return fail("Choose at least one notification.", 422, "INVALID_ALERT_IDS");
+    const { error } = await admin.from("alerts").delete().eq("owner_id", user.id).in("id", ids);
+    return error ? fail("Notifications could not be deleted.", 503, "ALERT_DELETE_FAILED") : response({ deleted: ids.length });
   }
   const locationMatch = route.match(/^\/v1\/customer\/motorcycles\/([^/]+)\/location$/);
   if (locationMatch && request.method === "GET") {

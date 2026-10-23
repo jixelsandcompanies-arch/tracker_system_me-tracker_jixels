@@ -61,6 +61,19 @@
   function applyStoredTables(rows) {
     rows.forEach(([key, values]) => { memoryData[key] = (values || []).map(row => ({ ...(row.data || {}), id: row.data?.id || row.external_id })); });
   }
+  async function subscribeToFinanceUpdates(onUpdate) {
+    if (!window.supabase?.createClient || !accessToken) return () => {};
+    const client = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
+      global: { headers: { Authorization: `Bearer ${accessToken}` } },
+      auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false }
+    });
+    const channel = client.channel(`finance-live-${crypto.randomUUID()}`)
+      .on("postgres_changes", { event: "*", schema: "public", table: "finance_payments" }, onUpdate)
+      .on("postgres_changes", { event: "*", schema: "public", table: "finance_accounts" }, onUpdate)
+      .on("postgres_changes", { event: "*", schema: "public", table: "finance_alerts" }, onUpdate)
+      .subscribe();
+    return () => { client.removeChannel(channel); };
+  }
   async function hydrate(token) {
     accessToken = token;
     const [rows, settings] = await Promise.all([
@@ -127,5 +140,5 @@
     if (!response.ok) throw new Error("Account status unavailable.");
     return response.json();
   }
-  window.FinanceStore = { approvalAccountStatus, emptyData, readData, saveData, registerFinanceUser, financeAccountStatus, authenticateFinanceUser, hydrate, refreshLive, hydrateSupplementary, money };
+  window.FinanceStore = { approvalAccountStatus, emptyData, readData, saveData, registerFinanceUser, financeAccountStatus, authenticateFinanceUser, hydrate, refreshLive, hydrateSupplementary, subscribeToFinanceUpdates, money };
 })();

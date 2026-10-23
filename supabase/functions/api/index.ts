@@ -781,7 +781,7 @@ Deno.serve(async (request) => {
     try {
       const timestamp = new Date().toISOString().replace(/[-:TZ.]/g, "").slice(0, 14);
       const callbackUrl = Deno.env.get("WIFI_MPESA_CALLBACK_URL") ?? `${Deno.env.get("SUPABASE_URL")}/functions/v1/api/v1/wifi/mpesa/callback`;
-      const result = await darajaPost("/mpesa/stkpush/v1/processrequest", { BusinessShortCode: Deno.env.get("DARAJA_SHORTCODE"), Password: stkPassword(timestamp), Timestamp: timestamp, TransactionType: "CustomerPayBillOnline", Amount: Number(wifiPackage.price_kes), PartyA: phone, PartyB: Deno.env.get("DARAJA_SHORTCODE"), PhoneNumber: phone, CallBackURL: callbackUrl, AccountReference: `WIFI-${purchase.id.slice(0, 8)}`, TransactionDesc: `Jixels Wi-Fi ${wifiPackage.name}` });
+      const result = await darajaPost("/mpesa/stkpush/v1/processrequest", { BusinessShortCode: Deno.env.get("DARAJA_SHORTCODE"), Password: stkPassword(timestamp), Timestamp: timestamp, TransactionType: "CustomerPayBillOnline", Amount: Number(wifiPackage.price_kes), PartyA: phone, PartyB: Deno.env.get("DARAJA_SHORTCODE"), PhoneNumber: phone, CallBackURL: callbackUrl, AccountReference: Deno.env.get("DARAJA_SHORTCODE"), TransactionDesc: `Jixels Wi-Fi ${wifiPackage.name}` });
       const checkoutRequestId = String(result.CheckoutRequestID ?? "");
       if (!checkoutRequestId) throw new Error("M-Pesa did not return a checkout request ID.");
       await admin.from("wifi_purchases").update({ checkout_request_id: checkoutRequestId, updated_at: new Date().toISOString() }).eq("id", purchase.id);
@@ -1202,7 +1202,7 @@ Deno.serve(async (request) => {
         PartyB: Deno.env.get("DARAJA_SHORTCODE"),
         PhoneNumber: payerPhone,
         CallBackURL: Deno.env.get("DARAJA_STK_CALLBACK_URL"),
-        AccountReference: reference,
+        AccountReference: Deno.env.get("DARAJA_SHORTCODE"),
         TransactionDesc: "Jixels tracker deposit",
       });
       const checkoutRequestId = String(result.CheckoutRequestID ?? "");
@@ -1589,7 +1589,7 @@ Deno.serve(async (request) => {
     const { data: existing } = await client.from("payment_requests").select("id,status").eq("idempotency_key", idempotencyKey).maybeSingle(); if (existing) return response(existing);
     const { data: vehicle } = await admin.from("vehicles").select("id").eq("id", body.vehicleId).eq("owner_id", user.id).single(); if (!vehicle) return fail("Vehicle not found.", 404, "NOT_FOUND");
     const { data: payment, error } = await client.from("payment_requests").insert({ owner_id: user.id, vehicle_id: vehicle.id, idempotency_key: idempotencyKey, amount, phone, status: "processing" }).select("id,status").single(); if (error) return fail(error.message, 400);
-    try { const timestamp = new Date().toISOString().replace(/[-:TZ.]/g, "").slice(0, 14); const result = await darajaPost("/mpesa/stkpush/v1/processrequest", { BusinessShortCode: Deno.env.get("DARAJA_SHORTCODE"), Password: stkPassword(timestamp), Timestamp: timestamp, TransactionType: "CustomerPayBillOnline", Amount: amount, PartyA: phone, PartyB: Deno.env.get("DARAJA_SHORTCODE"), PhoneNumber: phone, CallBackURL: Deno.env.get("DARAJA_STK_CALLBACK_URL"), AccountReference: idempotencyKey.slice(0, 12), TransactionDesc: "Tracker service payment" }); const checkoutRequestId = String(result.CheckoutRequestID ?? ""); if (!checkoutRequestId) throw new Error("M-Pesa did not return a checkout request ID."); await client.from("payment_requests").update({ provider_reference: checkoutRequestId, status: "processing", updated_at: new Date().toISOString() }).eq("id", payment.id); await client.from("daraja_transactions").insert({ direction: "C2B", checkout_request_id: checkoutRequestId, account_reference: idempotencyKey, phone, amount, status: "submitted", payload: result }); return response({ ...payment, ...result }, 202); }
+    try { const timestamp = new Date().toISOString().replace(/[-:TZ.]/g, "").slice(0, 14); const result = await darajaPost("/mpesa/stkpush/v1/processrequest", { BusinessShortCode: Deno.env.get("DARAJA_SHORTCODE"), Password: stkPassword(timestamp), Timestamp: timestamp, TransactionType: "CustomerPayBillOnline", Amount: amount, PartyA: phone, PartyB: Deno.env.get("DARAJA_SHORTCODE"), PhoneNumber: phone, CallBackURL: Deno.env.get("DARAJA_STK_CALLBACK_URL"), AccountReference: Deno.env.get("DARAJA_SHORTCODE"), TransactionDesc: "Tracker service payment" }); const checkoutRequestId = String(result.CheckoutRequestID ?? ""); if (!checkoutRequestId) throw new Error("M-Pesa did not return a checkout request ID."); await client.from("payment_requests").update({ provider_reference: checkoutRequestId, status: "processing", updated_at: new Date().toISOString() }).eq("id", payment.id); await client.from("daraja_transactions").insert({ direction: "C2B", checkout_request_id: checkoutRequestId, account_reference: idempotencyKey, phone, amount, status: "submitted", payload: result }); return response({ ...payment, ...result }, 202); }
     catch (cause) { await client.from("payment_requests").update({ status: "failed", updated_at: new Date().toISOString() }).eq("id", payment.id); return fail(cause instanceof Error ? cause.message : "M-Pesa request failed.", 502, "MPESA_ERROR"); }
   }
   const statusMatch = route.match(/^\/v1\/customer\/motorcycles\/([^/]+)\/security-status$/);

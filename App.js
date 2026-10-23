@@ -411,6 +411,7 @@ function PaymentScreen({ selectedBike, paymentVehicles = bikes, onSelectBike, on
   useEffect(() => { setPhone(registeredPhone.replace(/\s/g, "")); }, [registeredPhone]);
   useEffect(() => { paymentAttempt.current = null; }, [selectedBike.id]);
   const pay = async () => {
+    if (busy) return;
     if (!isOnline) return Alert.alert("You are offline", "M-Pesa requests require internet. Connect and try again later, or use the official Jixels PayBill.");
     const numeric = Number(amount);
     const payerPhone = normalizeKenyanMpesaPhone(phone);
@@ -722,6 +723,7 @@ function CustomerApp({ session, onLogout }) {
   const [profileHydrated, setProfileHydrated] = useState(false);
   const [queueHydrated, setQueueHydrated] = useState(false);
   const paymentTimers = useRef(new Set());
+  const paymentSubmissionBusy = useRef(false);
   const notifiedTamperEvents = useRef(new Set());
   const syncFlushActive = useRef(false);
   // Page navigation is immediate. Individual data screens own their real
@@ -1035,17 +1037,28 @@ function CustomerApp({ session, onLogout }) {
     } catch (error) { Alert.alert("Command failed", error instanceof ApiError ? error.message : "The bike did not confirm the command."); return false; }
   };
   const addPayment = async (amount, payerPhone, idempotencyKey) => {
+    if (paymentSubmissionBusy.current) {
+      Alert.alert("Payment request already in progress", "Wait for the current payment request to finish before starting another one.");
+      return false;
+    }
+    paymentSubmissionBusy.current = true;
     try {
       const response = await paymentsApi.requestMpesa(session.accessToken, { vehicleId: selectedBike.id, amount, phone: payerPhone, idempotencyKey });
       const payment = response?.payment ?? response ?? {};
       const requestId = payment.id ?? payment.requestId ?? payment.checkoutRequestId;
       if (!requestId) throw new ApiError("The payment service returned an invalid response.", 502, "INVALID_PAYMENT_RESPONSE");
-      setPayments(current => upsertById(current, { id: requestId, bikeId: selectedBike.id, registration: selectedBike.registration, date: "Today", amount, payerPhone, method: "M-Pesa", status: payment.status ?? "Processing", mpesaReceiptNumber: payment.mpesaReceiptNumber ?? "Pending", notificationMessage: "M-Pesa request sent. Confirm the prompt on the selected phone." }));
-      Alert.alert("M-Pesa request sent", "Complete the prompt on the selected phone. Jixels will notify you after M-Pesa confirms the payment.");
+      if (!response?.replayed) {
+        setPayments(current => upsertById(current, { id: requestId, bikeId: selectedBike.id, registration: selectedBike.registration, date: "Today", amount, payerPhone, method: "M-Pesa", status: payment.status ?? "Processing", mpesaReceiptNumber: payment.mpesaReceiptNumber ?? "Pending", notificationMessage: "M-Pesa request sent. Confirm the prompt on the selected phone." }));
+        Alert.alert("M-Pesa request sent", "Complete the prompt on the selected phone. Jixels will notify you after M-Pesa confirms the payment.");
+      } else {
+        Alert.alert("Payment request already exists", "We found your original payment request. No extra prompt was sent.");
+      }
       return true;
     } catch (error) {
       Alert.alert("Payment request failed", error instanceof ApiError ? error.message : "The M-Pesa request could not be sent. Please try again.");
       return false;
+    } finally {
+      paymentSubmissionBusy.current = false;
     }
   };
   const refreshable = { onRefresh: refreshApp };

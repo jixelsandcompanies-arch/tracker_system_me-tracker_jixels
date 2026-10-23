@@ -51,22 +51,22 @@ jobs:
           "$BUILD_TOOLS/apksigner" verify --print-certs "$APK" | tee certificate.txt
           grep -qi 'bd7151d1fd4b56613206b9513dafa91b6f5a874bb94fcf34653f38303f881dc9' certificate.txt
           "$BUILD_TOOLS/aapt" dump badging "$APK" | head -1 | tee package.txt
-          grep -q "name='com.jixelstechnologies.agent' versionCode='7' versionName='1.0.4'" package.txt
+          grep -q "name='com.jixelstechnologies.agent' versionCode='8' versionName='1.0.5'" package.txt
           "$BUILD_TOOLS/aapt" dump xmltree "$APK" AndroidManifest.xml > manifest.txt
           grep -q 'expo-channel-name' manifest.txt
           grep -q 'production' manifest.txt
-          cp "$APK" Jixels-Agent-1.0.4.apk
-          sha256sum Jixels-Agent-1.0.4.apk > SHA256SUMS.txt
+          cp "$APK" Jixels-Agent-1.0.5.apk
+          sha256sum Jixels-Agent-1.0.5.apk > SHA256SUMS.txt
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: Jixels-Agent-1.0.4
+          name: Jixels-Agent-1.0.5
           path: |
-            Jixels angets/Jixels-Agent-1.0.4.apk
+            Jixels angets/Jixels-Agent-1.0.5.apk
             Jixels angets/SHA256SUMS.txt
           retention-days: 30
       - name: Publish download
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          TAG="agent-1.0.4-build-${GITHUB_RUN_NUMBER}"
-          gh release create "$TAG" Jixels-Agent-1.0.4.apk SHA256SUMS.txt --target "$GITHUB_SHA" --title "Jixels Agent 1.0.4" --notes "Persistent alert read and delete actions, durable installation status, and corrected payment phone prompts. Signed with the existing agent Android signing key."
+          TAG="agent-1.0.5-build-${GITHUB_RUN_NUMBER}"
+          gh release create "$TAG" Jixels-Agent-1.0.5.apk SHA256SUMS.txt --target "$GITHUB_SHA" --title "Jixels Agent 1.0.5" --notes "Duplicate deposit prompt prevention and durable payment state. Signed with the existing agent Android signing key."

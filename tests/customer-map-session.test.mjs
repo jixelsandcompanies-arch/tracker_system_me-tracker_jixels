@@ -12,6 +12,6 @@ assert.doesNotMatch(app, /error\.status === 404 \|\|/);
 assert.match(nativeMap, /react-native-webview/);
 assert.match(nativeMap, /openstreetmap\.org/);
 assert.match(appConfig, /"expo-channel-name": "production"/);
-assert.match(appConfig, /version: "1\.0\.7"/);
+assert.match(appConfig, /version: "1\.0\.8"/);
 
 console.log("Customer map and session regression checks passed.");

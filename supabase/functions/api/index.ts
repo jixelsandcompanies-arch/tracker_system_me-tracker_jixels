@@ -909,19 +909,31 @@ Deno.serve(async (request) => {
       }
     }
     if (checkoutRequestId) {
-      const { data: promptedPayment, error: promptedPaymentError } = await admin
+    const { data: promptedPayment, error: promptedPaymentError } = await admin
         .from("payments")
-        .select("id,customer_id,product_id")
+      .select("id,customer_id,product_id,amount,payment_type,status,receipt_number,payer_phone,payment_reference")
         .eq("checkout_request_id", checkoutRequestId)
         .maybeSingle();
       if (promptedPaymentError) console.error("Prompted deposit lookup failed", promptedPaymentError);
       if (promptedPayment) {
         const paidAt = new Date().toISOString();
-        const { error: paymentUpdateError } = await admin.from("payments").update({
+        const receipt = String(items.MpesaReceiptNumber ?? "").trim();
+        let { error: paymentUpdateError } = await admin.from("payments").update({
           status: completed ? "paid" : "failed",
           paid_at: completed ? paidAt : null,
-          receipt_number: completed ? String(items.MpesaReceiptNumber ?? "") || null : null,
+          receipt_number: completed ? receipt || null : null,
         }).eq("id", promptedPayment.id);
+        if (completed && receipt && !paymentUpdateError) {
+          const { data: duplicateReceiptPayment } = await admin.from("payments").select("id")
+            .eq("receipt_number", receipt).neq("id", promptedPayment.id).maybeSingle();
+          if (duplicateReceiptPayment?.id) {
+            // Daraja may deliver the same confirmation via multiple callback
+            // paths. Keep the canonical first row and retire this duplicate.
+            const { error: duplicateRetireError } = await admin.from("payments").update({ status: "duplicate", payment_reference: `DUP-${promptedPayment.id}-${duplicateReceiptPayment.id}` }).eq("id", promptedPayment.id);
+            if (duplicateRetireError) console.error("Duplicate callback payment could not be retired", promptedPayment.id, duplicateRetireError);
+            return response({ ResultCode: 0, ResultDesc: "Accepted" });
+          }
+        }
         if (paymentUpdateError) console.error("Prompted deposit update failed", paymentUpdateError);
         if (!completed) {
           const { error: alertError } = await admin.from("finance_alerts").upsert({
@@ -1445,6 +1457,21 @@ Deno.serve(async (request) => {
     const payableAmount = Number((application.bikes as any)?.payable_amount ?? 0);
     if (payableAmount > 0 && amount > payableAmount) return fail("The deposit cannot be higher than the total payable amount.", 422, "INVALID_DEPOSIT");
 
+    // Avoid duplicate prompts and duplicate processing rows when an agent taps
+    // twice or retries while Daraja is still waiting for the customer response.
+    const { data: activePrompt, error: activePromptError } = await admin.from("payments")
+      .select("id,payment_reference,status,checkout_request_id,amount,payer_phone")
+      .eq("customer_id", application.customer_id).eq("product_id", application.product_id)
+      .eq("payment_type", "deposit").eq("status", "processing")
+      .order("created_at", { ascending: false }).limit(1).maybeSingle();
+    if (activePromptError) return fail("Could not check for an existing deposit prompt.", 503, "PAYMENT_CHECK_FAILED");
+    if (activePrompt) {
+      if (Number(activePrompt.amount) !== amount || normalizeKenyanPhone(activePrompt.payer_phone) !== payerPhone) {
+        return fail("A deposit prompt is already awaiting a response. Wait for it to finish before sending a new amount or phone number.", 409, "DEPOSIT_PROMPT_PENDING", { paymentId: activePrompt.id });
+      }
+      return response({ payment: { id: activePrompt.id, reference: activePrompt.payment_reference, status: activePrompt.status, checkoutRequestId: activePrompt.checkout_request_id }, replayed: true }, 202);
+    }
+
     const reference = `DEP-${crypto.randomUUID().replaceAll("-", "").slice(0, 16).toUpperCase()}`;
     const now = new Date().toISOString();
     const { data: payment, error: paymentError } = await admin.from("payments").insert({
@@ -1690,8 +1717,8 @@ Deno.serve(async (request) => {
       const { data: applications, error } = await admin.from("screening_applications").select("id,customer_id,full_name,email,phone,payment_phone,national_id,location,product_identifier,product_type,product_model,tracker_identifier,tracker_installed_at,deposit_amount,requested_deposit_amount,status,created_at,customers(email,address,customer_code,plate_number),bikes(id,identifier,model,payable_amount,trackers(identifier,plate_number))").eq("installer_agent_id", user.id).order("created_at", { ascending: false });
       if (error) return fail("Agent customers could not be loaded.", 503, "CUSTOMERS_UNAVAILABLE");
       const customerIds = [...new Set((applications ?? []).map((item: any) => item.customer_id).filter(Boolean))];
-      const { data: payments, error: paymentsError } = customerIds.length
-        ? await admin.from("payments").select("customer_id,product_id,amount,status,payment_type,paid_at,receipt_number,payer_phone,payment_reference,created_at").in("customer_id", customerIds).in("status", ["processing", "paid", "completed", "confirmed"])
+    const { data: payments, error: paymentsError } = customerIds.length
+        ? await admin.from("payments").select("id,customer_id,product_id,amount,status,payment_type,paid_at,receipt_number,payer_phone,payment_reference,created_at").in("customer_id", customerIds).in("status", ["processing", "paid", "completed", "confirmed"])
         : { data: [], error: null };
       if (paymentsError) return fail("Customer payment records could not be loaded.", 503, "PAYMENTS_UNAVAILABLE");
       const { data: financeSettings, error: financeSettingsError } = await admin.from("finance_settings").select("data").eq("id", "default").maybeSingle();
@@ -1708,13 +1735,20 @@ Deno.serve(async (request) => {
       }
       return response({ customers: (applications ?? []).map((item: any) => {
         const salePayments = paymentBySale.get(`${item.customer_id}:${item.bikes?.id ?? item.product_id}`) ?? [];
-        const confirmed = salePayments.filter((payment) => ["paid", "completed", "confirmed"].includes(String(payment.status).toLowerCase()));
+        const seenPaymentTransactions = new Set<string>();
+        const uniqueSalePayments = salePayments.filter((payment) => {
+          const receipt = String(payment.receipt_number || payment.payment_reference || payment.id);
+          if (seenPaymentTransactions.has(receipt)) return false;
+          seenPaymentTransactions.add(receipt);
+          return true;
+        });
+        const confirmed = uniqueSalePayments.filter((payment) => ["paid", "completed", "confirmed"].includes(String(payment.status).toLowerCase()));
         const monthlyPayments = confirmed.filter((payment) => {
           const paymentType = String(payment.payment_type ?? "daily").toLowerCase().replace(/[ _-]/g, "");
           const paidAt = new Date(payment.paid_at ?? payment.created_at ?? "");
           return paymentType !== "deposit" && Number.isFinite(paidAt.getTime()) && paidAt >= commissionMonthStart && paidAt < commissionNextMonthStart;
         });
-        const processing = salePayments.find((payment) => String(payment.status).toLowerCase() === "processing");
+        const processing = uniqueSalePayments.find((payment) => String(payment.status).toLowerCase() === "processing");
         const amountPaid = confirmed.reduce((total, payment) => total + Number(payment.amount ?? 0), 0);
         const requestedDepositAmount = Number(item.requested_deposit_amount ?? item.deposit_amount ?? 0);
         return {
@@ -1915,7 +1949,8 @@ Deno.serve(async (request) => {
     const receipts = new Set(paymentRows.filter((payment: any) => payment.status === "Confirmed").map((payment: any) => payment.mpesaReceiptNumber));
     for (const payment of businessPayments ?? []) {
       const receipt = payment.receipt_number || payment.payment_reference || payment.id;
-      if (receipts.has(receipt)) continue;
+      const samePaymentRequest = payment.payment_reference?.startsWith("MOBILE-") && (data ?? []).some((request: any) => request.id === payment.payment_reference.slice("MOBILE-".length));
+      if (samePaymentRequest || receipts.has(receipt)) continue;
       receipts.add(receipt);
       paymentRows.push({ id: payment.id, vehicleId: payment.product_id, registration: payment.bikes?.trackers?.[0]?.plate_number ?? payment.bikes?.identifier ?? "Vehicle", date: payment.paid_at ?? payment.created_at, amount: Number(payment.amount), status: ["paid", "completed", "confirmed"].includes(String(payment.status).toLowerCase()) ? "Confirmed" : payment.status, paymentType: String(payment.payment_type ?? "daily").toLowerCase() === "deposit" ? "Deposit" : "M-Pesa", mpesaReceiptNumber: payment.receipt_number || payment.payment_reference || "Confirmed", payerPhone: payment.payer_phone ?? "" });
     }
@@ -1929,7 +1964,16 @@ Deno.serve(async (request) => {
   if (route === "/v1/customer/payments/mpesa" && request.method === "POST") {
     const idempotencyKey = request.headers.get("Idempotency-Key")?.trim(); const amount = Number(body.amount); const phone = String(body.phone ?? "").replace(/\D/g, "");
     if (!idempotencyKey || !Number.isFinite(amount) || amount <= 0 || !/^254\d{9}$/.test(phone)) return fail("Valid amount, Kenyan phone number, and Idempotency-Key are required.", 422, "INVALID_PAYMENT");
-    const { data: existing } = await admin.from("payment_requests").select("id,status").eq("owner_id", user.id).eq("idempotency_key", idempotencyKey).maybeSingle(); if (existing) return response(existing);
+    const { data: existing, error: existingError } = await admin.from("payment_requests").select("id,status,provider_reference,amount,phone,vehicle_id,bike_id").eq("owner_id", user.id).eq("idempotency_key", idempotencyKey).maybeSingle();
+    if (existingError) return fail("Could not verify this payment attempt. Please retry safely.", 503, "PAYMENT_LOOKUP_FAILED");
+    if (existing) {
+      const existingPhone = String(existing.phone ?? "").replace(/\D/g, "");
+      const existingVehicleId = existing.vehicle_id ?? existing.bike_id;
+      if (Number(existing.amount) !== amount || existingPhone !== phone || existingVehicleId !== body.vehicleId) return fail("This payment attempt key is already tied to another payment. Start a new attempt.", 409, "IDEMPOTENCY_KEY_REUSED");
+      // Replaying an attempt returns its original state. Never issue a second STK
+      // request for the same idempotency key, even if Daraja's first response was lost.
+      return response({ payment: { id: existing.id, status: existing.status, checkoutRequestId: existing.provider_reference ?? undefined }, replayed: true });
+    }
     const { data: vehicle } = await admin.from("vehicles").select("id").eq("id", body.vehicleId).eq("owner_id", user.id).maybeSingle();
     let vehicleId = vehicle?.id ?? null;
     let bikeId: string | null = null;
@@ -1940,7 +1984,33 @@ Deno.serve(async (request) => {
       if (!bike || !customer?.id || bike.customer_id !== customer.id) return fail("Vehicle not found.", 404, "NOT_FOUND");
       bikeId = bike.id;
     }
-    const { data: payment, error } = await admin.from("payment_requests").insert({ owner_id: user.id, vehicle_id: vehicleId, bike_id: bikeId, idempotency_key: idempotencyKey, amount, phone, status: "processing" }).select("id,status").single(); if (error) return fail("The payment could not be recorded.", 503, "PAYMENT_RECORD_FAILED");
+    const attemptTargetFilter = bikeId ? { column: "bike_id", value: bikeId } : { column: "vehicle_id", value: vehicleId };
+    const { data: activePayment, error: activePaymentError } = await admin.from("payment_requests")
+      .select("id,idempotency_key,status,provider_reference,amount,phone,vehicle_id,bike_id")
+      .eq("owner_id", user.id).eq(attemptTargetFilter.column, attemptTargetFilter.value)
+      .in("status", ["pending", "processing"]).order("created_at", { ascending: false }).limit(1).maybeSingle();
+    if (activePaymentError) return fail("Could not check for another payment in progress.", 503, "PAYMENT_CHECK_FAILED");
+    if (activePayment) {
+      const sameAttempt = activePayment.idempotency_key === idempotencyKey
+        && Number(activePayment.amount) === amount
+        && String(activePayment.phone ?? "").replace(/\D/g, "") === phone;
+      if (sameAttempt) return response({ payment: { id: activePayment.id, status: activePayment.status, checkoutRequestId: activePayment.provider_reference ?? undefined }, replayed: true });
+      return fail("A payment request is already awaiting a response. Wait for it to finish before requesting another prompt.", 409, "PAYMENT_ALREADY_PROCESSING", { paymentId: activePayment.id });
+    }
+    const { data: payment, error } = await admin.from("payment_requests").insert({ owner_id: user.id, vehicle_id: vehicleId, bike_id: bikeId, idempotency_key: idempotencyKey, amount, phone, status: "processing" }).select("id,status").single();
+    if (error) {
+      // Two quick taps can race through the read above. The unique key is the
+      // concurrency guard; return its winning request instead of failing/retrying.
+      const { data: racedRequest } = await admin.from("payment_requests").select("id,status,provider_reference,amount,phone,vehicle_id,bike_id").eq("owner_id", user.id).eq("idempotency_key", idempotencyKey).maybeSingle();
+      if (racedRequest) {
+        const sameAttempt = Number(racedRequest.amount) === amount
+          && String(racedRequest.phone ?? "").replace(/\D/g, "") === phone
+          && (racedRequest.vehicle_id ?? racedRequest.bike_id) === body.vehicleId;
+        if (sameAttempt) return response({ payment: { id: racedRequest.id, status: racedRequest.status, checkoutRequestId: racedRequest.provider_reference ?? undefined }, replayed: true });
+        return fail("This payment attempt key is already tied to another payment. Start a new attempt.", 409, "IDEMPOTENCY_KEY_REUSED");
+      }
+      return fail("The payment could not be recorded.", 503, "PAYMENT_RECORD_FAILED");
+    }
     try { const timestamp = new Date().toISOString().replace(/[-:TZ.]/g, "").slice(0, 14); const result = await darajaPost("/mpesa/stkpush/v1/processrequest", { BusinessShortCode: Deno.env.get("DARAJA_SHORTCODE"), Password: stkPassword(timestamp), Timestamp: timestamp, TransactionType: "CustomerPayBillOnline", Amount: amount, PartyA: phone, PartyB: Deno.env.get("DARAJA_SHORTCODE"), PhoneNumber: phone, CallBackURL: Deno.env.get("DARAJA_STK_CALLBACK_URL"), AccountReference: Deno.env.get("DARAJA_SHORTCODE"), TransactionDesc: "Tracker service payment" }); const checkoutRequestId = String(result.CheckoutRequestID ?? ""); if (!checkoutRequestId) throw new Error("M-Pesa did not return a checkout request ID."); const { error: linkError } = await admin.from("payment_requests").update({ provider_reference: checkoutRequestId, status: "processing", updated_at: new Date().toISOString() }).eq("id", payment.id); if (linkError) throw linkError; await admin.from("daraja_transactions").insert({ direction: "C2B", checkout_request_id: checkoutRequestId, account_reference: idempotencyKey, phone, amount, status: "submitted", payload: result }); return response({ ...payment, ...result }, 202); }
     catch (cause) { await admin.from("payment_requests").update({ status: "failed", updated_at: new Date().toISOString() }).eq("id", payment.id); return fail(cause instanceof Error ? cause.message : "M-Pesa request failed.", 502, "MPESA_ERROR"); }
   }

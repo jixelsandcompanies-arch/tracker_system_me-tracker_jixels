@@ -652,11 +652,25 @@ Deno.serve(async (request) => {
   if (route === "/v1/mpesa/c2b/validation" && request.method === "POST") {
     const reference = String(body.BillRefNumber ?? "").trim();
     if (!reference) return response({ ResultCode: 1, ResultDesc: "Missing account reference" });
-    const { data } = await admin.from("payment_requests").select("id").eq("idempotency_key", reference).maybeSingle();
-    return response(data ? { ResultCode: 0, ResultDesc: "Accepted" } : { ResultCode: 1, ResultDesc: "Unknown account reference" });
+    const { data: requestRecord } = await admin.from("payment_requests").select("id").eq("idempotency_key", reference).maybeSingle();
+    if (requestRecord) return response({ ResultCode: 0, ResultDesc: "Accepted" });
+    const { data: vehicles, error } = await admin.from("vehicles").select("id").eq("registration", reference).limit(2);
+    return response(!error && vehicles?.length === 1 ? { ResultCode: 0, ResultDesc: "Accepted" } : { ResultCode: 1, ResultDesc: "Unknown or ambiguous account reference" });
   }
   if (route === "/v1/mpesa/c2b/confirmation" && request.method === "POST") {
-    await admin.from("daraja_transactions").upsert({ direction: "C2B", transaction_id: body.TransID ?? null, account_reference: body.BillRefNumber ?? null, phone: body.MSISDN ?? null, amount: Number(body.TransAmount ?? 0), status: "completed", payload: body, updated_at: new Date().toISOString() }, { onConflict: "transaction_id" });
+    const transactionId = String(body.TransID ?? "").trim();
+    const reference = String(body.BillRefNumber ?? "").trim();
+    const amount = Number(body.TransAmount ?? 0);
+    const phone = String(body.MSISDN ?? "").replace(/\D/g, "");
+    await admin.from("daraja_transactions").upsert({ direction: "C2B", transaction_id: transactionId || null, account_reference: reference || null, phone: body.MSISDN ?? null, amount, status: "completed", payload: body, updated_at: new Date().toISOString() }, { onConflict: "transaction_id" });
+    if (transactionId && reference && Number.isFinite(amount) && amount > 0 && /^254\d{9}$/.test(phone)) {
+      const { data: vehicles } = await admin.from("vehicles").select("id,owner_id").eq("registration", reference).limit(2);
+      if (vehicles?.length === 1) {
+        const vehicle = vehicles[0];
+        const { error } = await admin.from("payment_requests").upsert({ owner_id: vehicle.owner_id, vehicle_id: vehicle.id, idempotency_key: `C2B-${transactionId}`, provider_reference: transactionId, amount, phone, status: "paid", updated_at: new Date().toISOString() }, { onConflict: "idempotency_key" });
+        if (error) console.error("C2B payment reconciliation failed", transactionId, error);
+      }
+    }
     return response({ ResultCode: 0, ResultDesc: "Accepted" });
   }
   if (route === "/v1/mpesa/b2c/result" && request.method === "POST") {
@@ -673,6 +687,10 @@ Deno.serve(async (request) => {
     const completed = Number(callback.ResultCode) === 0;
     const checkoutRequestId = String(callback.CheckoutRequestID ?? "");
     await admin.from("daraja_transactions").upsert({ direction: "C2B", checkout_request_id: checkoutRequestId || null, transaction_id: items.MpesaReceiptNumber ?? null, phone: items.PhoneNumber ?? null, amount: Number(items.Amount ?? 0), status: completed ? "completed" : "failed", payload: body, updated_at: new Date().toISOString() }, { onConflict: "transaction_id" });
+    if (checkoutRequestId) {
+      const { data: customerPayment } = await admin.from("payment_requests").select("id").eq("provider_reference", checkoutRequestId).maybeSingle();
+      if (customerPayment) await admin.from("payment_requests").update({ status: completed ? "paid" : "failed", provider_reference: completed ? String(items.MpesaReceiptNumber ?? checkoutRequestId) : checkoutRequestId, updated_at: new Date().toISOString() }).eq("id", customerPayment.id);
+    }
     if (checkoutRequestId) {
       const { data: promptedPayment, error: promptedPaymentError } = await admin
         .from("payments")
@@ -1560,13 +1578,18 @@ Deno.serve(async (request) => {
     const vehicles = (bikes ?? []).map((bike: any) => ({ id: bike.id, registration: bike.trackers?.[0]?.plate_number || bike.identifier, identifier: bike.identifier, model: bike.model || "Jixels vehicle", vehicle_type: bike.product_type, product_type: bike.product_type, tracker: bike.trackers?.[0]?.identifier ?? "Pending", status: bike.trackers?.[0]?.is_online ? "online" : "offline", is_online: Boolean(bike.trackers?.[0]?.is_online), latitude: bike.trackers?.[0]?.latitude, longitude: bike.trackers?.[0]?.longitude, last_seen_at: bike.trackers?.[0]?.last_seen_at, balance: Number(bike.payable_amount ?? 0), payable_amount: Number(bike.payable_amount ?? 0), monitoring_armed: false, immobilized: false }));
     return response({ profile, vehicles });
   }
+  if (route === "/v1/customer/payments" && request.method === "GET") {
+    const { data, error } = await admin.from("payment_requests").select("id,vehicle_id,amount,phone,status,provider_reference,created_at,vehicles(registration)").eq("owner_id", user.id).order("created_at", { ascending: false }).limit(200);
+    if (error) return fail("Payment history is temporarily unavailable.", 503, "PAYMENT_HISTORY_UNAVAILABLE");
+    return response({ payments: (data ?? []).map((payment: any) => ({ id: payment.id, vehicleId: payment.vehicle_id, registration: payment.vehicles?.registration ?? "Vehicle", date: payment.created_at, amount: Number(payment.amount), status: payment.status === "paid" ? "Confirmed" : payment.status, mpesaReceiptNumber: payment.provider_reference ?? "Pending", payerPhone: payment.phone })) });
+  }
   if (route === "/v1/customer/payments/mpesa" && request.method === "POST") {
     const idempotencyKey = request.headers.get("Idempotency-Key")?.trim(); const amount = Number(body.amount); const phone = String(body.phone ?? "").replace(/\D/g, "");
     if (!idempotencyKey || !Number.isFinite(amount) || amount <= 0 || !/^254\d{9}$/.test(phone)) return fail("Valid amount, Kenyan phone number, and Idempotency-Key are required.", 422, "INVALID_PAYMENT");
     const { data: existing } = await client.from("payment_requests").select("id,status").eq("idempotency_key", idempotencyKey).maybeSingle(); if (existing) return response(existing);
     const { data: vehicle } = await admin.from("vehicles").select("id").eq("id", body.vehicleId).eq("owner_id", user.id).single(); if (!vehicle) return fail("Vehicle not found.", 404, "NOT_FOUND");
     const { data: payment, error } = await client.from("payment_requests").insert({ owner_id: user.id, vehicle_id: vehicle.id, idempotency_key: idempotencyKey, amount, phone, status: "processing" }).select("id,status").single(); if (error) return fail(error.message, 400);
-    try { const timestamp = new Date().toISOString().replace(/[-:TZ.]/g, "").slice(0, 14); const result = await darajaPost("/mpesa/stkpush/v1/processrequest", { BusinessShortCode: Deno.env.get("DARAJA_SHORTCODE"), Password: stkPassword(timestamp), Timestamp: timestamp, TransactionType: "CustomerPayBillOnline", Amount: amount, PartyA: phone, PartyB: Deno.env.get("DARAJA_SHORTCODE"), PhoneNumber: phone, CallBackURL: Deno.env.get("DARAJA_STK_CALLBACK_URL"), AccountReference: idempotencyKey.slice(0, 12), TransactionDesc: "Tracker service payment" }); await client.from("daraja_transactions").insert({ direction: "C2B", checkout_request_id: result.CheckoutRequestID ?? null, account_reference: idempotencyKey, phone, amount, status: "submitted", payload: result }); return response({ ...payment, ...result }, 202); }
+    try { const timestamp = new Date().toISOString().replace(/[-:TZ.]/g, "").slice(0, 14); const result = await darajaPost("/mpesa/stkpush/v1/processrequest", { BusinessShortCode: Deno.env.get("DARAJA_SHORTCODE"), Password: stkPassword(timestamp), Timestamp: timestamp, TransactionType: "CustomerPayBillOnline", Amount: amount, PartyA: phone, PartyB: Deno.env.get("DARAJA_SHORTCODE"), PhoneNumber: phone, CallBackURL: Deno.env.get("DARAJA_STK_CALLBACK_URL"), AccountReference: idempotencyKey.slice(0, 12), TransactionDesc: "Tracker service payment" }); const checkoutRequestId = String(result.CheckoutRequestID ?? ""); if (!checkoutRequestId) throw new Error("M-Pesa did not return a checkout request ID."); await client.from("payment_requests").update({ provider_reference: checkoutRequestId, status: "processing", updated_at: new Date().toISOString() }).eq("id", payment.id); await client.from("daraja_transactions").insert({ direction: "C2B", checkout_request_id: checkoutRequestId, account_reference: idempotencyKey, phone, amount, status: "submitted", payload: result }); return response({ ...payment, ...result }, 202); }
     catch (cause) { await client.from("payment_requests").update({ status: "failed", updated_at: new Date().toISOString() }).eq("id", payment.id); return fail(cause instanceof Error ? cause.message : "M-Pesa request failed.", 502, "MPESA_ERROR"); }
   }
   const statusMatch = route.match(/^\/v1\/customer\/motorcycles\/([^/]+)\/security-status$/);

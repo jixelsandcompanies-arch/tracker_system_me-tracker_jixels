@@ -2,13 +2,13 @@ export default {
   expo: {
     name: "Jixels Customer Trackings",
     slug: "jixels-customer-trackings",
-    version: "1.0.5",
+    version: "1.0.6",
     runtimeVersion: { policy: "appVersion" },
     updates: {
       url: "https://u.expo.dev/000c3287-aab6-4be1-858a-3ddf2c670c49",
       checkAutomatically: "ON_LOAD",
       fallbackToCacheTimeout: 0,
-      requestHeaders: { "expo-channel-name": "preview" },
+      requestHeaders: { "expo-channel-name": "production" },
     },
     scheme: "jixelscustomertrackings",
 
@@ -26,7 +26,7 @@ export default {
 
     android: {
       package: "com.jixelstechnologies.customer",
-      versionCode: 7,
+      versionCode: 8,
       softwareKeyboardLayoutMode: "resize",
 
       adaptiveIcon: {

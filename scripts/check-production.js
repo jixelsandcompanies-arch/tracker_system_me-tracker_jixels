@@ -14,6 +14,8 @@ const files = [
   "src/services/payments.js",
   "src/services/session.js",
   "src/services/tracking.js",
+  "src/components/OpenStreetMap.js",
+  "src/components/OpenStreetMap.native.js",
   "src/utils/validation.mjs",
 ];
 

@@ -1,6 +1,6 @@
 import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, Alert, Animated, AppState, BackHandler, Image, KeyboardAvoidingView, Linking, Modal, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, Switch, Text, TextInput, View } from "react-native";
-import MapView, { AnimatedRegion, Marker, Polyline, PROVIDER_GOOGLE } from "./src/components/MapComponents";
+import OpenStreetMap from "./src/components/OpenStreetMap";
 import * as Location from "expo-location";
 import * as Notifications from "expo-notifications";
 import { AppUpdateNotice } from "./src/components/AppUpdateNotice";
@@ -579,7 +579,6 @@ function SettingsScreen({ profile, onSave, onRefresh }) {
 const RoundButton = memo(function RoundButton({ icon, label, onPress, active, children }) { return <Pressable accessibilityRole="button" accessibilityLabel={label} onPress={onPress} style={({ pressed }) => [styles.roundButton, active && styles.roundButtonActive, pressed && styles.buttonPressed]}>{children ?? <Ionicons name={icon} size={20} color={active ? colors.white : colors.blue} />}</Pressable>; });
 
 function PhoneLocationTrackingScreen() {
-  const mapRef = useRef(null);
   const [phoneLocation, setPhoneLocation] = useState(null);
   const [locationError, setLocationError] = useState(null);
   const [locating, setLocating] = useState(false);
@@ -592,7 +591,6 @@ function PhoneLocationTrackingScreen() {
       const result = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
       const point = { latitude: result.coords.latitude, longitude: result.coords.longitude };
       setPhoneLocation(point);
-      requestAnimationFrame(() => mapRef.current?.animateCamera({ center: point, zoom: 16 }, { duration: 700 }));
     } catch (cause) {
       setLocationError(cause instanceof Error ? cause.message : "Your phone location is currently unavailable.");
     } finally {
@@ -603,8 +601,7 @@ function PhoneLocationTrackingScreen() {
     Alert.alert("Show your current location?", "Jixels uses your phone location only to place you on the live map and help you compare your position with your vehicles. It does not replace or change any vehicle tracker location.", [{ text: "Not now", style: "cancel" }, { text: "Allow location", onPress: readPhoneLocation }]);
   }, [readPhoneLocation]);
   useEffect(() => { locatePhone(); }, [locatePhone]);
-  const center = phoneLocation ?? { latitude: 0.0236, longitude: 37.9062 };
-  return <View style={styles.mapContainer}><MapView ref={mapRef} provider={Platform.OS === "android" ? PROVIDER_GOOGLE : undefined} style={StyleSheet.absoluteFill} initialRegion={{ ...center, latitudeDelta: phoneLocation ? .08 : 7.5, longitudeDelta: phoneLocation ? .08 : 7.5 }} showsCompass showsMyLocationButton={false}>{phoneLocation && <Marker coordinate={phoneLocation} title="Your current location"><View style={styles.phoneMarker}><View style={styles.phoneMarkerInner} /></View></Marker>}</MapView><View style={styles.noVehicleMapCard}><View style={styles.waitingTrackerIcon}><Ionicons name="location" size={22} color={colors.blue} /></View><View style={{ flex: 1 }}><Text style={styles.waitingTrackerTitle}>{phoneLocation ? "Your current location" : "Finding your location"}</Text><Text style={styles.waitingTrackerText}>{locationError ?? "No vehicle is linked yet. After a tracker-equipped vehicle is added to your account, it will appear here automatically."}</Text></View></View><View style={styles.mapControls}><RoundButton label="Find my location" onPress={locatePhone}>{locating ? <ActivityIndicator size="small" color={colors.blue} /> : <Ionicons name="locate" size={20} color={colors.blue} />}</RoundButton></View></View>;
+  return <View style={styles.mapContainer}><OpenStreetMap coordinate={phoneLocation} label="Your current location" /><View style={styles.noVehicleMapCard}><View style={styles.waitingTrackerIcon}><Ionicons name="location" size={22} color={colors.blue} /></View><View style={{ flex: 1 }}><Text style={styles.waitingTrackerTitle}>{phoneLocation ? "Your current location" : "Finding your location"}</Text><Text style={styles.waitingTrackerText}>{locationError ?? "No vehicle is linked yet. After a tracker-equipped vehicle is added to your account, it will appear here automatically."}</Text></View></View><View style={styles.mapControls}><RoundButton label="Find my location" onPress={locatePhone}>{locating ? <ActivityIndicator size="small" color={colors.blue} /> : <Ionicons name="locate" size={20} color={colors.blue} />}</RoundButton></View></View>;
 }
 
 function TrackingScreen({ selectedBike, onSelectBike, accessToken, vehicles = [] }) {
@@ -812,10 +809,9 @@ function CustomerApp({ session, onLogout }) {
         }
       } catch (error) {
         if (!active) return;
-        // Expired access tokens are refreshed by apiRequest. A transient or
-        // revoked-token response must not silently sign a customer out; only
-        // a missing/inactive customer profile is an account-removal signal.
-        const accountRemoved = error instanceof ApiError && (error.status === 404 || (error.status === 403 && error.code === "ACCOUNT_INACTIVE"));
+        // Missing routes and data also return 404, so only an explicit inactive
+        // account response can invalidate the customer's saved login.
+        const accountRemoved = error instanceof ApiError && error.status === 403 && error.code === "ACCOUNT_INACTIVE";
         if (accountRemoved) {
           clearCustomerRecords();
           await AsyncStorage.multiRemove(["jixels:profile", "jixels:sync-queue"]).catch(() => {});

@@ -35,7 +35,7 @@
       const writes = [...nextRows.entries()].flatMap(([externalId, item]) => {
         if (JSON.stringify(previousRows.get(externalId)) === JSON.stringify(item)) return [];
         const customer = key === "accounts" ? nextData.customers.find(candidate => candidate.id === item.customerId || (candidate.full_name === item.customer && candidate.phone === item.phone)) : null;
-        const record = { external_id: externalId, data: item, updated_at: new Date().toISOString() };
+        const record = { external_id: externalId, data: item, due_at: item.dueAt || null, updated_at: new Date().toISOString() };
         if (key === "accounts") Object.assign(record, { customer_id: customer?.id || item.customerId || null, outstanding: Math.max(0, Number(item.balance || 0)), status: item.status || "active" });
         const options = key === "auditLogs"
           ? { method: "POST", body: JSON.stringify(record) }
@@ -56,10 +56,15 @@
     }
   }
   async function loadStoredTables(tableMap) {
-    return Promise.all(Object.entries(tableMap).map(async ([key, table]) => [key, await request(`/rest/v1/${table}?select=external_id,data&order=updated_at.desc`)]));
+    return Promise.all(Object.entries(tableMap).map(async ([key, table]) => [key, await request(`/rest/v1/${table}?select=external_id,data,due_at,outstanding,status&order=updated_at.desc`)]));
   }
   function applyStoredTables(rows) {
-    rows.forEach(([key, values]) => { memoryData[key] = (values || []).map(row => ({ ...(row.data || {}), id: row.data?.id || row.external_id })); });
+    rows.forEach(([key, values]) => { memoryData[key] = (values || []).map(row => {
+      const dueAt = row.due_at || row.data?.dueAt || null;
+      const balance = Number(row.outstanding ?? row.data?.balance ?? 0);
+      const overdue = balance > 0 && dueAt && new Date(dueAt).getTime() < Date.now();
+      return { ...(row.data || {}), id: row.data?.id || row.external_id, dueAt, balance, status: balance <= 0 ? "Completed" : overdue ? "Overdue" : (row.data?.status || "On Track") };
+    }); });
   }
   async function subscribeToFinanceUpdates(onUpdate) {
     if (!window.supabase?.createClient || !accessToken) return () => {};

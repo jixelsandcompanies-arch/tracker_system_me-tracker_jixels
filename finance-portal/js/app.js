@@ -206,7 +206,7 @@
   function accountTable(accounts, allowRemove) {
     allowRemove = true;
     if (!accounts.length) return empty("No finance accounts", "Add an account to start tracking finance.");
-    return `<div class="table-wrap"><table><thead><tr>${allowRemove ? `<th>${selectAll("accounts")}</th>` : ""}<th>Customer</th><th>Bike</th><th>Account</th><th>Total</th><th>Paid</th><th>Balance</th><th>Status</th>${allowRemove ? "<th>Actions</th>" : ""}</tr></thead><tbody>${accounts.map(account => `<tr>${allowRemove ? `<td>${rowCheck("accounts", account.id)}</td>` : ""}<td><strong>${escapeHtml(account.customer)}</strong><br><small>${escapeHtml(account.phone)}</small></td><td>${escapeHtml(account.bike)}<br><small>${escapeHtml(account.model)}</small></td><td>${escapeHtml(account.id)}</td><td>${money(account.total)}</td><td>${money(account.paid)}</td><td>${money(account.balance)}</td><td>${status(account.status)}</td>${allowRemove ? `<td><div class="row-actions"><button class="button button-secondary" data-edit-account="${escapeHtml(account.id)}" type="button">Modify</button><button class="button danger-button" data-remove-account="${escapeHtml(account.id)}" type="button">Delete</button></div></td>` : ""}</tr>`).join("")}</tbody></table></div>`;
+    return `<div class="table-wrap"><table><thead><tr>${allowRemove ? `<th>${selectAll("accounts")}</th>` : ""}<th>Customer</th><th>Bike</th><th>Account</th><th>Total</th><th>Paid</th><th>Balance</th><th>Due date</th><th>Status</th>${allowRemove ? "<th>Actions</th>" : ""}</tr></thead><tbody>${accounts.map(account => `<tr>${allowRemove ? `<td>${rowCheck("accounts", account.id)}</td>` : ""}<td><strong>${escapeHtml(account.customer)}</strong><br><small>${escapeHtml(account.phone)}</small></td><td>${escapeHtml(account.bike)}<br><small>${escapeHtml(account.model)}</small></td><td>${escapeHtml(account.id)}</td><td>${money(account.total)}</td><td>${money(account.paid)}</td><td>${money(account.balance)}</td><td>${account.dueAt ? escapeHtml(new Date(account.dueAt).toLocaleDateString("en-KE", { timeZone: "Africa/Nairobi" })) : "Not set"}</td><td>${status(account.status)}</td>${allowRemove ? `<td><div class="row-actions"><button class="button button-secondary" data-edit-account="${escapeHtml(account.id)}" type="button">Set due date</button><button class="button danger-button" data-remove-account="${escapeHtml(account.id)}" type="button">Delete</button></div></td>` : ""}</tr>`).join("")}</tbody></table></div>`;
   }
 
   function dashboard() {
@@ -659,9 +659,14 @@
     document.querySelectorAll("[data-edit-account]").forEach(button => button.addEventListener("click", async () => {
       const account = data.accounts.find(item => item.id === button.dataset.editAccount);
       if (!account) return;
-      const nextStatus = window.prompt("Account status", account.status || "On Track");
-      if (nextStatus == null) return;
-      data.accounts = data.accounts.map(item => item.id === account.id ? { ...item, status: nextStatus.trim() || item.status } : item);
+      const currentDate = account.dueAt ? new Date(account.dueAt).toISOString().slice(0, 10) : "";
+      const nextDate = window.prompt("Set account due date (YYYY-MM-DD). Leave blank to clear it.", currentDate);
+      if (nextDate == null) return;
+      if (nextDate && !/^\d{4}-\d{2}-\d{2}$/.test(nextDate)) { window.alert("Enter the due date as YYYY-MM-DD."); return; }
+      const dueAt = nextDate ? new Date(`${nextDate}T23:59:59+03:00`).toISOString() : null;
+      const balance = Number(account.balance || 0);
+      const statusText = balance <= 0 ? "Completed" : dueAt && new Date(dueAt).getTime() < Date.now() ? "Overdue" : "On Track";
+      data.accounts = data.accounts.map(item => item.id === account.id ? { ...item, dueAt, status: statusText } : item);
       if (await persistChanges()) render();
     }));
     const paymentSearch = document.getElementById("payment-search");

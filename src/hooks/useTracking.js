@@ -10,39 +10,46 @@ export function useTracking({ motorcycleId, accessToken }) {
   const [routeLoading, setRouteLoading] = useState(false);
   const [error, setError] = useState(null);
   const mounted = useRef(true);
+  const requestSequence = useRef(0);
   const activeMotorcycleId = useRef(motorcycleId);
   activeMotorcycleId.current = motorcycleId;
 
   const refresh = useCallback(async () => {
     const requestedId = motorcycleId;
+    const sequence = ++requestSequence.current;
     try {
-      setError(null);
+      if (mounted.current && activeMotorcycleId.current === requestedId) setError(null);
       if (!accessToken) throw new Error("Please sign in to view your motorcycle.");
       const result = await trackingApi.getMotorcycle(motorcycleId, accessToken);
-      if (mounted.current && activeMotorcycleId.current === requestedId) setMotorcycle(result);
+      if (mounted.current && activeMotorcycleId.current === requestedId && requestSequence.current === sequence) setMotorcycle(result);
     } catch (cause) {
-      if (mounted.current && activeMotorcycleId.current === requestedId) setError(cause instanceof Error ? cause.message : "Location temporarily unavailable");
+      if (mounted.current && activeMotorcycleId.current === requestedId && requestSequence.current === sequence) setError(cause instanceof Error ? cause.message : "Location temporarily unavailable");
     } finally {
-      if (mounted.current && activeMotorcycleId.current === requestedId) setLoading(false);
+      if (mounted.current && activeMotorcycleId.current === requestedId && requestSequence.current === sequence) setLoading(false);
     }
   }, [accessToken, motorcycleId]);
 
   const loadRoute = useCallback(async (range) => {
+    const requestedId = motorcycleId;
+    const sequence = requestSequence.current;
     setRouteLoading(true);
     try {
       setError(null);
       if (!accessToken) throw new Error("Please sign in to view route history.");
       const result = await trackingApi.getRoute(motorcycleId, range.toLowerCase().replace(" ", "-"), accessToken);
-      if (mounted.current) setRoute(result);
+      if (mounted.current && activeMotorcycleId.current === requestedId && requestSequence.current === sequence) setRoute(result);
     } catch (cause) {
-      if (mounted.current) setError(cause instanceof Error ? cause.message : "Route history is unavailable");
+      if (mounted.current && activeMotorcycleId.current === requestedId && requestSequence.current === sequence) setError(cause instanceof Error ? cause.message : "Route history is unavailable");
     } finally {
-      if (mounted.current) setRouteLoading(false);
+      if (mounted.current && activeMotorcycleId.current === requestedId && requestSequence.current === sequence) setRouteLoading(false);
     }
   }, [accessToken, motorcycleId]);
 
   useEffect(() => {
     mounted.current = true;
+    setLoading(true);
+    setMotorcycle(null);
+    setRoute(null);
     refresh();
     if (!accessToken) return () => { mounted.current = false; };
 
@@ -68,6 +75,7 @@ export function useTracking({ motorcycleId, accessToken }) {
 
     return () => {
       mounted.current = false;
+      requestSequence.current += 1;
       if (pollTimer) clearInterval(pollTimer);
       socket?.disconnect();
     };

@@ -3,7 +3,7 @@ export default {
     owner: "jixels-2026",
     name: "Jixels Agent Trackings",
     slug: "jixels-agent-trackings",
-    version: "1.0.2",
+    version: "1.0.3",
     scheme: "jixelsagenttrackings",
     orientation: "portrait",
     platforms: ["android", "ios"],
@@ -34,7 +34,7 @@ export default {
     },
     android: {
       package: "com.jixelstechnologies.agent",
-      versionCode: 5,
+      versionCode: 6,
       softwareKeyboardLayoutMode: "resize",
       adaptiveIcon: {
         foregroundImage: "./assets/jixels-agent-icon.png",

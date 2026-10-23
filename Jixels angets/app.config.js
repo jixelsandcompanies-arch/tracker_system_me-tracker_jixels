@@ -3,7 +3,7 @@ export default {
     owner: "jixels-2026",
     name: "Jixels Agent Trackings",
     slug: "jixels-agent-trackings",
-    version: "1.0.3",
+    version: "1.0.4",
     scheme: "jixelsagenttrackings",
     orientation: "portrait",
     platforms: ["android", "ios"],
@@ -18,7 +18,7 @@ export default {
       url: "https://u.expo.dev/d39d37aa-156b-4bfd-b74d-c2fb8aed6bb6",
       checkAutomatically: "ON_LOAD",
       fallbackToCacheTimeout: 0,
-      requestHeaders: { "expo-channel-name": "preview" }
+      requestHeaders: { "expo-channel-name": "production" }
     },
     runtimeVersion: {
       policy: "appVersion"
@@ -34,7 +34,7 @@ export default {
     },
     android: {
       package: "com.jixelstechnologies.agent",
-      versionCode: 6,
+      versionCode: 7,
       softwareKeyboardLayoutMode: "resize",
       adaptiveIcon: {
         foregroundImage: "./assets/jixels-agent-icon.png",

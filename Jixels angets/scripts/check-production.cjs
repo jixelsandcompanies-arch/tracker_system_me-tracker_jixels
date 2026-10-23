@@ -8,13 +8,14 @@ const files = [
   "app.config.js",
   "src/config.js",
   "src/services/api.js",
-  "src/services/auth.js"
+  "src/services/auth.js",
+  "../supabase/functions/api/index.ts"
 ];
 
 for (const file of files) {
   parser.parse(fs.readFileSync(path.join(root, file), "utf8"), {
     sourceType: "module",
-    plugins: ["jsx", "optionalChaining"]
+    plugins: ["jsx", "optionalChaining", "typescript"]
   });
 }
 

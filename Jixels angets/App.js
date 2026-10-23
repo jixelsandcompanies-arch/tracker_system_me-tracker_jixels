@@ -566,7 +566,7 @@ function Customers({ customers, onDeposit, onRefresh, refreshing, darkMode = fal
   return <ScrollView style={darkMode && styles.darkPage} contentContainerStyle={styles.page} refreshControl={pullRefresh(onRefresh, refreshing)}>
     <Text style={[styles.sectionTitle, darkMode && styles.darkText]}>Customer records</Text>
     {customers.length === 0 && <View style={[styles.empty, darkMode && styles.darkCard]}><Ionicons name="people-outline" color={colors.blue} size={42} /><Text style={[styles.emptyText, darkMode && styles.darkText]}>No customers yet</Text><Text style={styles.emptySub}>Use New customer to create the first field record.</Text></View>}
-    {customers.map(customer => <View key={customer.id} style={[styles.listCard, darkMode && styles.darkCard]}>
+    {customers.map(customer => <View key={customer.applicationId || customer.id} style={[styles.listCard, darkMode && styles.darkCard]}>
       <View style={styles.listIcon}><Ionicons name="person" color={colors.blue} size={20} /></View>
       <View style={styles.listBody}>
         <Text numberOfLines={1} style={[styles.listTitle, darkMode && styles.darkText]}>{customer.name}</Text>
@@ -575,7 +575,7 @@ function Customers({ customers, onDeposit, onRefresh, refreshing, darkMode = fal
       </View>
       <View style={styles.listStatus}>
         <Pill value={customer.payment} />
-        {!customerPaymentComplete(customer) && <Pressable onPress={() => onDeposit(customer.id)} style={styles.depositButton}><Text style={styles.depositButtonText}>{customer.payment === "Processing" ? "Payment pending" : "Prompt payment"}</Text></Pressable>}
+        {!customerPaymentComplete(customer) && <Pressable onPress={() => onDeposit(customer.applicationId || customer.id)} style={styles.depositButton}><Text style={styles.depositButtonText}>{customer.payment === "Processing" ? "Payment pending" : "Prompt payment"}</Text></Pressable>}
         <Text style={styles.smallMeta}>{customer.customerCode || "Customer code pending"}</Text>
       </View>
     </View>)}
@@ -661,8 +661,8 @@ function Onboarding({ addCustomer, navigate, assignedVehicles, accessToken, onRe
 }
 
 function AddVehicleToCustomer({ customers, assignedVehicles, accessToken, addCustomer, navigate, onRefresh, refreshing, darkMode = false }) {
-  const uniqueCustomers = useMemo(() => [...new Map(customers.map(customer => [customer.id, customer])).values()], [customers]);
-  const [customerId, setCustomerId] = useState(uniqueCustomers[0]?.id || "");
+  const uniqueCustomers = useMemo(() => [...new Map(customers.map(customer => [customer.customerId || customer.id, customer])).values()], [customers]);
+  const [customerId, setCustomerId] = useState(uniqueCustomers[0]?.customerId || uniqueCustomers[0]?.id || "");
   const [customerSearch, setCustomerSearch] = useState("");
   const [vehicleId, setVehicleId] = useState(assignedVehicles[0]?.id || "");
   const [plateNumber, setPlateNumber] = useState("");
@@ -701,12 +701,12 @@ function Trackers({ customers, onInstallComplete, onRefresh, refreshing, darkMod
     </View>)}
     <Text style={[styles.sectionTitle, darkMode && styles.darkText]}>Customer installs</Text>
     {installCustomers.length === 0 && <View style={[styles.empty, darkMode && styles.darkCard]}><Ionicons name="checkmark-circle-outline" color={colors.green} size={42} /><Text style={[styles.emptyText, darkMode && styles.darkText]}>No assigned installs pending</Text><Text style={styles.emptySub}>Sold bikes assigned to this agent will appear here until installation is complete.</Text></View>}
-    {customers.map(customer => <View key={`${customer.id}-install`} style={[styles.installRow, darkMode && styles.darkCard]}>
+    {customers.map(customer => <View key={`${customer.applicationId || customer.id}-install`} style={[styles.installRow, darkMode && styles.darkCard]}>
       <Text style={[styles.installName, darkMode && styles.darkText]}>{customer.plateNumber || customer.bike}</Text>
       <Text style={styles.installSub}>{customer.name} • Plate {customer.plateNumber || customer.bike} • Tracker {customer.tracker} • Sale {customerSaleStatus(customer)}</Text>
       <View style={styles.installActions}>
         <Pill value={customer.install} />
-        {customer.install !== "Complete" && <Pressable onPress={() => onInstallComplete(customer.id)} style={styles.miniButton}><Text style={styles.miniButtonText}>Mark installed</Text></Pressable>}
+        {customer.install !== "Complete" && <Pressable onPress={() => onInstallComplete(customer.applicationId || customer.id)} style={styles.miniButton}><Text style={styles.miniButtonText}>Mark installed</Text></Pressable>}
       </View>
     </View>)}
   </ScrollView>;
@@ -949,7 +949,7 @@ function DepositPrompt({ customer, visible, onCancel, onSubmit }) {
   useEffect(() => {
     setAmount(customer?.requestedDepositAmount ? String(customer.requestedDepositAmount) : "");
     setPhone(customer?.payerPhone || customer?.phone || "");
-  }, [customer]);
+  }, [visible, customer?.id]);
 
   function submit() {
     const depositAmount = Number(amount);
@@ -995,8 +995,7 @@ function AgentApp({ agent, onLogout }) {
   const [refreshing, setRefreshing] = useState(false);
   const [isOnline, setIsOnline] = useState(true);
   const [depositCustomerId, setDepositCustomerId] = useState(null);
-  const [readAlertIds, setReadAlertIds] = useState(new Set());
-  const [deletedAlertIds, setDeletedAlertIds] = useState(new Set());
+  const [alertStates, setAlertStates] = useState({});
   const navigationHistory = useRef([]);
   const darkMode = agentProfile.themeMode === "dark";
 
@@ -1006,12 +1005,12 @@ function AgentApp({ agent, onLogout }) {
   }, [screen]);
 
   const agentAlerts = useMemo(() => customers.flatMap(customer => [
-    ...(!customerPaymentComplete(customer) ? [{ id: `${customer.id}-payment`, type: "payment", icon: "wallet-outline", title: "Payment pending", message: `${customer.name} has no confirmed deposit.`, age: "now", customerName: customer.name }] : []),
-    ...(customer.install !== "Complete" ? [{ id: `${customer.id}-install`, type: "install", icon: "radio-outline", title: "Install pending", message: `${customer.plateNumber || customer.bike} tracker installation is not complete.`, age: "today", customerName: customer.name }] : []),
-    ...(customer.kyc !== "Approved" ? [{ id: `${customer.id}-kyc`, type: "kyc", icon: "id-card-outline", title: "KYC review", message: `${customer.name} is waiting for admin KYC approval.`, age: "today", customerName: customer.name }] : [])
-  ]).filter(alert => !deletedAlertIds.has(alert.id)).map(alert => ({ ...alert, unread: !readAlertIds.has(alert.id) })), [customers, deletedAlertIds, readAlertIds]);
+    ...(!customerPaymentComplete(customer) ? [{ id: `${customer.applicationId || customer.id}-payment`, type: "payment", icon: "wallet-outline", title: "Payment pending", message: `${customer.name} has no confirmed deposit.`, age: "now", customerName: customer.name }] : []),
+    ...(customer.install !== "Complete" ? [{ id: `${customer.applicationId || customer.id}-install`, type: "install", icon: "radio-outline", title: "Install pending", message: `${customer.plateNumber || customer.bike} tracker installation is not complete.`, age: "today", customerName: customer.name }] : []),
+    ...(customer.kyc !== "Approved" ? [{ id: `${customer.applicationId || customer.id}-kyc`, type: "kyc", icon: "id-card-outline", title: "KYC review", message: `${customer.name} is waiting for admin KYC approval.`, age: "today", customerName: customer.name }] : [])
+  ]).filter(alert => !alertStates[alert.id]?.deleted).map(alert => ({ ...alert, unread: !alertStates[alert.id]?.read })), [customers, alertStates]);
   const unread = agentAlerts.filter(alert => alert.unread).length;
-  const depositCustomer = customers.find(customer => customer.id === depositCustomerId);
+  const depositCustomer = customers.find(customer => (customer.applicationId || customer.id) === depositCustomerId);
   const soldVehicleIds = useMemo(() => new Set(customers.map(customer => customer.vehicleId).filter(Boolean)), [customers]);
   const availableAssignedVehicles = useMemo(() => assignedVehicles.filter(vehicle => !soldVehicleIds.has(vehicle.id)), [assignedVehicles, soldVehicleIds]);
 
@@ -1046,12 +1045,14 @@ function AgentApp({ agent, onLogout }) {
     setIsOnline(Boolean(net.isConnected));
     if (agent.accessToken && net.isConnected) {
       try {
-        const [customerResult, assignmentResult] = await Promise.all([
+        const [customerResult, assignmentResult, alertResult] = await Promise.all([
           authApi.listCustomers(agent.accessToken),
-          authApi.listAssignments(agent.accessToken)
+          authApi.listAssignments(agent.accessToken),
+          authApi.listAlertStates(agent.accessToken)
         ]);
         setCustomers(customerResult.customers || []);
         setAssignedVehicles(normalizeAssignedVehicles({ ...agent, assignedVehicles: assignmentResult.assignments || [] }));
+        setAlertStates(Object.fromEntries((alertResult.states || []).map(state => [state.alert_id, { read: Boolean(state.read_at), deleted: Boolean(state.deleted_at) }])));
       } catch (error) {
         console.warn("Agent customer refresh failed", error);
         if (error instanceof ApiError && [401, 403, 404].includes(error.status)) {
@@ -1098,19 +1099,19 @@ function AgentApp({ agent, onLogout }) {
   }
 
   function requestDeposit(id) {
-    const customer = customers.find(item => item.id === id);
+    const customer = customers.find(item => (item.applicationId || item.id) === id);
     if (!customer || customerPaymentComplete(customer)) return;
-    setDepositCustomerId(id);
+    setDepositCustomerId(customer.applicationId || customer.id);
   }
 
   async function sendDepositPrompt(id, depositAmount, payerPhone) {
-    const customer = customers.find(item => item.id === id);
+    const customer = customers.find(item => (item.applicationId || item.id) === id);
     if (!customer) return;
     try {
       const result = await authApi.promptDeposit(agent.accessToken, id, depositAmount, payerPhone);
       const payment = result.payment || {};
       setDepositCustomerId(null);
-      setCustomers(current => current.map(item => item.id === id ? {
+      setCustomers(current => current.map(item => (item.applicationId || item.id) === id ? {
         ...item,
         payment: "Processing",
         requestedDepositAmount: depositAmount,
@@ -1126,12 +1127,28 @@ function AgentApp({ agent, onLogout }) {
     }).catch(() => {});
   }
 
-  function markInstallComplete(id) {
-    setCustomers(current => current.map(customer => customer.id === id ? {
-      ...customer,
-      install: "Complete",
-      saleStatus: customerPaymentComplete(customer) ? "Complete" : "Pending"
-    } : customer));
+  async function updateAgentAlertStates(ids, action) {
+    if (!ids.length) return;
+    try {
+      await authApi.updateAlertStates(agent.accessToken, ids, action);
+      setAlertStates(current => {
+        const next = { ...current };
+        for (const id of ids) next[id] = { read: action === "read" || Boolean(next[id]?.read), deleted: action === "delete" || Boolean(next[id]?.deleted) };
+        return next;
+      });
+    } catch (error) {
+      Alert.alert("Alert update could not be saved", error instanceof Error ? error.message : "Try again when your connection is available.");
+    }
+  }
+
+  async function markInstallComplete(id) {
+    try {
+      await authApi.updateInstallation(agent.accessToken, id, true);
+      setCustomers(current => current.map(customer => (customer.applicationId || customer.id) === id ? { ...customer, install: "Complete" } : customer));
+    } catch (error) {
+      Alert.alert("Installation could not be saved", error instanceof Error ? error.message : "Try again when your connection is available.");
+      return;
+    }
     Notifications.scheduleNotificationAsync({
       content: { title: "Tracker installed", body: "Tracker installation record completed.", sound: "default" },
       trigger: null
@@ -1143,7 +1160,7 @@ function AgentApp({ agent, onLogout }) {
     : screen === "onboard" ? <Onboarding addCustomer={addCustomer} navigate={navigate} assignedVehicles={availableAssignedVehicles} accessToken={agent.accessToken} onRefresh={refresh} refreshing={refreshing} darkMode={darkMode} />
     : screen === "existing" ? <AddVehicleToCustomer customers={customers} assignedVehicles={availableAssignedVehicles} accessToken={agent.accessToken} addCustomer={addCustomer} navigate={navigate} onRefresh={refresh} refreshing={refreshing} darkMode={darkMode} />
     : screen === "payments" ? <Commissions customers={customers} onRefresh={refresh} refreshing={refreshing} darkMode={darkMode} />
-    : screen === "alerts" ? <Alerts alerts={agentAlerts} markAllRead={() => setDeletedAlertIds(new Set(agentAlerts.map(alert => alert.id)))} markAlertRead={id => setReadAlertIds(current => new Set(current).add(id))} deleteAlerts={ids => setDeletedAlertIds(current => new Set([...current, ...ids]))} onRefresh={refresh} refreshing={refreshing} darkMode={darkMode} />
+    : screen === "alerts" ? <Alerts alerts={agentAlerts} markAllRead={() => updateAgentAlertStates(agentAlerts.map(alert => alert.id), "read")} markAlertRead={id => updateAgentAlertStates([id], "read")} deleteAlerts={ids => updateAgentAlertStates(ids, "delete")} onRefresh={refresh} refreshing={refreshing} darkMode={darkMode} />
     : screen === "trackers" ? <Trackers customers={customers} onInstallComplete={markInstallComplete} onRefresh={refresh} refreshing={refreshing} darkMode={darkMode} />
     : screen === "reports" ? <Reports customers={customers} profile={agentProfile} onRefresh={refresh} refreshing={refreshing} darkMode={darkMode} />
     : screen === "settings" ? <Settings agent={agentProfile} onSave={setAgentProfile} onRefresh={refresh} refreshing={refreshing} darkMode={darkMode} />

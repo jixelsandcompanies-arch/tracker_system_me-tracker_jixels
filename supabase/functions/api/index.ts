@@ -1373,6 +1373,41 @@ Deno.serve(async (request) => {
     }
   }
 
+  if (route === "/v1/agent/alerts" && (request.method === "GET" || request.method === "PATCH")) {
+    const { data: agentProfile, error: agentError } = await admin.from("profiles").select("role,account_status").eq("id", user.id).maybeSingle();
+    if (agentError || !agentProfile || !agentRoles.has(agentProfile.role) || !approvedStatuses.has(agentProfile.account_status)) return fail("Approved agent access is required to manage agent alerts.", 403, "PORTAL_ACCESS_DENIED");
+    if (request.method === "GET") {
+      const { data, error } = await admin.from("agent_alert_states").select("alert_id,read_at,deleted_at").eq("agent_id", user.id).order("updated_at", { ascending: false }).limit(500);
+      return error ? fail("Agent alert preferences could not be loaded.", 503, "AGENT_ALERTS_UNAVAILABLE") : response({ states: data ?? [] });
+    }
+    const ids = Array.isArray(body.ids) ? [...new Set(body.ids.map(String).map((id: string) => id.trim()).filter(Boolean))].slice(0, 500) : [];
+    const action = String(body.action ?? "");
+    if (!ids.length || !["read", "delete"].includes(action)) return fail("Choose alert IDs and a read or delete action.", 422, "INVALID_AGENT_ALERT_ACTION");
+    const { data: existing, error: existingError } = await admin.from("agent_alert_states").select("alert_id,read_at,deleted_at").eq("agent_id", user.id).in("alert_id", ids);
+    if (existingError) return fail("Agent alert preferences could not be updated.", 503, "AGENT_ALERT_UPDATE_FAILED");
+    const existingById = new Map((existing ?? []).map((state: any) => [state.alert_id, state]));
+    const now = new Date().toISOString();
+    const changes = ids.map((alertId: string) => {
+      const prior: any = existingById.get(alertId);
+      return { agent_id: user.id, alert_id: alertId, read_at: action === "read" ? prior?.read_at ?? now : prior?.read_at ?? null, deleted_at: action === "delete" ? now : prior?.deleted_at ?? null, updated_at: now };
+    });
+    const { error } = await admin.from("agent_alert_states").upsert(changes, { onConflict: "agent_id,alert_id" });
+    return error ? fail("Agent alert preferences could not be updated.", 503, "AGENT_ALERT_UPDATE_FAILED") : response({ updated: ids.length });
+  }
+
+  const installationMatch = route.match(/^\/v1\/agent\/customers\/([^/]+)\/installation$/);
+  if (installationMatch && request.method === "PATCH") {
+    const { data: agentProfile, error: agentError } = await admin.from("profiles").select("role,account_status").eq("id", user.id).maybeSingle();
+    if (agentError || !agentProfile || !agentRoles.has(agentProfile.role) || !approvedStatuses.has(agentProfile.account_status)) return fail("Approved agent access is required to update tracker installation.", 403, "PORTAL_ACCESS_DENIED");
+    if (typeof body.installed !== "boolean") return fail("Choose whether the tracker is installed.", 422, "INVALID_INSTALLATION_STATUS");
+    const targetId = decodeURIComponent(installationMatch[1]);
+    const installedAt = body.installed ? new Date().toISOString() : null;
+    let { data, error } = await admin.from("screening_applications").update({ tracker_installed_at: installedAt, updated_at: new Date().toISOString() }).eq("id", targetId).eq("installer_agent_id", user.id).select("id,customer_id,tracker_installed_at").maybeSingle();
+    if (!data && !error) ({ data, error } = await admin.from("screening_applications").update({ tracker_installed_at: installedAt, updated_at: new Date().toISOString() }).eq("customer_id", targetId).eq("installer_agent_id", user.id).select("id,customer_id,tracker_installed_at").order("created_at", { ascending: false }).limit(1).maybeSingle());
+    if (error || !data) return fail("Tracker installation could not be saved for this customer.", 404, "CUSTOMER_NOT_FOUND");
+    return response({ customerId: data.customer_id, applicationId: data.id, installed: Boolean(data.tracker_installed_at), installedAt: data.tracker_installed_at });
+  }
+
   const paymentPhoneMatch = route.match(/^\/v1\/agent\/customers\/([^/]+)\/payment-phone$/);
   if (paymentPhoneMatch && request.method === "PATCH") {
     const { data: agentProfile, error: agentError } = await admin.from("profiles").select("role,account_status").eq("id", user.id).maybeSingle();
@@ -1380,14 +1415,15 @@ Deno.serve(async (request) => {
     if (!approvedStatuses.has(agentProfile.account_status)) return fail("Your agent account is awaiting administrator approval.", 403, "ACCOUNT_PENDING_APPROVAL");
     const paymentPhone = String(body.paymentPhone ?? "").trim();
     if (!paymentPhone) return fail("Enter the phone number that should receive the payment prompt.", 422, "INVALID_PAYMENT_PHONE");
-    const customerId = decodeURIComponent(paymentPhoneMatch[1]);
-    const { data: application, error } = await admin
+    const targetId = decodeURIComponent(paymentPhoneMatch[1]);
+    let { data: application, error } = await admin
       .from("screening_applications")
       .update({ payment_phone: paymentPhone, updated_at: new Date().toISOString() })
-      .eq("customer_id", customerId)
+      .eq("id", targetId)
       .eq("installer_agent_id", user.id)
       .select("customer_id,payment_phone")
       .maybeSingle();
+    if (!application && !error) ({ data: application, error } = await admin.from("screening_applications").update({ payment_phone: paymentPhone, updated_at: new Date().toISOString() }).eq("customer_id", targetId).eq("installer_agent_id", user.id).select("customer_id,payment_phone").order("created_at", { ascending: false }).limit(1).maybeSingle());
     if (error || !application) return fail("Customer payment details could not be saved.", 404, "CUSTOMER_NOT_FOUND");
     return response({ customerId: application.customer_id, paymentPhone: application.payment_phone });
   }
@@ -1397,13 +1433,14 @@ Deno.serve(async (request) => {
     const { data: agentProfile, error: agentError } = await admin.from("profiles").select("role,account_status").eq("id", user.id).maybeSingle();
     if (agentError || !agentProfile || !agentRoles.has(agentProfile.role)) return fail("This account does not have permission to request a customer payment.", 403, "PORTAL_ACCESS_DENIED");
     if (!approvedStatuses.has(agentProfile.account_status)) return fail("Your agent account is awaiting administrator approval.", 403, "ACCOUNT_PENDING_APPROVAL");
-    const customerId = decodeURIComponent(depositPromptMatch[1]);
+    const targetId = decodeURIComponent(depositPromptMatch[1]);
     const amount = Number(body.amount);
     const payerPhone = normalizeKenyanPhone(body.paymentPhone);
     if (!Number.isFinite(amount) || amount <= 0 || !payerPhone) return fail("Enter a valid deposit amount and Kenyan payment phone number.", 422, "INVALID_PAYMENT");
-    const { data: application, error: applicationError } = await admin.from("screening_applications")
+    let { data: application, error: applicationError } = await admin.from("screening_applications")
       .select("id,customer_id,product_id,bikes(payable_amount)")
-      .eq("customer_id", customerId).eq("installer_agent_id", user.id).maybeSingle();
+      .eq("id", targetId).eq("installer_agent_id", user.id).maybeSingle();
+    if (!application && !applicationError) ({ data: application, error: applicationError } = await admin.from("screening_applications").select("id,customer_id,product_id,bikes(payable_amount)").eq("customer_id", targetId).eq("installer_agent_id", user.id).order("created_at", { ascending: false }).limit(1).maybeSingle());
     if (applicationError || !application?.customer_id || !application.product_id) return fail("Customer payment details could not be found.", 404, "CUSTOMER_NOT_FOUND");
     const payableAmount = Number((application.bikes as any)?.payable_amount ?? 0);
     if (payableAmount > 0 && amount > payableAmount) return fail("The deposit cannot be higher than the total payable amount.", 422, "INVALID_DEPOSIT");
@@ -1642,7 +1679,7 @@ Deno.serve(async (request) => {
     if (trackerError) { await admin.from("bikes").update({ customer_id: null, status: "available", updated_at: now }).eq("id", bike.id); return fail("The vehicle plate could not be saved.", 503, "PLATE_SAVE_FAILED"); }
     const { data: application, error: applicationError } = await admin.from("screening_applications").insert({ customer_id: customer.id, product_id: bike.id, installer_agent_id: user.id, full_name: customer.full_name, email: customer.email, phone: customer.phone, national_id: customer.national_id, location: customer.address, product_identifier: bike.identifier, product_type: bike.product_type, product_model: bike.model, tracker_identifier: (bike as any).trackers?.[0]?.identifier ?? bike.identifier, deposit_amount: 0, requested_deposit_amount: Number.isFinite(depositAmount) ? depositAmount : 0, payment_phone: customer.phone, status: "pending", created_at: now, updated_at: now }).select("id").single();
     if (applicationError || !application) { await admin.from("bikes").update({ customer_id: null, status: "available", updated_at: now }).eq("id", bike.id); return fail("The additional vehicle screening could not be created.", 503, "SCREENING_REGISTRATION_FAILED"); }
-    return response({ customer: { id: customer.id, vehicleId: bike.id, name: customer.full_name, phone: customer.phone, email: customer.email, plateNumber, bike: bike.identifier, vehicleModel: bike.model, tracker: (bike as any).trackers?.[0]?.identifier ?? bike.identifier, payment: "Pending", install: "Pending", requestedDepositAmount: Number.isFinite(depositAmount) ? depositAmount : 0, payableAmount: Number(bike.payable_amount ?? 0), screeningStatus: "pending" } }, 201);
+    return response({ customer: { id: customer.id, applicationId: application.id, vehicleId: bike.id, name: customer.full_name, phone: customer.phone, payerPhone: customer.phone, email: customer.email, plateNumber, bike: bike.identifier, vehicleModel: bike.model, tracker: (bike as any).trackers?.[0]?.identifier ?? bike.identifier, payment: "Pending", install: "Pending", requestedDepositAmount: Number.isFinite(depositAmount) ? depositAmount : 0, payableAmount: Number(bike.payable_amount ?? 0), screeningStatus: "pending" } }, 201);
   }
 
   if (route === "/v1/agent/customers" && (request.method === "GET" || request.method === "POST")) {
@@ -1650,7 +1687,7 @@ Deno.serve(async (request) => {
     if (agentError || !agentProfile || !agentRoles.has(agentProfile.role)) return fail("This account does not have permission to onboard customers.", 403, "PORTAL_ACCESS_DENIED");
     if (!approvedStatuses.has(agentProfile.account_status)) return fail("Your agent account is awaiting administrator approval.", 403, "ACCOUNT_PENDING_APPROVAL");
     if (request.method === "GET") {
-      const { data: applications, error } = await admin.from("screening_applications").select("id,customer_id,full_name,email,phone,payment_phone,national_id,location,product_identifier,product_type,product_model,tracker_identifier,deposit_amount,requested_deposit_amount,status,created_at,customers(email,address,customer_code,plate_number),bikes(id,identifier,model,payable_amount,trackers(identifier,plate_number))").eq("installer_agent_id", user.id).order("created_at", { ascending: false });
+      const { data: applications, error } = await admin.from("screening_applications").select("id,customer_id,full_name,email,phone,payment_phone,national_id,location,product_identifier,product_type,product_model,tracker_identifier,tracker_installed_at,deposit_amount,requested_deposit_amount,status,created_at,customers(email,address,customer_code,plate_number),bikes(id,identifier,model,payable_amount,trackers(identifier,plate_number))").eq("installer_agent_id", user.id).order("created_at", { ascending: false });
       if (error) return fail("Agent customers could not be loaded.", 503, "CUSTOMERS_UNAVAILABLE");
       const customerIds = [...new Set((applications ?? []).map((item: any) => item.customer_id).filter(Boolean))];
       const { data: payments, error: paymentsError } = customerIds.length
@@ -1682,20 +1719,21 @@ Deno.serve(async (request) => {
         const requestedDepositAmount = Number(item.requested_deposit_amount ?? item.deposit_amount ?? 0);
         return {
           id: item.customer_id ?? item.id,
+          applicationId: item.id,
           customerCode: item.customers?.customer_code ?? "",
           vehicleId: item.bikes?.id ?? "",
           name: item.full_name,
           phone: item.phone ?? "",
           email: item.email ?? item.customers?.email ?? "",
           location: item.location ?? item.customers?.address ?? "",
-          payerPhone: processing?.payer_phone ?? confirmed[0]?.payer_phone ?? item.payment_phone ?? "",
+          payerPhone: item.payment_phone ?? processing?.payer_phone ?? confirmed[0]?.payer_phone ?? "",
           idNumber: item.national_id ?? "",
           plateNumber: item.bikes?.trackers?.[0]?.plate_number ?? item.customers?.plate_number ?? item.bikes?.identifier ?? "",
           bike: item.product_identifier ?? item.bikes?.identifier ?? "Pending assignment",
           vehicleModel: item.product_model ?? item.bikes?.model ?? "Assigned bike",
           tracker: item.tracker_identifier ?? item.bikes?.trackers?.[0]?.identifier ?? "Pending",
           kyc: item.status === "approved" ? "Approved" : "Submitted",
-          install: "Pending",
+          install: item.tracker_installed_at ? "Complete" : "Pending",
           payment: amountPaid > 0 ? "Deposit Paid" : processing ? "Processing" : "Pending",
           requestedDepositAmount,
           payableAmount: Number(item.bikes?.payable_amount ?? 0),
@@ -1775,7 +1813,7 @@ Deno.serve(async (request) => {
       await admin.from("customers").delete().eq("id", customer.id);
       return fail("Customer images could not be saved. The registration was not submitted; capture the three images again.", 503, "SCREENING_DOCUMENTS_FAILED");
     }
-    return response({ customer: { id: customer.id, customerCode: customer.customer_code ?? "", vehicleId: bike.id, name, phone, email, idNumber: nationalId, location: location || "Field location", plateNumber: plateNumber || bike.trackers?.[0]?.plate_number || bike.identifier, bike: bike.identifier, vehicleModel: bike.model, tracker: bike.trackers?.[0]?.identifier ?? "Pending", kyc: "Submitted", install: "Pending", payment: "Pending", requestedDepositAmount: depositAmount, payableAmount: Number(bike.payable_amount ?? 0), amount: 0, balance: Number(bike.payable_amount ?? 0), commission: 0, receipt: "", date: now.slice(0, 10), screeningStatus: "pending" } }, 201);
+    return response({ customer: { id: customer.id, applicationId: application.id, customerCode: customer.customer_code ?? "", vehicleId: bike.id, name, phone, payerPhone: phone, email, idNumber: nationalId, location: location || "Field location", plateNumber: plateNumber || bike.trackers?.[0]?.plate_number || bike.identifier, bike: bike.identifier, vehicleModel: bike.model, tracker: bike.trackers?.[0]?.identifier ?? "Pending", kyc: "Submitted", install: "Pending", payment: "Pending", requestedDepositAmount: depositAmount, payableAmount: Number(bike.payable_amount ?? 0), amount: 0, balance: Number(bike.payable_amount ?? 0), commission: 0, receipt: "", date: now.slice(0, 10), screeningStatus: "pending" } }, 201);
   }
 
   if (route === "/v1/agent/assignments" && request.method === "GET") {
@@ -1843,6 +1881,22 @@ Deno.serve(async (request) => {
     });
     return response({ profile, vehicles });
   }
+  if (route === "/v1/customer/payments" && request.method === "DELETE") {
+    const ids = Array.isArray(body.ids) ? [...new Set(body.ids.map(String).map((id: string) => id.trim()).filter(Boolean))].slice(0, 200) : [];
+    if (!ids.length || ids.some((id: string) => !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id))) return fail("Choose valid payment records to hide.", 422, "INVALID_PAYMENT_IDS");
+    const { data: requestPayments, error: requestError } = await admin.from("payment_requests").select("id").eq("owner_id", user.id).in("id", ids);
+    if (requestError) return fail("Payment history could not be updated.", 503, "PAYMENT_HISTORY_UPDATE_FAILED");
+    const { data: profile } = await admin.from("profiles").select("email").eq("id", user.id).maybeSingle();
+    const { data: customer } = profile?.email ? await admin.from("customers").select("id").ilike("email", String(profile.email).trim()).maybeSingle() : { data: null };
+    const { data: businessPayments, error: businessError } = customer?.id
+      ? await admin.from("payments").select("id").eq("customer_id", customer.id).in("id", ids)
+      : { data: [], error: null };
+    if (businessError) return fail("Payment history could not be updated.", 503, "PAYMENT_HISTORY_UPDATE_FAILED");
+    const ownedIds = new Set([...(requestPayments ?? []), ...(businessPayments ?? [])].map((payment: any) => payment.id));
+    if (ownedIds.size !== ids.length) return fail("One or more payment records were not found in your account.", 404, "PAYMENT_NOT_FOUND");
+    const { error } = await admin.from("customer_payment_dismissals").upsert(ids.map((paymentId: string) => ({ user_id: user.id, payment_id: paymentId })), { onConflict: "user_id,payment_id", ignoreDuplicates: true });
+    return error ? fail("Payment history could not be updated.", 503, "PAYMENT_HISTORY_UPDATE_FAILED") : response({ dismissed: ids.length });
+  }
   if (route === "/v1/customer/payments" && request.method === "GET") {
     const { data, error } = await admin.from("payment_requests").select("id,vehicle_id,bike_id,amount,phone,status,provider_reference,created_at,vehicles(registration),bikes(identifier,trackers(plate_number))").eq("owner_id", user.id).order("created_at", { ascending: false }).limit(200);
     if (error) return fail("Payment history is temporarily unavailable.", 503, "PAYMENT_HISTORY_UNAVAILABLE");
@@ -1865,8 +1919,12 @@ Deno.serve(async (request) => {
       receipts.add(receipt);
       paymentRows.push({ id: payment.id, vehicleId: payment.product_id, registration: payment.bikes?.trackers?.[0]?.plate_number ?? payment.bikes?.identifier ?? "Vehicle", date: payment.paid_at ?? payment.created_at, amount: Number(payment.amount), status: ["paid", "completed", "confirmed"].includes(String(payment.status).toLowerCase()) ? "Confirmed" : payment.status, paymentType: String(payment.payment_type ?? "daily").toLowerCase() === "deposit" ? "Deposit" : "M-Pesa", mpesaReceiptNumber: payment.receipt_number || payment.payment_reference || "Confirmed", payerPhone: payment.payer_phone ?? "" });
     }
-    paymentRows.sort((left: any, right: any) => new Date(right.date).getTime() - new Date(left.date).getTime());
-    return response({ payments: paymentRows.slice(0, 200) });
+    const { data: dismissals, error: dismissalsError } = await admin.from("customer_payment_dismissals").select("payment_id").eq("user_id", user.id);
+    if (dismissalsError) return fail("Payment history is temporarily unavailable.", 503, "PAYMENT_HISTORY_UNAVAILABLE");
+    const dismissedIds = new Set((dismissals ?? []).map((item: any) => item.payment_id));
+    const visiblePayments = paymentRows.filter((payment: any) => !dismissedIds.has(payment.id));
+    visiblePayments.sort((left: any, right: any) => new Date(right.date).getTime() - new Date(left.date).getTime());
+    return response({ payments: visiblePayments.slice(0, 200) });
   }
   if (route === "/v1/customer/payments/mpesa" && request.method === "POST") {
     const idempotencyKey = request.headers.get("Idempotency-Key")?.trim(); const amount = Number(body.amount); const phone = String(body.phone ?? "").replace(/\D/g, "");

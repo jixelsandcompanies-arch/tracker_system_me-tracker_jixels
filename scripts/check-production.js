@@ -16,13 +16,14 @@ const files = [
   "src/services/tracking.js",
   "src/components/OpenStreetMap.js",
   "src/components/OpenStreetMap.native.js",
+  "supabase/functions/api/index.ts",
   "src/utils/validation.mjs",
 ];
 
 for (const file of files) {
   parser.parse(fs.readFileSync(path.join(root, file), "utf8"), {
     sourceType: "module",
-    plugins: ["jsx", "optionalChaining"],
+    plugins: ["jsx", "optionalChaining", "typescript"],
   });
 }
 

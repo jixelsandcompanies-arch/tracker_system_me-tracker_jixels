@@ -812,7 +812,10 @@ function CustomerApp({ session, onLogout }) {
         }
       } catch (error) {
         if (!active) return;
-        const accountRemoved = error instanceof ApiError && [401, 403].includes(error.status);
+        // Expired access tokens are refreshed by apiRequest. A transient or
+        // revoked-token response must not silently sign a customer out; only
+        // a missing/inactive customer profile is an account-removal signal.
+        const accountRemoved = error instanceof ApiError && (error.status === 404 || (error.status === 403 && error.code === "ACCOUNT_INACTIVE"));
         if (accountRemoved) {
           clearCustomerRecords();
           await AsyncStorage.multiRemove(["jixels:profile", "jixels:sync-queue"]).catch(() => {});
@@ -1033,13 +1036,26 @@ function CustomerApp({ session, onLogout }) {
 }
 
 export default function App() {
-  const [phase, setPhase] = useState("auth");
+  const [phase, setPhase] = useState("restoring");
   const [applicant, setApplicant] = useState(null);
   const [approvalCode, setApprovalCode] = useState("");
   const [approvedEmail, setApprovedEmail] = useState(null);
   const [displayName, setDisplayName] = useState("");
   const [loginCount, setLoginCount] = useState(0);
   const [session, setSession] = useState(null);
+  useEffect(() => {
+    let active = true;
+    sessionStore.get().then(savedSession => {
+      if (!active || !savedSession) {
+        if (active) setPhase("auth");
+        return;
+      }
+      setSession(savedSession);
+      setDisplayName(savedSession.user?.name || "");
+      setPhase("app");
+    }).catch(() => { if (active) setPhase("auth"); });
+    return () => { active = false; };
+  }, []);
   useEffect(() => {
     let active = true;
     const openApproval = notification => {
@@ -1074,7 +1090,7 @@ export default function App() {
     Alert.alert("Your account has been approved", `Your account has been approved. Your one-time verification code is ${code}. Do not share or expose this OTP.`, [{ text: "View code" }]);
   }, []);
   const backToLogin = useCallback(() => setPhase("auth"), []);
-  return <SafeAreaProvider><AppUpdateNotice />{phase === "auth" && <AuthScreen pendingEmail={applicant?.email} approvedEmail={approvedEmail} onAuthenticated={authenticate} onPendingApproval={data => { setApplicant(data); if (data.otpCode) showApprovalCode(data.otpCode); else setPhase("pending"); }} />}{phase === "pending" && <PendingApproval applicant={applicant} onApproved={showApprovalCode} onEnterCode={() => setPhase("otp")} onBackToLogin={backToLogin} />}{phase === "approval-notice" && <ApprovalNotification applicant={applicant} code={approvalCode} onEnterCode={() => setPhase("otp")} onBack={() => setPhase("auth")} />}{phase === "otp" && <OtpVerification applicant={applicant} notificationCode={approvalCode} initialGate={false} onVerified={() => { if (applicant) setApprovedEmail(applicant.email); setApplicant(null); setApprovalCode(""); Notifications.clearLastNotificationResponseAsync().catch(() => {}); setPhase("auth"); }} onBack={applicant ? () => setPhase("pending") : undefined} />}{phase === "permissions" && <PermissionGate onComplete={() => setPhase("gps")} />}{phase === "gps" && <GpsLaunch name={displayName} returning={loginCount > 0} onComplete={() => { setLoginCount(count => count + 1); setPhase("app"); }} />}{phase === "app" && session && <CustomerApp session={session} onLogout={logout} />}</SafeAreaProvider>;
+  return <SafeAreaProvider><AppUpdateNotice />{phase === "restoring" && <View style={{ flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: colors.blueDark }}><ActivityIndicator color={colors.white} size="large" /></View>}{phase === "auth" && <AuthScreen pendingEmail={applicant?.email} approvedEmail={approvedEmail} onAuthenticated={authenticate} onPendingApproval={data => { setApplicant(data); if (data.otpCode) showApprovalCode(data.otpCode); else setPhase("pending"); }} />}{phase === "pending" && <PendingApproval applicant={applicant} onApproved={showApprovalCode} onEnterCode={() => setPhase("otp")} onBackToLogin={backToLogin} />}{phase === "approval-notice" && <ApprovalNotification applicant={applicant} code={approvalCode} onEnterCode={() => setPhase("otp")} onBack={() => setPhase("auth")} />}{phase === "otp" && <OtpVerification applicant={applicant} notificationCode={approvalCode} initialGate={false} onVerified={() => { if (applicant) setApprovedEmail(applicant.email); setApplicant(null); setApprovalCode(""); Notifications.clearLastNotificationResponseAsync().catch(() => {}); setPhase("auth"); }} onBack={applicant ? () => setPhase("pending") : undefined} />}{phase === "permissions" && <PermissionGate onComplete={() => setPhase("gps")} />}{phase === "gps" && <GpsLaunch name={displayName} returning={loginCount > 0} onComplete={() => { setLoginCount(count => count + 1); setPhase("app"); }} />}{phase === "app" && session && <CustomerApp session={session} onLogout={logout} />}</SafeAreaProvider>;
 }
 
 const styles = StyleSheet.create({

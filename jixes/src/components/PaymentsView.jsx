@@ -204,7 +204,8 @@ export default function PaymentsView() {
                     </td>
                     <td>
                       {money(
-                        payment.deposit_amount || payment.credit_amount,
+                        payment.deposit_amount || payment.credit_amount ||
+                          (String(payment.payment_type || "").toLowerCase() === "deposit" ? payment.amount : 0),
                         payment.currency,
                       )}
                     </td>

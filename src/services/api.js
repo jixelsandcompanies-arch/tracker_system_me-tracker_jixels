@@ -1,4 +1,5 @@
 import { config, requireApiUrl } from "../config";
+import { sessionStore } from "./session";
 
 export class ApiError extends Error {
   constructor(message, status = 0, code = null, details = null) {
@@ -10,7 +11,7 @@ export class ApiError extends Error {
   }
 }
 
-export async function apiRequest(path, { method = "GET", token, body, timeoutMs = config.requestTimeoutMs, signal, headers = {} } = {}) {
+export async function apiRequest(path, { method = "GET", token, body, timeoutMs = config.requestTimeoutMs, signal, headers = {}, retryAuth = true } = {}) {
   if (!path.startsWith("/")) throw new ApiError("Invalid API path.", 0, "INVALID_PATH");
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -34,6 +35,10 @@ export async function apiRequest(path, { method = "GET", token, body, timeoutMs 
     if (response.status !== 204) {
       if (contentType.includes("application/json")) payload = await response.json().catch(() => null);
       else await response.text().catch(() => "");
+    }
+    if (!response.ok && response.status === 401 && token && retryAuth) {
+      const refreshedToken = await sessionStore.refreshForToken(token).catch(() => null);
+      if (refreshedToken && refreshedToken !== token) return apiRequest(path, { method, token: refreshedToken, body, timeoutMs, signal, headers, retryAuth: false });
     }
     if (!response.ok) throw new ApiError(payload?.message ?? "The request could not be completed.", response.status, payload?.code, payload?.details);
     return payload;

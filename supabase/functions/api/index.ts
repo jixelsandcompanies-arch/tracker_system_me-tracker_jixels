@@ -395,6 +395,19 @@ async function recordPaymentNotices(admin: SupabaseClient, paymentId: string, ow
   return detail;
 }
 
+async function materializeSaleKeepingDueDate(admin: SupabaseClient, applicationId: string, customerId: string) {
+  const { data: account } = await admin.from("finance_accounts").select("external_id,due_at")
+    .eq("customer_id", customerId).filter("data->>applicationId", "eq", applicationId).maybeSingle();
+  const { error } = await admin.rpc("materialize_tracker_sale", { p_application_id: applicationId });
+  if (error) return error;
+  if (account?.due_at) {
+    const { error: dueDateError } = await admin.from("finance_accounts").update({ due_at: account.due_at })
+      .eq("external_id", account.external_id);
+    if (dueDateError) console.error("Finance account due date restore failed", applicationId, dueDateError);
+  }
+  return null;
+}
+
 async function syncCustomerPaymentToPortals(admin: SupabaseClient, paymentRequestId: string, receipt: string, paidAt: string) {
   const { data: payment, error: paymentError } = await admin.from("payment_requests")
     .select("id,owner_id,vehicle_id,bike_id,amount,phone,status,provider_reference")
@@ -459,7 +472,7 @@ async function syncCustomerPaymentToPortals(admin: SupabaseClient, paymentReques
   if (customerId && productId) {
     const { data: application } = await admin.from("screening_applications").select("id,status").eq("customer_id", customerId).eq("product_id", productId).maybeSingle();
     if (application?.status === "approved") {
-      const { error } = await admin.rpc("materialize_tracker_sale", { p_application_id: application.id });
+      const error = await materializeSaleKeepingDueDate(admin, application.id, customerId);
       materialized = !error;
       if (error) console.error("Finance account refresh failed", payment.id, error);
     }
@@ -946,7 +959,7 @@ Deno.serve(async (request) => {
               .maybeSingle();
             if (approvedApplicationError) console.error("Finance payment materialization lookup failed", approvedApplicationError);
             else if (approvedApplication?.status === "approved") {
-              const { error: financeRefreshError } = await admin.rpc("materialize_tracker_sale", { p_application_id: approvedApplication.id });
+              const financeRefreshError = await materializeSaleKeepingDueDate(admin, approvedApplication.id, promptedPayment.customer_id);
               if (financeRefreshError) console.error("Finance payment materialization failed", financeRefreshError);
             }
           }
@@ -1110,6 +1123,21 @@ Deno.serve(async (request) => {
     if (!usedCode) return fail("The approval code has expired or was already used.", 401, "APPROVAL_CODE_EXPIRED");
     await admin.rpc("clear_login_failures", { p_account_key: otpAttemptKey });
     return response({ verified: true, message: "Account verified. Sign in with your registered email and password." });
+  }
+
+  if (route === "/v1/auth/refresh" && request.method === "POST") {
+    const refreshToken = String(body.refreshToken ?? "").trim();
+    if (!refreshToken) return fail("A refresh token is required.", 422, "REFRESH_TOKEN_REQUIRED");
+    const { data, error } = await client.auth.refreshSession({ refresh_token: refreshToken });
+    if (error || !data.session || !data.user) return fail("Your session has expired. Please sign in again.", 401, "SESSION_EXPIRED");
+    const { data: profile, error: profileError } = await admin.from("profiles").select("full_name,email,phone,role,account_status").eq("id", data.user.id).maybeSingle();
+    if (profileError || !profile || profile.role !== "customer" || !approvedStatuses.has(profile.account_status)) return fail("This customer account is not active.", 403, "ACCOUNT_INACTIVE");
+    return response({
+      accessToken: data.session.access_token,
+      refreshToken: data.session.refresh_token,
+      expiresAt: new Date(data.session.expires_at! * 1000).toISOString(),
+      user: { id: data.user.id, email: data.user.email, name: profile.full_name, phone: profile.phone, role: profile.role },
+    });
   }
 
   if (route === "/v1/mpesa/c2b/register" && request.method === "POST") {
@@ -1816,7 +1844,23 @@ Deno.serve(async (request) => {
   if (route === "/v1/customer/payments" && request.method === "GET") {
     const { data, error } = await admin.from("payment_requests").select("id,vehicle_id,bike_id,amount,phone,status,provider_reference,created_at,vehicles(registration),bikes(identifier,trackers(plate_number))").eq("owner_id", user.id).order("created_at", { ascending: false }).limit(200);
     if (error) return fail("Payment history is temporarily unavailable.", 503, "PAYMENT_HISTORY_UNAVAILABLE");
-    return response({ payments: (data ?? []).map((payment: any) => ({ id: payment.id, vehicleId: payment.vehicle_id ?? payment.bike_id, registration: payment.vehicles?.registration ?? payment.bikes?.trackers?.[0]?.plate_number ?? payment.bikes?.identifier ?? "Vehicle", date: payment.created_at, amount: Number(payment.amount), status: payment.status === "paid" ? "Confirmed" : payment.status, mpesaReceiptNumber: payment.status === "paid" ? payment.provider_reference ?? "Confirmed" : "Pending", payerPhone: payment.phone })) });
+    const { data: profile } = await admin.from("profiles").select("email").eq("id", user.id).maybeSingle();
+    const { data: customer } = profile?.email ? await admin.from("customers").select("id").ilike("email", String(profile.email).trim()).maybeSingle() : { data: null };
+    const bikeIds = [...new Set((data ?? []).map((payment: any) => payment.bike_id).filter(Boolean))];
+    const { data: businessPayments, error: businessPaymentError } = customer?.id && bikeIds.length
+      ? await admin.from("payments").select("id,product_id,amount,status,receipt_number,payment_reference,payment_type,paid_at,created_at,payer_phone,bikes(identifier,trackers(plate_number))").eq("customer_id", customer.id).in("product_id", bikeIds).order("created_at", { ascending: false }).limit(200)
+      : { data: [], error: null };
+    if (businessPaymentError) return fail("Payment history is temporarily unavailable.", 503, "PAYMENT_HISTORY_UNAVAILABLE");
+    const paymentRows: Array<Record<string, unknown>> = (data ?? []).map((payment: any) => ({ id: payment.id, vehicleId: payment.vehicle_id ?? payment.bike_id, registration: payment.vehicles?.registration ?? payment.bikes?.trackers?.[0]?.plate_number ?? payment.bikes?.identifier ?? "Vehicle", date: payment.created_at, amount: Number(payment.amount), status: payment.status === "paid" ? "Confirmed" : payment.status, paymentType: "M-Pesa", mpesaReceiptNumber: payment.status === "paid" ? payment.provider_reference ?? "Confirmed" : "Pending", payerPhone: payment.phone }));
+    const receipts = new Set(paymentRows.filter((payment: any) => payment.status === "Confirmed").map((payment: any) => payment.mpesaReceiptNumber));
+    for (const payment of businessPayments ?? []) {
+      const receipt = payment.receipt_number || payment.payment_reference || payment.id;
+      if (receipts.has(receipt)) continue;
+      receipts.add(receipt);
+      paymentRows.push({ id: payment.id, vehicleId: payment.product_id, registration: payment.bikes?.trackers?.[0]?.plate_number ?? payment.bikes?.identifier ?? "Vehicle", date: payment.paid_at ?? payment.created_at, amount: Number(payment.amount), status: ["paid", "completed", "confirmed"].includes(String(payment.status).toLowerCase()) ? "Confirmed" : payment.status, paymentType: String(payment.payment_type ?? "daily").toLowerCase() === "deposit" ? "Deposit" : "M-Pesa", mpesaReceiptNumber: payment.receipt_number || payment.payment_reference || "Confirmed", payerPhone: payment.payer_phone ?? "" });
+    }
+    paymentRows.sort((left: any, right: any) => new Date(right.date).getTime() - new Date(left.date).getTime());
+    return response({ payments: paymentRows.slice(0, 200) });
   }
   if (route === "/v1/customer/payments/mpesa" && request.method === "POST") {
     const idempotencyKey = request.headers.get("Idempotency-Key")?.trim(); const amount = Number(body.amount); const phone = String(body.phone ?? "").replace(/\D/g, "");

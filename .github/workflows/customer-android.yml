@@ -49,22 +49,22 @@ jobs:
           "$BUILD_TOOLS/apksigner" verify --print-certs "$APK" | tee certificate.txt
           grep -qi 'a57c3d1f9900e351e2c40586e0fc6edbd5972f325b69ed537005d176074c50d0' certificate.txt
           "$BUILD_TOOLS/aapt" dump badging "$APK" | head -1 | tee package.txt
-          grep -q "name='com.jixelstechnologies.customer' versionCode='12' versionName='1.0.10'" package.txt
+          grep -q "name='com.jixelstechnologies.customer' versionCode='13' versionName='1.0.11'" package.txt
           "$BUILD_TOOLS/aapt" dump xmltree "$APK" AndroidManifest.xml > manifest.txt
           grep -q 'expo-channel-name' manifest.txt
           grep -q 'production' manifest.txt
-          cp "$APK" Jixels-Customer-1.0.10.apk
-          sha256sum Jixels-Customer-1.0.10.apk > SHA256SUMS.txt
+          cp "$APK" Jixels-Customer-1.0.11.apk
+          sha256sum Jixels-Customer-1.0.11.apk > SHA256SUMS.txt
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: Jixels-Customer-1.0.10
+          name: Jixels-Customer-1.0.11
           path: |
-            Jixels-Customer-1.0.10.apk
+            Jixels-Customer-1.0.11.apk
             SHA256SUMS.txt
           retention-days: 30
       - name: Publish download
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          TAG="customer-1.0.10-build-${GITHUB_RUN_NUMBER}"
-          gh release create "$TAG" Jixels-Customer-1.0.10.apk SHA256SUMS.txt --target "$GITHUB_SHA" --title "Jixels Customer 1.0.10" --notes "Customer due-date and map session reliability updates. Signed with the existing customer Android signing key."
+          TAG="customer-1.0.11-build-${GITHUB_RUN_NUMBER}"
+          gh release create "$TAG" Jixels-Customer-1.0.11.apk SHA256SUMS.txt --target "$GITHUB_SHA" --title "Jixels Customer 1.0.11" --notes "Customer due-date and map session reliability updates. Signed with the existing customer Android signing key."

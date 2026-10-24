@@ -1695,7 +1695,9 @@ Deno.serve(async (request) => {
     const bikeId = String(body.bikeId ?? "").trim();
     const plateNumber = String(body.plateNumber ?? "").trim().toUpperCase();
     const depositAmount = Number(body.depositAmount ?? 0);
+    const dueDate = String(body.dueDate ?? "").trim();
     if (!bikeId || !plateNumber) return fail("Choose an available tracker and enter the vehicle plate number.", 422, "INVALID_VEHICLE_ASSIGNMENT");
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(dueDate) || Number.isNaN(Date.parse(`${dueDate}T00:00:00Z`))) return fail("Choose a valid first installment due date.", 422, "INVALID_DUE_DATE");
     const { data: customer } = await admin.from("customers").select("id,full_name,email,phone,national_id,address").eq("id", customerId).maybeSingle();
     const { data: bike } = await admin.from("bikes").select("id,identifier,model,product_type,payable_amount,trackers(identifier)").eq("id", bikeId).eq("assigned_agent_id", user.id).is("customer_id", null).maybeSingle();
     if (!customer || !bike) return fail("The customer or available tracker could not be found.", 404, "ASSIGNMENT_NOT_FOUND");
@@ -1704,9 +1706,9 @@ Deno.serve(async (request) => {
     if (reserveError || !reservedBike) return fail("That tracker is no longer available.", 409, "TRACKER_ALREADY_SOLD");
     const { error: trackerError } = await admin.from("trackers").update({ plate_number: plateNumber, updated_at: now }).eq("bike_id", bike.id);
     if (trackerError) { await admin.from("bikes").update({ customer_id: null, status: "available", updated_at: now }).eq("id", bike.id); return fail("The vehicle plate could not be saved.", 503, "PLATE_SAVE_FAILED"); }
-    const { data: application, error: applicationError } = await admin.from("screening_applications").insert({ customer_id: customer.id, product_id: bike.id, installer_agent_id: user.id, full_name: customer.full_name, email: customer.email, phone: customer.phone, national_id: customer.national_id, location: customer.address, product_identifier: bike.identifier, product_type: bike.product_type, product_model: bike.model, tracker_identifier: (bike as any).trackers?.[0]?.identifier ?? bike.identifier, deposit_amount: 0, requested_deposit_amount: Number.isFinite(depositAmount) ? depositAmount : 0, payment_phone: customer.phone, status: "pending", created_at: now, updated_at: now }).select("id").single();
+    const { data: application, error: applicationError } = await admin.from("screening_applications").insert({ customer_id: customer.id, product_id: bike.id, installer_agent_id: user.id, full_name: customer.full_name, email: customer.email, phone: customer.phone, national_id: customer.national_id, location: customer.address, product_identifier: bike.identifier, product_type: bike.product_type, product_model: bike.model, tracker_identifier: (bike as any).trackers?.[0]?.identifier ?? bike.identifier, due_date: dueDate, deposit_amount: 0, requested_deposit_amount: Number.isFinite(depositAmount) ? depositAmount : 0, payment_phone: customer.phone, status: "pending", created_at: now, updated_at: now }).select("id").single();
     if (applicationError || !application) { await admin.from("bikes").update({ customer_id: null, status: "available", updated_at: now }).eq("id", bike.id); return fail("The additional vehicle screening could not be created.", 503, "SCREENING_REGISTRATION_FAILED"); }
-    return response({ customer: { id: customer.id, applicationId: application.id, vehicleId: bike.id, name: customer.full_name, phone: customer.phone, payerPhone: customer.phone, email: customer.email, plateNumber, bike: bike.identifier, vehicleModel: bike.model, tracker: (bike as any).trackers?.[0]?.identifier ?? bike.identifier, payment: "Pending", install: "Pending", requestedDepositAmount: Number.isFinite(depositAmount) ? depositAmount : 0, payableAmount: Number(bike.payable_amount ?? 0), screeningStatus: "pending" } }, 201);
+     return response({ customer: { id: customer.id, applicationId: application.id, vehicleId: bike.id, name: customer.full_name, phone: customer.phone, payerPhone: customer.phone, email: customer.email, plateNumber, bike: bike.identifier, vehicleModel: bike.model, tracker: (bike as any).trackers?.[0]?.identifier ?? bike.identifier, payment: "Pending", install: "Pending", dueDate, requestedDepositAmount: Number.isFinite(depositAmount) ? depositAmount : 0, payableAmount: Number(bike.payable_amount ?? 0), screeningStatus: "pending" } }, 201);
   }
 
   if (route === "/v1/agent/customers" && (request.method === "GET" || request.method === "POST")) {
@@ -1714,7 +1716,7 @@ Deno.serve(async (request) => {
     if (agentError || !agentProfile || !agentRoles.has(agentProfile.role)) return fail("This account does not have permission to onboard customers.", 403, "PORTAL_ACCESS_DENIED");
     if (!approvedStatuses.has(agentProfile.account_status)) return fail("Your agent account is awaiting administrator approval.", 403, "ACCOUNT_PENDING_APPROVAL");
     if (request.method === "GET") {
-      const { data: applications, error } = await admin.from("screening_applications").select("id,customer_id,full_name,email,phone,payment_phone,national_id,location,product_identifier,product_type,product_model,tracker_identifier,tracker_installed_at,deposit_amount,requested_deposit_amount,status,created_at,customers(email,address,customer_code,plate_number),bikes(id,identifier,model,payable_amount,trackers(identifier,plate_number))").eq("installer_agent_id", user.id).order("created_at", { ascending: false });
+    const { data: applications, error } = await admin.from("screening_applications").select("id,customer_id,full_name,email,phone,payment_phone,national_id,location,product_identifier,product_type,product_model,tracker_identifier,tracker_installed_at,deposit_amount,requested_deposit_amount,due_date,status,created_at,customers(email,address,customer_code,plate_number),bikes(id,identifier,model,payable_amount,trackers(identifier,plate_number))").eq("installer_agent_id", user.id).order("created_at", { ascending: false });
       if (error) return fail("Agent customers could not be loaded.", 503, "CUSTOMERS_UNAVAILABLE");
       const customerIds = [...new Set((applications ?? []).map((item: any) => item.customer_id).filter(Boolean))];
     const { data: payments, error: paymentsError } = customerIds.length
@@ -1777,6 +1779,7 @@ Deno.serve(async (request) => {
           receipt: confirmed[0]?.receipt_number ?? processing?.payment_reference ?? "",
           date: item.created_at?.slice(0, 10) ?? "",
           screeningStatus: item.status,
+          dueDate: item.due_date ?? null,
         };
       }) });
     }
@@ -1788,7 +1791,9 @@ Deno.serve(async (request) => {
     const plateNumber = String(body.plateNumber ?? "").trim().toUpperCase();
     const bikeId = String(body.bikeId ?? "").trim();
     const depositAmount = Number(body.depositAmount ?? 0);
+    const dueDate = String(body.dueDate ?? "").trim();
     if (!name || !phone || !email || !nationalId || !bikeId || !body.customerPhoto || !body.idFrontPhoto || !body.idBackPhoto) return fail("Enter the customer name, phone number, email address, national ID, assigned bike, and all three images.", 422, "INVALID_CUSTOMER_REGISTRATION");
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(dueDate) || Number.isNaN(Date.parse(`${dueDate}T00:00:00Z`))) return fail("Choose a valid first installment due date.", 422, "INVALID_DUE_DATE");
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return fail("Enter a valid customer email address.", 422, "INVALID_EMAIL");
     if (!Number.isFinite(depositAmount) || depositAmount < 0) return fail("Enter a valid customer deposit amount.", 422, "INVALID_DEPOSIT");
     const { data: bike, error: bikeError } = await admin.from("bikes").select("id,identifier,model,product_type,payable_amount,status,customer_id,trackers(identifier,plate_number)").eq("id", bikeId).eq("assigned_agent_id", user.id).maybeSingle();
@@ -1822,7 +1827,7 @@ Deno.serve(async (request) => {
       }
     }
 
-    const { data: application, error: applicationError } = await admin.from("screening_applications").insert({ customer_id: customer.id, product_id: bike.id, installer_agent_id: user.id, full_name: name, email, phone, national_id: nationalId, location: location || null, product_identifier: bike.identifier, product_type: bike.product_type, product_model: bike.model, tracker_identifier: bike.trackers?.[0]?.identifier ?? bike.identifier, deposit_amount: 0, requested_deposit_amount: depositAmount, payment_phone: phone, status: "pending", created_at: now, updated_at: now }).select("id").single();
+    const { data: application, error: applicationError } = await admin.from("screening_applications").insert({ customer_id: customer.id, product_id: bike.id, installer_agent_id: user.id, full_name: name, email, phone, national_id: nationalId, location: location || null, product_identifier: bike.identifier, product_type: bike.product_type, product_model: bike.model, tracker_identifier: bike.trackers?.[0]?.identifier ?? bike.identifier, due_date: dueDate, deposit_amount: 0, requested_deposit_amount: depositAmount, payment_phone: phone, status: "pending", created_at: now, updated_at: now }).select("id").single();
     if (applicationError || !application) {
       await admin.from("bikes").update({ customer_id: null, status: "available", updated_at: now }).eq("id", bike.id).eq("customer_id", customer.id);
       await admin.from("customers").delete().eq("id", customer.id);
@@ -1847,7 +1852,7 @@ Deno.serve(async (request) => {
       await admin.from("customers").delete().eq("id", customer.id);
       return fail("Customer images could not be saved. The registration was not submitted; capture the three images again.", 503, "SCREENING_DOCUMENTS_FAILED");
     }
-    return response({ customer: { id: customer.id, applicationId: application.id, customerCode: customer.customer_code ?? "", vehicleId: bike.id, name, phone, payerPhone: phone, email, idNumber: nationalId, location: location || "Field location", plateNumber: plateNumber || bike.trackers?.[0]?.plate_number || bike.identifier, bike: bike.identifier, vehicleModel: bike.model, tracker: bike.trackers?.[0]?.identifier ?? "Pending", kyc: "Submitted", install: "Pending", payment: "Pending", requestedDepositAmount: depositAmount, payableAmount: Number(bike.payable_amount ?? 0), amount: 0, balance: Number(bike.payable_amount ?? 0), commission: 0, receipt: "", date: now.slice(0, 10), screeningStatus: "pending" } }, 201);
+    return response({ customer: { id: customer.id, applicationId: application.id, customerCode: customer.customer_code ?? "", vehicleId: bike.id, name, phone, payerPhone: phone, email, idNumber: nationalId, location: location || "Field location", plateNumber: plateNumber || bike.trackers?.[0]?.plate_number || bike.identifier, bike: bike.identifier, vehicleModel: bike.model, tracker: bike.trackers?.[0]?.identifier ?? "Pending", kyc: "Submitted", install: "Pending", payment: "Pending", requestedDepositAmount: depositAmount, dueDate, payableAmount: Number(bike.payable_amount ?? 0), amount: 0, balance: Number(bike.payable_amount ?? 0), commission: 0, receipt: "", date: now.slice(0, 10), screeningStatus: "pending" } }, 201);
   }
 
   if (route === "/v1/agent/assignments" && request.method === "GET") {

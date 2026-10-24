@@ -13,7 +13,7 @@ assert.doesNotMatch(app, /error\.status === 404 \|\|/);
 assert.match(nativeMap, /react-native-webview/);
 assert.match(nativeMap, /openstreetmap\.org/);
 assert.match(appConfig, /"expo-channel-name": "production"/);
-assert.match(appConfig, /version: "1\.0\.9"/);
+assert.match(appConfig, /version: "1\.0\.10"/);
 assert.match(app, /const navigate = key =>/);
 assert.match(app, /setScreen\(key\)/);
 assert.match(app, /setSession\(null\)/);

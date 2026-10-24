@@ -636,8 +636,10 @@ async function registerPortalUser(client: SupabaseClient, admin: SupabaseClient,
   const email = String(body.email ?? "").trim().toLowerCase();
   const password = String(body.password ?? "");
   const fullName = String(body.name ?? body.fullName ?? "").trim();
-  const phone = String(body.phone ?? "").trim();
+  const rawPhone = String(body.phone ?? "").trim();
+  const phone = role === "agent" ? normalizeKenyanPhone(rawPhone) : rawPhone;
   if (!email || !password || !fullName) return fail("Complete your name, email, and password.", 422, "INVALID_REGISTRATION");
+  if (role === "agent" && !phone) return fail("Enter a valid Kenyan mobile number, such as 0712 345 678.", 422, "INVALID_AGENT_PHONE");
   // Only customers already onboarded in Operations may request app access.
   if (role === "customer") {
     const eligibility = await existingCustomerRecord(admin, email);

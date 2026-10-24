@@ -1,4 +1,7 @@
 import { apiRequest } from "./api";
+import { normalizeKenyanAgentPhone } from "../utils/kenyanPhone";
+
+export { normalizeKenyanAgentPhone };
 
 function normalizeSession(response) {
   const session = response?.session ?? response;

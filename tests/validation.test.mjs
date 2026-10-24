@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { dedupeById, isStrongPassword, isValidEmail, isValidOtp, normalizeEmail, normalizeKenyanMpesaPhone, upsertById } from "../src/utils/validation.mjs";
 import { normalizeProviderTrackerStatus, trackerState } from "../src/utils/trackerStatus.mjs";
+import { normalizeKenyanAgentPhone } from "../Jixels angets/src/utils/kenyanPhone.js";
 
 const tests = [];
 const test = (name, run) => tests.push({ name, run });
@@ -30,6 +31,15 @@ test("Kenyan M-Pesa numbers normalize safely", () => {
   assert.equal(normalizeKenyanMpesaPhone("712345678"), "254712345678");
   assert.equal(normalizeKenyanMpesaPhone("254112345678"), "254112345678");
   assert.equal(normalizeKenyanMpesaPhone("+1 202 555 0100"), null);
+});
+
+test("agent registration accepts common Kenyan phone formats", () => {
+  assert.equal(normalizeKenyanAgentPhone("0712 345 678"), "254712345678");
+  assert.equal(normalizeKenyanAgentPhone("0112-345-678"), "254112345678");
+  assert.equal(normalizeKenyanAgentPhone("+254 712 345 678"), "254712345678");
+  assert.equal(normalizeKenyanAgentPhone("254112345678"), "254112345678");
+  assert.equal(normalizeKenyanAgentPhone("0712"), null);
+  assert.equal(normalizeKenyanAgentPhone("+1 202 555 0100"), null);
 });
 
 test("stable IDs prevent duplicate production records", () => {

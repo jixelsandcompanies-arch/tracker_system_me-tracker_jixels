@@ -27,7 +27,7 @@ import * as ImagePicker from "expo-image-picker";
 import * as Network from "expo-network";
 import * as Notifications from "expo-notifications";
 import { ApiError } from "./src/services/api";
-import { authApi } from "./src/services/auth";
+import { authApi, normalizeKenyanAgentPhone } from "./src/services/auth";
 
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
@@ -329,6 +329,8 @@ function agentAccessMessage(error) {
 }
 
 function Login({ onLogin }) {
+  const { width: viewportWidth, height: viewportHeight } = useWindowDimensions();
+  const compactAuth = viewportHeight < 700 || viewportWidth < 360;
   const [mode, setMode] = useState("login");
   const [resettingPassword, setResettingPassword] = useState(false);
   const [name, setName] = useState("");
@@ -355,13 +357,15 @@ function Login({ onLogin }) {
       return;
     }
     if (mode === "register") {
-      if (!name.trim() || !cleanEmail || !phone.trim() || !password.trim()) return Alert.alert("Missing details", "Complete your name, email, phone and password.");
+      if (!name.trim() || !cleanEmail || !password.trim()) return Alert.alert("Missing details", "Complete your name, email, and password.");
       if (!cleanEmail.includes("@")) return Alert.alert("Check email", "Enter a valid agent email address.");
+      const normalizedPhone = normalizeKenyanAgentPhone(phone);
+      if (!normalizedPhone) return Alert.alert("Check phone number", "Enter a Kenyan mobile number such as 0712 345 678, 0112 345 678, or +254 712 345 678.");
       if (password.length < 8) return Alert.alert("Password too short", "Use at least 8 characters.");
       if (password !== confirm) return Alert.alert("Check password", "Passwords do not match.");
       setBusy(true);
       try {
-        await authApi.register({ name: name.trim(), email: cleanEmail, phone: phone.trim(), password });
+        await authApi.register({ name: name.trim(), email: cleanEmail, phone: normalizedPhone, password });
         setBusy(false);
         setMode("login");
         Alert.alert("Registration received", "Your agent account is pending. It now appears in Admin under Staff Accounts. Jixels Admin must approve it before you can sign in.");
@@ -393,19 +397,19 @@ function Login({ onLogin }) {
     style={styles.auth}
   >
     <StatusBar style="light" />
-    <View style={styles.authHero}>
-      <Image source={require("./assets/jixels-logo.png")} resizeMode="contain" style={styles.authLogo} />
-      <Text style={styles.authTitle}>Jixels Agent Trackings</Text>
-      <Text style={styles.authText}>{resettingPassword ? "Enter your approved agent email and Jixels admin will send secure recovery instructions." : mode === "login" ? "Sign in to manage customer onboarding, tracker installation, KYC checks and payment follow-up." : "Create an agent profile for review before field access is opened."}</Text>
+    <View style={[styles.authHero, compactAuth && styles.authHeroCompact]}>
+      <Image source={require("./assets/jixels-logo.png")} resizeMode="contain" style={[styles.authLogo, compactAuth && styles.authLogoCompact]} />
+      <Text numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.78} style={[styles.authTitle, compactAuth && styles.authTitleCompact]}>Jixels Agent Trackings</Text>
+      <Text style={[styles.authText, compactAuth && styles.authTextCompact]}>{resettingPassword ? "Enter your approved agent email and Jixels admin will send secure recovery instructions." : mode === "login" ? "Sign in to manage customer onboarding, tracker installation, KYC checks and payment follow-up." : "Create an agent profile for review before field access is opened."}</Text>
     </View>
-    <View style={styles.authCard}>
+    <View style={[styles.authCard, compactAuth && styles.authCardCompact]}>
       <Text style={styles.eyebrow}>AGENT APP</Text>
       <Text style={styles.cardTitle}>{resettingPassword ? "Reset password" : mode === "login" ? "Welcome back" : "Register agent"}</Text>
       {!resettingPassword && <View style={styles.authTabs}>
         <Pressable onPress={() => setMode("login")} style={[styles.authTab, mode === "login" && styles.authTabActive]}><Text style={[styles.authTabText, mode === "login" && styles.authTabTextActive]}>Login</Text></Pressable>
         <Pressable onPress={() => setMode("register")} style={[styles.authTab, mode === "register" && styles.authTabActive]}><Text style={[styles.authTabText, mode === "register" && styles.authTabTextActive]}>Register</Text></Pressable>
       </View>}
-      <ScrollView keyboardDismissMode="on-drag" keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false} contentContainerStyle={styles.authForm}>
+      <ScrollView style={styles.authScroll} keyboardDismissMode="on-drag" keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false} contentContainerStyle={[styles.authForm, compactAuth && styles.authFormCompact]}>
         {resettingPassword ? <>
           <View style={styles.resetIcon}><Ionicons name="key-outline" color={colors.blue} size={26} /></View>
           <Text style={styles.resetCopy}>Recovery is handled through approved Jixels admin records.</Text>
@@ -413,7 +417,7 @@ function Login({ onLogin }) {
         </> : <>
           {mode === "register" && <Field label="Full name" value={name} onChangeText={setName} />}
           <Field label="Email address" value={email} onChangeText={setEmail} keyboardType="email-address" />
-          {mode === "register" && <Field label="Phone number" value={phone} onChangeText={setPhone} keyboardType="phone-pad" />}
+          {mode === "register" && <Field label="Kenyan phone number" value={phone} onChangeText={setPhone} placeholder="0712 345 678 or +254 712 345 678" keyboardType="phone-pad" />}
           <Field label="Password" value={password} onChangeText={setPassword} secureTextEntry />
           {mode === "register" && <Field label="Confirm password" value={confirm} onChangeText={setConfirm} secureTextEntry />}
           {mode === "login" && <Pressable onPress={() => setResettingPassword(true)}><Text style={styles.forgotText}>Forgot password?</Text></Pressable>}
@@ -1259,16 +1263,23 @@ const styles = StyleSheet.create({
   skeletonRow: { width: "100%", height: 82, borderRadius: 16 },
   auth: { flex: 1, backgroundColor: colors.blueDark },
   authHero: { paddingTop: 58, paddingHorizontal: 22, paddingBottom: 26 },
+  authHeroCompact: { paddingTop: 22, paddingBottom: 12 },
   authLogo: { width: 118, height: 58, backgroundColor: colors.white, borderRadius: 16 },
+  authLogoCompact: { width: 92, height: 44, borderRadius: 13 },
   authTitle: { marginTop: 28, color: colors.white, fontSize: 34, fontWeight: "900" },
+  authTitleCompact: { marginTop: 12, fontSize: 23 },
   authText: { marginTop: 8, color: "#CFE2F3", fontSize: 13, lineHeight: 20 },
+  authTextCompact: { marginTop: 4, fontSize: 11, lineHeight: 15 },
   authCard: { flex: 1, borderTopLeftRadius: 30, borderTopRightRadius: 30, backgroundColor: colors.white, padding: 22, gap: 14 },
+  authCardCompact: { paddingHorizontal: 16, paddingTop: 14, paddingBottom: 10, gap: 9 },
   authTabs: { minHeight: 44, borderRadius: 14, backgroundColor: colors.surface, padding: 4, flexDirection: "row", gap: 5 },
   authTab: { flex: 1, borderRadius: 11, alignItems: "center", justifyContent: "center" },
   authTabActive: { backgroundColor: colors.blue },
   authTabText: { color: colors.muted, fontSize: 12, fontWeight: "900" },
   authTabTextActive: { color: colors.white },
+  authScroll: { flex: 1, minHeight: 0 },
   authForm: { flexGrow: 1, gap: 13, paddingBottom: 28 },
+  authFormCompact: { gap: 9, paddingBottom: 16 },
   resetIcon: { width: 54, height: 54, borderRadius: 18, backgroundColor: colors.bluePale, alignItems: "center", justifyContent: "center", alignSelf: "center" },
   resetCopy: { color: colors.muted, fontSize: 12, lineHeight: 18, textAlign: "center", fontWeight: "700" },
   forgotText: { color: colors.blue, fontSize: 12, fontWeight: "900", textAlign: "right" },

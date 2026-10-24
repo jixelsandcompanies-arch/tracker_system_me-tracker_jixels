@@ -4,7 +4,7 @@ import ts from "typescript";
 
 const source = fs.readFileSync(new URL("../supabase/functions/api/index.ts", import.meta.url), "utf8");
 const ast = ts.createSourceFile("api.ts", source, ts.ScriptTarget.Latest, true);
-const functions = ["existingCustomerRecord", "registerPortalUser", "portalSignIn", "accountStatus"];
+const functions = ["normalizeKenyanPhone", "existingCustomerRecord", "registerPortalUser", "portalSignIn", "accountStatus"];
 const code = ts.transpileModule(ast.statements.filter(node => ts.isFunctionDeclaration(node) && functions.includes(node.name?.text)).map(node => node.getText(ast)).join("\n"), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
 
 function fixture({ customer = null, profile = null, lookupError = null, passwordValid = true, usedAt = null } = {}) {
@@ -44,6 +44,18 @@ function fixture({ customer = null, profile = null, lookupError = null, password
   return { api, admin, client, calls };
 }
 const body = { name: "Customer", email: " KNOWN@example.com ", phone: "0700000000", password: "ValidPassword!1" };
+{
+  const f = fixture();
+  const result = await f.api.registerPortalUser(f.client, f.admin, { ...body, phone: "+254 712 345 678" }, "agent");
+  assert.equal(result.status, 201);
+  assert.equal(f.calls.find(call => call[0] === "upsert")[2].phone, "254712345678");
+}
+{
+  const f = fixture();
+  const result = await f.api.registerPortalUser(f.client, f.admin, { ...body, phone: "123" }, "agent");
+  assert.equal(result.body.code, "INVALID_AGENT_PHONE");
+  assert.equal(f.calls.some(call => ["signup", "upsert"].includes(call[0])), false);
+}
 for (const [options, expected] of [[{}, "CUSTOMER_DETAILS_NOT_FOUND"], [{ lookupError: new Error("offline") }, "CUSTOMER_LOOKUP_UNAVAILABLE"], [{ customer: { id: "known", status: "rejected" } }, "ACCOUNT_INACTIVE"]]) {
   const f = fixture(options);
   const result = await f.api.registerPortalUser(f.client, f.admin, body, "customer");

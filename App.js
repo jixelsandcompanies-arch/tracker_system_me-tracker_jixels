@@ -702,6 +702,8 @@ function CustomerApp({ session, onLogout }) {
   const insets = useSafeAreaInsets();
   const [drawerExpanded, setDrawerExpanded] = useState(false);
   const [screen, setScreen] = useState("dashboard");
+  const screenRef = useRef(screen);
+  screenRef.current = screen;
   const [permissionAlertVisible, setPermissionAlertVisible] = useState(false);
   const [permissionBusy, setPermissionBusy] = useState(false);
   const screenMotion = useRef(new Animated.Value(1)).current;
@@ -837,7 +839,13 @@ function CustomerApp({ session, onLogout }) {
       }
     };
     loadCustomerRecords();
-    const refreshTimer = setInterval(() => loadCustomerRecords(false), 15_000);
+    // Refresh the full fleet every 5s while its live map is open; elsewhere
+    // keep the existing 15s cadence to avoid extra background API traffic.
+    let refreshTicks = 0;
+    const refreshTimer = setInterval(() => {
+      refreshTicks += 1;
+      if (screenRef.current === "tracking" || refreshTicks % 3 === 0) loadCustomerRecords(false);
+    }, 5_000);
     const appStateSubscription = AppState.addEventListener("change", state => {
       if (state === "active") loadCustomerRecords(false);
     });

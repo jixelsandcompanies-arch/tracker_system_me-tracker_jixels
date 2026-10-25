@@ -1,7 +1,10 @@
+import { AppState } from "react-native";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { trackingApi } from "../services/tracking";
 
-const POLL_INTERVAL_MS = 30_000;
+// GPS trackers can publish a new fix frequently. Keep the REST fallback close
+// to real time when socket delivery is unavailable.
+const POLL_INTERVAL_MS = 5_000;
 
 export function useTracking({ motorcycleId, accessToken }) {
   const [motorcycle, setMotorcycle] = useState(null);
@@ -10,6 +13,7 @@ export function useTracking({ motorcycleId, accessToken }) {
   const [routeLoading, setRouteLoading] = useState(false);
   const [error, setError] = useState(null);
   const mounted = useRef(true);
+  const appIsActive = useRef(AppState.currentState === "active");
   const requestSequence = useRef(0);
   const activeMotorcycleId = useRef(motorcycleId);
   activeMotorcycleId.current = motorcycleId;
@@ -47,6 +51,7 @@ export function useTracking({ motorcycleId, accessToken }) {
 
   useEffect(() => {
     mounted.current = true;
+    appIsActive.current = AppState.currentState === "active";
     setLoading(true);
     setMotorcycle(null);
     setRoute(null);
@@ -55,6 +60,11 @@ export function useTracking({ motorcycleId, accessToken }) {
 
     let socket;
     let pollTimer;
+    const appStateSubscription = AppState.addEventListener("change", state => {
+      appIsActive.current = state === "active";
+      if (appIsActive.current) refresh();
+    });
+    const poll = () => { if (appIsActive.current) refresh(); };
     try {
       socket = trackingApi.connect(motorcycleId, accessToken, (location) => {
         if (mounted.current && activeMotorcycleId.current === motorcycleId && location) {
@@ -63,20 +73,21 @@ export function useTracking({ motorcycleId, accessToken }) {
         }
       });
       socket.on("connect_error", () => {
-        if (!pollTimer) pollTimer = setInterval(refresh, POLL_INTERVAL_MS);
+        if (!pollTimer) pollTimer = setInterval(poll, POLL_INTERVAL_MS);
       });
       socket.on("connect", () => {
         if (pollTimer) clearInterval(pollTimer);
         pollTimer = undefined;
       });
     } catch {
-      pollTimer = setInterval(refresh, POLL_INTERVAL_MS);
+      pollTimer = setInterval(poll, POLL_INTERVAL_MS);
     }
 
     return () => {
       mounted.current = false;
       requestSequence.current += 1;
       if (pollTimer) clearInterval(pollTimer);
+      appStateSubscription.remove();
       socket?.disconnect();
     };
   }, [accessToken, motorcycleId, refresh]);

@@ -877,7 +877,9 @@ Deno.serve(async (request) => {
   const authHeader = request.headers.get("Authorization") ?? "";
   const admin = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
   const client = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_ANON_KEY")!, { global: { headers: { Authorization: authHeader } } });
-  const body = request.method === "GET" || request.method === "DELETE" ? {} : await request.json().catch(() => ({}));
+  // Customer delete endpoints pass selected IDs in a JSON DELETE body. Keep
+  // parsing it; endpoints that do not need a body safely receive an empty one.
+  const body = request.method === "GET" ? {} : await request.json().catch(() => ({}));
 
   // Safaricom callbacks are public and must return quickly. Database writes use
   // the service-role client and are idempotent on the transaction receipt.

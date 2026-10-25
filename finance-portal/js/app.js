@@ -126,8 +126,13 @@
     const date = value ? new Date(value) : null;
     return date && !Number.isNaN(date.getTime()) ? date : null;
   };
-  const paymentDate = payment => parseDate(payment.date || payment.paid_at || payment.created_at);
-  const newestPaymentFirst = (left, right) => (paymentDate(right)?.getTime() ?? -Infinity) - (paymentDate(left)?.getTime() ?? -Infinity);
+  const paymentDate = payment => [payment.paid_at, payment.date, payment.created_at, payment.updated_at].map(parseDate).find(Boolean) || null;
+  const newestPaymentFirst = (left, right) => {
+    const leftTime = paymentDate(left)?.getTime();
+    const rightTime = paymentDate(right)?.getTime();
+    if (leftTime !== rightTime) return (rightTime ?? -Infinity) - (leftTime ?? -Infinity);
+    return String(right.id || "").localeCompare(String(left.id || ""));
+  };
   const paymentsToday = () => data.payments.filter(payment => sameDay(paymentDate(payment), new Date()));
   const paymentsThisMonth = () => {
     const now = new Date();
@@ -263,7 +268,7 @@
 
   function paymentRecords(query = "") {
     const visible = data.payments.filter(payment => `${payment.id || ""} ${payment.account || ""} ${payment.customer || ""} ${payment.phone || ""}`.toLowerCase().includes(query.toLowerCase())).sort(newestPaymentFirst);
-    const rows = visible.map(payment => `<tr><td><strong>${escapeHtml(payment.customer || "Unlinked")}</strong><small>${escapeHtml(payment.phone || "-")}</small><small>${escapeHtml(payment.email || "-")}</small></td><td>${escapeHtml(payment.product || "-")}<small>${escapeHtml(payment.tracker || "No tracker")}</small></td><td>${escapeHtml(payment.health || "Unknown")}</td><td>${escapeHtml(payment.paymentType || "Daily payment")}</td><td>${escapeHtml(payment.receipt || "Awaiting M-Pesa receipt")}</td><td><strong>${money(payment.amount || 0)}</strong></td><td>${money(payment.balance || 0)}</td><td>${escapeHtml(payment.date ? new Date(payment.date).toLocaleDateString() : "-")}</td><td>${escapeHtml(payment.agent || "Unassigned")}<small>${escapeHtml(payment.agentCode || "No code")}</small></td><td>${status(payment.status || "Confirmed")}</td></tr>`).join("");
+    const rows = visible.map(payment => `<tr><td><strong>${escapeHtml(payment.customer || "Unlinked")}</strong><small>${escapeHtml(payment.phone || "-")}</small><small>${escapeHtml(payment.email || "-")}</small></td><td>${escapeHtml(payment.product || "-")}<small>${escapeHtml(payment.tracker || "No tracker")}</small></td><td>${escapeHtml(payment.health || "Unknown")}</td><td>${escapeHtml(payment.paymentType || "Daily payment")}</td><td>${escapeHtml(payment.receipt || "Awaiting M-Pesa receipt")}</td><td><strong>${money(payment.amount || 0)}</strong></td><td>${money(payment.balance || 0)}</td><td>${escapeHtml(paymentDate(payment)?.toLocaleDateString("en-KE", { timeZone: "Africa/Nairobi" }) || "-")}</td><td>${escapeHtml(payment.agent || "Unassigned")}<small>${escapeHtml(payment.agentCode || "No code")}</small></td><td>${status(payment.status || "Confirmed")}</td></tr>`).join("");
     return `<div class="payment-scroll"><table class="payment-records-table"><thead><tr><th>Customer contact</th><th>Product / tracker</th><th>Tracker health</th><th>Payment type</th><th>M-Pesa receipt</th><th>Amount</th><th>Balance</th><th>Date</th><th>Agent</th><th>Status</th></tr></thead><tbody>${rows}</tbody></table></div>`;
   }
 
@@ -272,7 +277,7 @@
   }
 
   function reconciliationPage() {
-    const rows = data.payments.filter(payment => payment.receipt).sort(newestPaymentFirst).map(payment => `<tr><td>${escapeHtml(payment.receipt)}</td><td>${escapeHtml(payment.customer || "Unlinked")}</td><td>${escapeHtml(payment.paymentType || "Daily payment")}</td><td>${money(payment.amount || 0)}</td><td>${escapeHtml(payment.date ? new Date(payment.date).toLocaleString() : "-")}</td><td>${status("Reconciled")}</td></tr>`).join("");
+    const rows = data.payments.filter(payment => payment.receipt).sort(newestPaymentFirst).map(payment => `<tr><td>${escapeHtml(payment.receipt)}</td><td>${escapeHtml(payment.customer || "Unlinked")}</td><td>${escapeHtml(payment.paymentType || "Daily payment")}</td><td>${money(payment.amount || 0)}</td><td>${escapeHtml(paymentDate(payment)?.toLocaleString("en-KE", { timeZone: "Africa/Nairobi" }) || "-")}</td><td>${status("Reconciled")}</td></tr>`).join("");
     return `<section class="reconciliation-workspace"><div class="reconcile-heading"><div><div class="reconcile-kicker"><i></i> Review activity</div><h2>Reconcile</h2><p>Confirmed M-Pesa receipts are reconciled against customer finance records.</p></div></div><section class="card reconcile-panel">${rows ? `<div class="table-wrap"><table><thead><tr><th>M-Pesa receipt</th><th>Customer</th><th>Payment type</th><th>Amount</th><th>Confirmed at</th><th>Status</th></tr></thead><tbody>${rows}</tbody></table></div>` : empty("No confirmed M-Pesa receipts", "Confirmed receipts will appear here automatically.")}</section></section>`;
   }
 

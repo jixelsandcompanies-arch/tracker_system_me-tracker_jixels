@@ -495,10 +495,10 @@ async function syncCustomerPaymentToPortals(admin: SupabaseClient, paymentReques
     }
   }
 
-  // Reconcile the approved sale account from canonical confirmed payments. The
-  // sale materializer is idempotent and may re-run after a receipt arrives, so
-  // account totals must be based on recorded receipts instead of additive edits.
-  if (customerId && productId) {
+  // Approved sales are reconciled atomically by the serialized materializer.
+  // Retain this receipt-sum fallback only for older accounts without an
+  // approved screening application.
+  if (!materialized && customerId && productId) {
     const { data: account } = await admin.from("finance_accounts").select("external_id,data,outstanding")
       .eq("customer_id", customerId).contains("data", { bike: linkedBike?.identifier }).maybeSingle();
     if (account?.external_id) {

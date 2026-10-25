@@ -33,9 +33,4 @@ revoke all on function public.materialize_tracker_sale(uuid) from public, anon, 
 revoke all on function public.materialize_tracker_sale_unserialized(uuid) from public, anon, authenticated;
 grant execute on function public.materialize_tracker_sale(uuid) to service_role;
 
--- Rebuild approved accounts through the new serialized entry point once.
-select public.materialize_tracker_sale(id)
-from public.screening_applications
-where status = 'approved';
-
 notify pgrst, 'reload schema';

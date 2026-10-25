@@ -16,14 +16,61 @@ export default function LiveMapView() {
   const [filter, setFilter] = useState("all"); const [search, setSearch] = useState(""); const [selected, setSelected] = useState(null); const [playback, setPlayback] = useState(false); const [step, setStep] = useState(0); const [message, setMessage] = useState(""); const [recenterRequest, setRecenterRequest] = useState(0); const [country, setCountry] = useState("KE"); const [geofenceMode, setGeofenceMode] = useState(false); const [geofenceRadius, setGeofenceRadius] = useState(1000); const [geofence, setGeofence] = useState(null);
 
   const load = async () => { if (!hasSupabaseConfig) return setMessage("Connect Supabase to load live device locations."); const [t, b, c, h] = await Promise.all([listRecords("trackers", { pageSize: 500 }), listRecords("bikes", { pageSize: 500 }), listRecords("customers", { pageSize: 500 }), listRecords("tracker_heartbeats", { pageSize: 1000, order: "received_at" })]); const error = t.error || b.error || c.error || h.error; if (error) return setMessage(error.message); setTrackers(t.data); setBikes(b.data); setCustomers(c.data); setHeartbeats(h.data); setMessage(""); };
-  useEffect(() => { load(); const off = ["trackers", "tracker_heartbeats"].map((table) => subscribeToTable(table, load)); return () => off.forEach((fn) => fn()); }, []);
+  useEffect(() => { load(); const timer = window.setInterval(load, 5000); const off = ["trackers", "tracker_heartbeats"].map((table) => subscribeToTable(table, load)); return () => { window.clearInterval(timer); off.forEach((fn) => fn()); }; }, []);
   const located = useMemo(() => trackers.filter((t) => t.latitude != null && t.longitude != null), [trackers]);
   const rows = useMemo(() => located.filter((t) => (filter === "all" || filter === (t.is_online ? "online" : "offline")) && `${t.identifier} ${bikes.find((b) => b.id === t.bike_id)?.identifier || ""}`.toLowerCase().includes(search.toLowerCase())), [located, filter, search, bikes]);
   const history = useMemo(() => selected ? heartbeats.filter((h) => h.tracker_id === selected.id).sort((a, b) => new Date(a.received_at) - new Date(b.received_at)) : [], [heartbeats, selected]);
   const focus = (tracker) => { setSelected(tracker); setPlayback(false); setStep(0); map.current?.setView([Number(tracker.latitude), Number(tracker.longitude)], 18); };
   const recenter = () => { setSelected(null); setPlayback(false); setRecenterRequest((request) => request + 1); };
 
-  useEffect(() => { if (!host.current || !window.L) return undefined; if (!map.current) { map.current = window.L.map(host.current).setView(COUNTRIES.KE.center, COUNTRIES.KE.zoom); window.L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19, attribution: "© OpenStreetMap contributors" }).addTo(map.current); markers.current = window.L.markerClusterGroup ? window.L.markerClusterGroup() : window.L.layerGroup(); markers.current.addTo(map.current); } markers.current.clearLayers(); rows.forEach((tracker) => { const isLive = selected?.id === tracker.id; const position = isLive && playback && history[step] ? [Number(history[step].latitude), Number(history[step].longitude)] : [Number(tracker.latitude), Number(tracker.longitude)]; const marker = window.L.circleMarker(position, { radius: isLive ? 13 : 8, color: isLive ? "#d92d20" : tracker.is_online ? "#1f9d67" : "#e08b2e", fillColor: isLive ? "#f04438" : undefined, weight: isLive ? 3 : 2, fillOpacity: 0.9 }).bindTooltip(isLive ? `LIVE · ${tracker.identifier}` : `${tracker.identifier} · ${tracker.is_online ? "Online" : "Offline"}`, isLive ? { permanent: true, direction: "top", className: "live-location-label" } : {}); marker.on("click", () => focus(tracker)); marker.addTo(markers.current); }); if (!selected) map.current.setView(COUNTRIES[country].center, COUNTRIES[country].zoom); setTimeout(() => map.current?.invalidateSize(), 0); }, [rows, selected?.id, playback, step, history, country]);
+  useEffect(() => {
+    if (!host.current || !window.L) return undefined;
+    if (!map.current) {
+      map.current = window.L.map(host.current).setView(COUNTRIES.KE.center, COUNTRIES.KE.zoom);
+      window.L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19, attribution: "© OpenStreetMap contributors" }).addTo(map.current);
+      markers.current = window.L.layerGroup().addTo(map.current);
+      markers.current.byId = new Map();
+    }
+    const visible = new Set();
+    rows.forEach((tracker) => {
+      visible.add(tracker.id);
+      const isLive = selected?.id === tracker.id;
+      const playbackPoint = isLive && playback && history[step];
+      const position = playbackPoint ? [Number(playbackPoint.latitude), Number(playbackPoint.longitude)] : [Number(tracker.latitude), Number(tracker.longitude)];
+      const markerOptions = { radius: isLive ? 13 : 8, color: isLive ? "#d92d20" : tracker.is_online ? "#1f9d67" : "#e08b2e", fillColor: isLive ? "#f04438" : undefined, weight: isLive ? 3 : 2, fillOpacity: 0.9 };
+      let marker = markers.current.byId.get(tracker.id);
+      if (!marker) {
+        marker = window.L.circleMarker(position, markerOptions).addTo(markers.current).on("click", () => focus(tracker));
+        markers.current.byId.set(tracker.id, marker);
+      } else {
+        const current = marker.getLatLng();
+        const distance = map.current.distance(current, position);
+        if (marker._motionFrame) cancelAnimationFrame(marker._motionFrame);
+        if (distance > 2 && !playbackPoint) {
+          const started = performance.now();
+          const from = [current.lat, current.lng];
+          const duration = Math.min(4500, Math.max(1200, distance / 7));
+          const animate = (now) => {
+            const t = Math.min(1, (now - started) / duration);
+            const eased = t * t * (3 - 2 * t);
+            marker.setLatLng([from[0] + (position[0] - from[0]) * eased, from[1] + (position[1] - from[1]) * eased]);
+            if (t < 1) marker._motionFrame = requestAnimationFrame(animate);
+            else marker._motionFrame = null;
+          };
+          marker._motionFrame = requestAnimationFrame(animate);
+        } else marker.setLatLng(position);
+        marker.setStyle(markerOptions);
+        marker.unbindTooltip();
+      }
+      marker.off("click").on("click", () => focus(tracker));
+      marker.bindTooltip(isLive ? `LIVE · ${tracker.identifier}` : `${tracker.identifier} · ${tracker.is_online ? "Online" : "Offline"}`, isLive ? { permanent: true, direction: "top", className: "live-location-label" } : {});
+    });
+    markers.current.byId.forEach((marker, id) => {
+      if (!visible.has(id)) { if (marker._motionFrame) cancelAnimationFrame(marker._motionFrame); markers.current.removeLayer(marker); markers.current.byId.delete(id); }
+    });
+    if (!selected) map.current.setView(COUNTRIES[country].center, COUNTRIES[country].zoom);
+    setTimeout(() => map.current?.invalidateSize(), 0);
+  }, [rows, selected?.id, playback, step, history, country]);
   useEffect(() => { if (!map.current || !window.L || layersControl.current) return; const standard = window.L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19, attribution: "© OpenStreetMap contributors" }); const detailed = window.L.tileLayer("https://{s}.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png", { maxZoom: 19, attribution: "© OpenStreetMap contributors, Tiles style by HOT" }); const satellite = window.L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", { maxZoom: 19, attribution: "Tiles © Esri" }); map.current.eachLayer((layer) => { if (layer instanceof window.L.TileLayer) map.current.removeLayer(layer); }); standard.addTo(map.current); layersControl.current = window.L.control.layers({ "Street map": standard, "Detailed roads & buildings": detailed, "Satellite imagery": satellite }).addTo(map.current); }, []);
   useEffect(() => { if (!map.current || !window.L) return undefined; const onMapClick = (event) => { if (!geofenceMode) return; setGeofence({ latitude: event.latlng.lat, longitude: event.latlng.lng, radius: Number(geofenceRadius) || 1000 }); setGeofenceMode(false); }; map.current.on("click", onMapClick); return () => map.current?.off("click", onMapClick); }, [geofenceMode, geofenceRadius]);
   useEffect(() => { if (!map.current || !window.L) return; geofenceLayer.current?.remove(); if (geofence) geofenceLayer.current = window.L.circle([geofence.latitude, geofence.longitude], { radius: geofence.radius, color: "#7c3aed", fillColor: "#8b5cf6", fillOpacity: 0.16, weight: 2 }).addTo(map.current).bindTooltip(`Geofence · ${geofence.radius} m`); }, [geofence]);

@@ -120,7 +120,7 @@
   async function hydrateSupplementary() {
     const [rows, customers, staff] = await Promise.all([
       loadStoredTables(supplementalTables),
-      request("/rest/v1/customers?select=id,full_name,email,phone,status,created_at&order=created_at.desc"),
+      request("/rest/v1/customers?select=id,full_name,email,phone,plate_number,tracker_number,status,created_at&order=created_at.desc"),
       request("/rest/v1/profiles?select=id,full_name,email,phone,role,account_status&role=in.(agent,support_agent,finance,finance_officer,admin,super_admin)&order=full_name.asc")
     ]);
     const nonCustomerAccountIds = new Set((staff || []).filter(profile => profile.role !== "customer").map(profile => profile.id));

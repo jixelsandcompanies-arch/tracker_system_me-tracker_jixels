@@ -6,6 +6,7 @@ const trackingHook = readFileSync(new URL("../src/hooks/useTracking.js", import.
 const nativeMap = readFileSync(new URL("../src/components/OpenStreetMap.native.js", import.meta.url), "utf8");
 const fleetMap = readFileSync(new URL("../src/components/LiveFleetMap.native.js", import.meta.url), "utf8");
 const appConfig = readFileSync(new URL("../app.config.js", import.meta.url), "utf8");
+const sessionStore = readFileSync(new URL("../src/services/session.js", import.meta.url), "utf8");
 
 assert.match(app, /import OpenStreetMap from "\.\/src\/components\/OpenStreetMap"/);
 assert.doesNotMatch(app, /import MapView, .*PROVIDER_GOOGLE/);
@@ -14,7 +15,10 @@ assert.doesNotMatch(app, /error\.status === 404 \|\|/);
 assert.match(nativeMap, /react-native-webview/);
 assert.match(nativeMap, /openstreetmap\.org/);
 assert.match(appConfig, /"expo-channel-name": "production"/);
-assert.match(appConfig, /version: "1\.0\.13"/);
+assert.match(appConfig, /version: "1\.0\.14"/);
+assert.match(sessionStore, /SecureStore\.setItemAsync\(SESSION_KEY/);
+assert.match(sessionStore, /SecureStore\.deleteItemAsync\(SESSION_KEY\)/);
+assert.match(app, /sessionStore\.get\(\)\.then\(savedSession/);
 assert.match(app, /<LiveFleetMap selected=\{bike\} vehicles=\{allFleetVehicles\} route=\{route\}/);
 assert.match(fleetMap, /vehicles\s*\.filter\(vehicle => validPoint\(vehicle\.location\)\)\s*\.map\(vehicle =>/);
 assert.match(fleetMap, /routePoints/);

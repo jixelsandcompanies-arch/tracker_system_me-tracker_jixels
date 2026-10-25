@@ -172,7 +172,7 @@ function Pill({ value }) {
   return <View style={[styles.pill, { backgroundColor: bg }]}><Text style={[styles.pillText, { color: text }]}>{value}</Text></View>;
 }
 
-function Field({ label, value, onChangeText, placeholder, secureTextEntry, keyboardType }) {
+function Field({ label, value, onChangeText, placeholder, secureTextEntry, keyboardType, autoCapitalize = "none" }) {
   const [passwordVisible, setPasswordVisible] = useState(false);
   const isSecure = Boolean(secureTextEntry);
   return <View style={styles.fieldWrap}>
@@ -185,7 +185,7 @@ function Field({ label, value, onChangeText, placeholder, secureTextEntry, keybo
         placeholderTextColor="#94A3B8"
         secureTextEntry={isSecure && !passwordVisible}
         keyboardType={keyboardType}
-        autoCapitalize="none"
+        autoCapitalize={autoCapitalize}
         style={styles.input}
       />
       {isSecure && <Pressable accessibilityRole="button" accessibilityLabel={passwordVisible ? "Hide password" : "Show password"} onPress={() => setPasswordVisible(visible => !visible)} style={styles.passwordToggle}>
@@ -575,7 +575,7 @@ function Customers({ customers, onDeposit, onRefresh, refreshing, darkMode = fal
       <View style={styles.listBody}>
         <Text numberOfLines={1} style={[styles.listTitle, darkMode && styles.darkText]}>{customer.name}</Text>
         <Text style={styles.listSub}>{customer.phone} • Plate {customer.plateNumber || customer.bike} • Tracker {customer.tracker}</Text>
-        <Text style={styles.listMeta}>{customer.location} • Balance {money(customerBalance(customer))} • Sale {customerSaleStatus(customer)}</Text>{customer.dueDate && <Text style={styles.listMeta}>First installment due {customer.dueDate}</Text>}
+        <Text style={styles.listMeta}>{customer.location} • Balance {money(customerBalance(customer))} • Sale {customerSaleStatus(customer)}</Text>
       </View>
       <View style={styles.listStatus}>
         <Pill value={customer.payment} />
@@ -587,7 +587,7 @@ function Customers({ customers, onDeposit, onRefresh, refreshing, darkMode = fal
 }
 
 function Onboarding({ addCustomer, navigate, assignedVehicles, accessToken, onRefresh, refreshing, darkMode = false }) {
-  const [form, setForm] = useState({ name: "", phone: "", email: "", idNumber: "", location: "", plateNumber: "", depositAmount: "", dueDate: "" });
+  const [form, setForm] = useState({ name: "", phone: "", email: "", idNumber: "", location: "", plateNumber: "", depositAmount: "" });
   const [selectedVehicleId, setSelectedVehicleId] = useState(assignedVehicles[0]?.id || "");
   const [vehiclePickerOpen, setVehiclePickerOpen] = useState(false);
   const [vehicleSearch, setVehicleSearch] = useState("");
@@ -614,11 +614,10 @@ function Onboarding({ addCustomer, navigate, assignedVehicles, accessToken, onRe
     if (!customerPhoto || !idFrontPhoto || !idBackPhoto) return Alert.alert("Capture documents", "Capture the customer photo and both the front and back side of the national ID.");
     const depositAmount = Number(form.depositAmount);
     if (!Number.isFinite(depositAmount) || depositAmount < 0) return Alert.alert("Check deposit", "Enter a valid deposit amount, or use 0 if no deposit was collected.");
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(form.dueDate) || Number.isNaN(Date.parse(`${form.dueDate}T00:00:00Z`))) return Alert.alert("Due date required", "Choose the date this customer’s first installment is due.");
     if (selectedVehicle.payableAmount > 0 && depositAmount > selectedVehicle.payableAmount) return Alert.alert("Check deposit", "The deposit cannot be higher than the total payable amount.");
     setSaving(true);
     try {
-      const result = await authApi.onboardCustomer(accessToken, { name: form.name.trim(), phone: form.phone.trim(), email: form.email.trim(), nationalId: form.idNumber.trim(), location: form.location.trim(), plateNumber: form.plateNumber.trim().toUpperCase(), bikeId: selectedVehicle.id, depositAmount, dueDate: form.dueDate, customerPhoto, idFrontPhoto, idBackPhoto });
+      const result = await authApi.onboardCustomer(accessToken, { name: form.name.trim(), phone: form.phone.trim(), email: form.email.trim(), nationalId: form.idNumber.trim(), location: form.location.trim(), plateNumber: form.plateNumber.trim().toUpperCase(), bikeId: selectedVehicle.id, depositAmount, customerPhoto, idFrontPhoto, idBackPhoto });
       addCustomer(result.customer);
       Alert.alert("Customer registration received", "The customer now appears in Admin and Finance as pending. An administrator must approve the screening before account access is available.");
       navigate("customers");
@@ -650,7 +649,6 @@ function Onboarding({ addCustomer, navigate, assignedVehicles, accessToken, onRe
       </View>
       {selectedVehicle && <View style={styles.agreedPaymentNote}><Text style={styles.microLabel}>TOTAL PAYABLE</Text><Text style={styles.agreedPaymentValue}>{money(selectedVehicle.payableAmount)}</Text></View>}
       <Field label="Deposit amount to prompt" value={form.depositAmount} onChangeText={depositAmount => setForm({ ...form, depositAmount })} keyboardType="numeric" />
-      <Field label="First installment due date (required)" value={form.dueDate} onChangeText={dueDate => setForm({ ...form, dueDate })} placeholder="YYYY-MM-DD" autoCapitalize="none" />
       <Pressable onPress={() => captureImage(setCustomerPhoto, "customer photo")} style={styles.secondaryButton}><Ionicons name="camera-outline" color={colors.blue} size={18} /><Text style={styles.secondaryText}>{customerPhoto ? "Retake customer photo" : "Capture customer photo"}</Text></Pressable>
       <View style={styles.captureRow}>
         <Pressable onPress={() => captureImage(setIdFrontPhoto, "National ID front")} style={styles.secondaryButton}><Ionicons name="scan-outline" color={colors.blue} size={18} /><Text style={styles.secondaryText}>{idFrontPhoto ? "Rescan ID front" : "Scan ID front"}</Text></Pressable>
@@ -673,24 +671,22 @@ function AddVehicleToCustomer({ customers, assignedVehicles, accessToken, addCus
   const [vehicleId, setVehicleId] = useState(assignedVehicles[0]?.id || "");
   const [plateNumber, setPlateNumber] = useState("");
   const [depositAmount, setDepositAmount] = useState("");
-  const [dueDate, setDueDate] = useState("");
   const [saving, setSaving] = useState(false);
   const customer = uniqueCustomers.find(item => item.id === customerId);
   const matchingCustomers = uniqueCustomers.filter(item => `${item.name} ${item.phone || ""} ${item.email || ""}`.toLowerCase().includes(customerSearch.trim().toLowerCase()));
   const vehicle = assignedVehicles.find(item => item.id === vehicleId);
   async function submit() {
     if (!customerId || !vehicleId || !plateNumber.trim()) return Alert.alert("Complete vehicle details", "Choose the existing customer and available tracker, then enter the vehicle plate number.");
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(dueDate) || Number.isNaN(Date.parse(`${dueDate}T00:00:00Z`))) return Alert.alert("Due date required", "Choose the first installment due date for this vehicle.");
     setSaving(true);
     try {
-      const result = await authApi.addVehicleToCustomer(accessToken, customerId, { bikeId: vehicleId, plateNumber: plateNumber.trim().toUpperCase(), depositAmount: Number(depositAmount || 0), dueDate });
+      const result = await authApi.addVehicleToCustomer(accessToken, customerId, { bikeId: vehicleId, plateNumber: plateNumber.trim().toUpperCase(), depositAmount: Number(depositAmount || 0) });
       addCustomer(result.customer);
       Alert.alert("Vehicle added", `${plateNumber.trim().toUpperCase()} is now linked to ${customer?.name || "the customer"}. A separate payment and screening record was created for this vehicle.`);
       navigate("customers");
     } catch (error) { Alert.alert("Vehicle could not be added", error instanceof Error ? error.message : "Try again."); }
     finally { setSaving(false); }
   }
-  return <ScrollView style={darkMode && styles.darkPage} contentContainerStyle={styles.page} refreshControl={pullRefresh(onRefresh, refreshing)}><Text style={[styles.sectionTitle, darkMode && styles.darkText]}>Add vehicle to existing customer</Text><Text style={styles.emptySub}>Search for the customer, select the correct record, then assign an available tracker. Every vehicle keeps its own payment record.</Text><View style={[styles.formCard, darkMode && styles.darkCard]}><Field label="Find existing customer" value={customerSearch} onChangeText={setCustomerSearch} placeholder="Search name, phone, or email"/><Text style={styles.fieldLabel}>Matching customers</Text>{matchingCustomers.map(item => <Pressable key={item.id} onPress={() => { setCustomerId(item.id); setCustomerSearch(item.name); }} style={[styles.reportBikeOption, item.id === customerId && styles.reportBikeOptionActive]}><View style={styles.listBody}><Text style={[styles.vehicleDropdownPlate, darkMode && styles.darkText]}>{item.name}</Text><Text style={styles.vehicleDropdownModel}>{item.phone} • {item.customerCode || "Existing customer"}</Text></View>{item.id === customerId && <Ionicons name="checkmark-circle" color={colors.blue} size={20}/>}</Pressable>)}{customerSearch && !matchingCustomers.length && <Text style={styles.emptySub}>No matching customer found.</Text>}<Text style={[styles.fieldLabel, { marginTop: 14 }]}>Available tracker</Text>{assignedVehicles.map(item => <Pressable key={item.id} onPress={() => setVehicleId(item.id)} style={[styles.reportBikeOption, item.id === vehicleId && styles.reportBikeOptionActive]}><View style={styles.listBody}><Text style={[styles.vehicleDropdownPlate, darkMode && styles.darkText]}>{item.tracker || item.identifier}</Text><Text style={styles.vehicleDropdownModel}>{item.model} • {money(item.payableAmount)} payable</Text></View>{item.id === vehicleId && <Ionicons name="checkmark-circle" color={colors.blue} size={20}/>}</Pressable>)}{assignedVehicles.length === 0 && <Text style={styles.emptySub}>No unassigned trackers are available to you.</Text>}<Field label="Vehicle plate number" value={plateNumber} onChangeText={value => setPlateNumber(value.toUpperCase())} placeholder="Example: KMG 123A" autoCapitalize="characters"/><Field label="Deposit amount to prompt" value={depositAmount} onChangeText={setDepositAmount} keyboardType="numeric"/><Field label="First installment due date (required)" value={dueDate} onChangeText={setDueDate} placeholder="YYYY-MM-DD" autoCapitalize="none"/><Pressable disabled={saving || !assignedVehicles.length} onPress={submit} style={styles.primaryButton}><Ionicons name="add-circle-outline" size={18} color={colors.white}/><Text style={styles.primaryButtonText}>{saving ? "Adding vehicle…" : "Add vehicle and payment record"}</Text></Pressable></View></ScrollView>;
+  return <ScrollView style={darkMode && styles.darkPage} contentContainerStyle={styles.page} refreshControl={pullRefresh(onRefresh, refreshing)}><Text style={[styles.sectionTitle, darkMode && styles.darkText]}>Add vehicle to existing customer</Text><Text style={styles.emptySub}>Search for the customer, select the correct record, then assign an available tracker. Every vehicle keeps its own payment record.</Text><View style={[styles.formCard, darkMode && styles.darkCard]}><Field label="Find existing customer" value={customerSearch} onChangeText={setCustomerSearch} placeholder="Search name, phone, or email"/><Text style={styles.fieldLabel}>Matching customers</Text>{matchingCustomers.map(item => <Pressable key={item.id} onPress={() => { setCustomerId(item.id); setCustomerSearch(item.name); }} style={[styles.reportBikeOption, item.id === customerId && styles.reportBikeOptionActive]}><View style={styles.listBody}><Text style={[styles.vehicleDropdownPlate, darkMode && styles.darkText]}>{item.name}</Text><Text style={styles.vehicleDropdownModel}>{item.phone} • {item.customerCode || "Existing customer"}</Text></View>{item.id === customerId && <Ionicons name="checkmark-circle" color={colors.blue} size={20}/>}</Pressable>)}{customerSearch && !matchingCustomers.length && <Text style={styles.emptySub}>No matching customer found.</Text>}<Text style={[styles.fieldLabel, { marginTop: 14 }]}>Available tracker</Text>{assignedVehicles.map(item => <Pressable key={item.id} onPress={() => setVehicleId(item.id)} style={[styles.reportBikeOption, item.id === vehicleId && styles.reportBikeOptionActive]}><View style={styles.listBody}><Text style={[styles.vehicleDropdownPlate, darkMode && styles.darkText]}>{item.tracker || item.identifier}</Text><Text style={styles.vehicleDropdownModel}>{item.model} • {money(item.payableAmount)} payable</Text></View>{item.id === vehicleId && <Ionicons name="checkmark-circle" color={colors.blue} size={20}/>}</Pressable>)}{assignedVehicles.length === 0 && <Text style={styles.emptySub}>No unassigned trackers are available to you.</Text>}<Field label="Vehicle plate number" value={plateNumber} onChangeText={value => setPlateNumber(value.toUpperCase())} placeholder="Example: KMG 123A" autoCapitalize="characters"/><Field label="Deposit amount to prompt" value={depositAmount} onChangeText={setDepositAmount} keyboardType="numeric"/><Pressable disabled={saving || !assignedVehicles.length} onPress={submit} style={styles.primaryButton}><Ionicons name="add-circle-outline" size={18} color={colors.white}/><Text style={styles.primaryButtonText}>{saving ? "Adding vehicle…" : "Add vehicle and payment record"}</Text></Pressable></View></ScrollView>;
 }
 
 function Trackers({ customers, onInstallComplete, onRefresh, refreshing, darkMode = false }) {

@@ -136,7 +136,9 @@ function tramigoRouteLocations(payload: any) {
     const source = report?.main_reports?.[0] ?? report?.mainReports?.[0] ?? report;
     const latitude = Number(source?.Latitude ?? source?.latitude); const longitude = Number(source?.Longitude ?? source?.longitude);
     const recordedAt = source?.DateTimeActual ?? source?.DateTime_Actual ?? source?.datetime_actual ?? source?.dateTime ?? source?.timestamp ?? report?.DateTimeActual ?? report?.DateTime_Actual ?? report?.DateTime_Received;
-    return { latitude, longitude, speedKph: Number(source?.Speed ?? source?.speed ?? 0), recordedAt };
+    const rawSpeed = source?.Speed ?? source?.speed;
+    const parsedSpeed = rawSpeed == null || rawSpeed === "" ? null : Number(rawSpeed);
+    return { latitude, longitude, speedKph: parsedSpeed != null && Number.isFinite(parsedSpeed) && parsedSpeed >= 0 ? parsedSpeed : null, recordedAt };
   }).filter((point) => Number.isFinite(point.latitude) && Number.isFinite(point.longitude) && point.latitude >= -90 && point.latitude <= 90 && point.longitude >= -180 && point.longitude <= 180 && point.recordedAt);
 }
 
@@ -1714,7 +1716,7 @@ Deno.serve(async (request) => {
     const depositAmount = Number(body.depositAmount ?? 0);
     const dueDate = String(body.dueDate ?? "").trim();
     if (!bikeId || !plateNumber) return fail("Choose an available tracker and enter the vehicle plate number.", 422, "INVALID_VEHICLE_ASSIGNMENT");
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(dueDate) || Number.isNaN(Date.parse(`${dueDate}T00:00:00Z`))) return fail("Choose a valid first installment due date.", 422, "INVALID_DUE_DATE");
+    if (dueDate && (!/^\d{4}-\d{2}-\d{2}$/.test(dueDate) || Number.isNaN(Date.parse(`${dueDate}T00:00:00Z`)))) return fail("Choose a valid first installment due date.", 422, "INVALID_DUE_DATE");
     const { data: customer } = await admin.from("customers").select("id,full_name,email,phone,national_id,address").eq("id", customerId).maybeSingle();
     const { data: bike } = await admin.from("bikes").select("id,identifier,model,product_type,payable_amount,trackers(identifier)").eq("id", bikeId).eq("assigned_agent_id", user.id).is("customer_id", null).maybeSingle();
     if (!customer || !bike) return fail("The customer or available tracker could not be found.", 404, "ASSIGNMENT_NOT_FOUND");
@@ -1723,7 +1725,7 @@ Deno.serve(async (request) => {
     if (reserveError || !reservedBike) return fail("That tracker is no longer available.", 409, "TRACKER_ALREADY_SOLD");
     const { error: trackerError } = await admin.from("trackers").update({ plate_number: plateNumber, updated_at: now }).eq("bike_id", bike.id);
     if (trackerError) { await admin.from("bikes").update({ customer_id: null, status: "available", updated_at: now }).eq("id", bike.id); return fail("The vehicle plate could not be saved.", 503, "PLATE_SAVE_FAILED"); }
-    const { data: application, error: applicationError } = await admin.from("screening_applications").insert({ customer_id: customer.id, product_id: bike.id, installer_agent_id: user.id, full_name: customer.full_name, email: customer.email, phone: customer.phone, national_id: customer.national_id, location: customer.address, product_identifier: bike.identifier, product_type: bike.product_type, product_model: bike.model, tracker_identifier: (bike as any).trackers?.[0]?.identifier ?? bike.identifier, due_date: dueDate, deposit_amount: 0, requested_deposit_amount: Number.isFinite(depositAmount) ? depositAmount : 0, payment_phone: customer.phone, status: "pending", created_at: now, updated_at: now }).select("id").single();
+    const { data: application, error: applicationError } = await admin.from("screening_applications").insert({ customer_id: customer.id, product_id: bike.id, installer_agent_id: user.id, full_name: customer.full_name, email: customer.email, phone: customer.phone, national_id: customer.national_id, location: customer.address, product_identifier: bike.identifier, product_type: bike.product_type, product_model: bike.model, tracker_identifier: (bike as any).trackers?.[0]?.identifier ?? bike.identifier, due_date: dueDate || null, deposit_amount: 0, requested_deposit_amount: Number.isFinite(depositAmount) ? depositAmount : 0, payment_phone: customer.phone, status: "pending", created_at: now, updated_at: now }).select("id").single();
     if (applicationError || !application) { await admin.from("bikes").update({ customer_id: null, status: "available", updated_at: now }).eq("id", bike.id); return fail("The additional vehicle screening could not be created.", 503, "SCREENING_REGISTRATION_FAILED"); }
      return response({ customer: { id: customer.id, applicationId: application.id, vehicleId: bike.id, name: customer.full_name, phone: customer.phone, payerPhone: customer.phone, email: customer.email, plateNumber, bike: bike.identifier, vehicleModel: bike.model, tracker: (bike as any).trackers?.[0]?.identifier ?? bike.identifier, payment: "Pending", install: "Pending", dueDate, requestedDepositAmount: Number.isFinite(depositAmount) ? depositAmount : 0, payableAmount: Number(bike.payable_amount ?? 0), screeningStatus: "pending" } }, 201);
   }
@@ -1810,7 +1812,7 @@ Deno.serve(async (request) => {
     const depositAmount = Number(body.depositAmount ?? 0);
     const dueDate = String(body.dueDate ?? "").trim();
     if (!name || !phone || !email || !nationalId || !bikeId || !body.customerPhoto || !body.idFrontPhoto || !body.idBackPhoto) return fail("Enter the customer name, phone number, email address, national ID, assigned bike, and all three images.", 422, "INVALID_CUSTOMER_REGISTRATION");
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(dueDate) || Number.isNaN(Date.parse(`${dueDate}T00:00:00Z`))) return fail("Choose a valid first installment due date.", 422, "INVALID_DUE_DATE");
+    if (dueDate && (!/^\d{4}-\d{2}-\d{2}$/.test(dueDate) || Number.isNaN(Date.parse(`${dueDate}T00:00:00Z`)))) return fail("Choose a valid first installment due date.", 422, "INVALID_DUE_DATE");
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return fail("Enter a valid customer email address.", 422, "INVALID_EMAIL");
     if (!Number.isFinite(depositAmount) || depositAmount < 0) return fail("Enter a valid customer deposit amount.", 422, "INVALID_DEPOSIT");
     const { data: bike, error: bikeError } = await admin.from("bikes").select("id,identifier,model,product_type,payable_amount,status,customer_id,trackers(identifier,plate_number)").eq("id", bikeId).eq("assigned_agent_id", user.id).maybeSingle();
@@ -1844,7 +1846,7 @@ Deno.serve(async (request) => {
       }
     }
 
-    const { data: application, error: applicationError } = await admin.from("screening_applications").insert({ customer_id: customer.id, product_id: bike.id, installer_agent_id: user.id, full_name: name, email, phone, national_id: nationalId, location: location || null, product_identifier: bike.identifier, product_type: bike.product_type, product_model: bike.model, tracker_identifier: bike.trackers?.[0]?.identifier ?? bike.identifier, due_date: dueDate, deposit_amount: 0, requested_deposit_amount: depositAmount, payment_phone: phone, status: "pending", created_at: now, updated_at: now }).select("id").single();
+    const { data: application, error: applicationError } = await admin.from("screening_applications").insert({ customer_id: customer.id, product_id: bike.id, installer_agent_id: user.id, full_name: name, email, phone, national_id: nationalId, location: location || null, product_identifier: bike.identifier, product_type: bike.product_type, product_model: bike.model, tracker_identifier: bike.trackers?.[0]?.identifier ?? bike.identifier, due_date: dueDate || null, deposit_amount: 0, requested_deposit_amount: depositAmount, payment_phone: phone, status: "pending", created_at: now, updated_at: now }).select("id").single();
     if (applicationError || !application) {
       await admin.from("bikes").update({ customer_id: null, status: "available", updated_at: now }).eq("id", bike.id).eq("customer_id", customer.id);
       await admin.from("customers").delete().eq("id", customer.id);
@@ -2101,8 +2103,8 @@ Deno.serve(async (request) => {
       locationQuery = bike ? locationQuery.eq("tracker_id", tracker.id) : locationQuery.eq("vehicle_id", vehicleId);
       const { data: latestLocation, error: locationError } = await locationQuery;
       const ageMs = latestLocation?.recorded_at ? Date.now() - new Date(latestLocation.recorded_at).getTime() : Infinity;
-      const speedKph = Number(latestLocation?.speed_kph);
-      if (locationError || !latestLocation || !Number.isFinite(ageMs) || ageMs < 0 || ageMs > 60_000 || !Number.isFinite(speedKph) || speedKph > 0.5) {
+      const speedKph = latestLocation?.speed_kph == null ? null : Number(latestLocation.speed_kph);
+      if (locationError || !latestLocation || !Number.isFinite(ageMs) || ageMs < 0 || ageMs > 60_000 || speedKph == null || !Number.isFinite(speedKph) || speedKph > 0.5) {
         return fail("The tracker cannot confirm that the bike is stationary. Try again after it reports a fresh stopped location.", 409, "VEHICLE_NOT_SAFE_TO_IMMOBILIZE");
       }
     }

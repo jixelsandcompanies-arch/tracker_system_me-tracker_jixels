@@ -7,6 +7,7 @@ const api = read("../supabase/functions/api/index.ts");
 const customer = read("../App.js");
 const agent = read("../Jixels angets/App.js");
 const customerApp = read("../App.js");
+const trackerSpeedMigration = read("../supabase/migrations/202610250002_tracker_speed_is_optional.sql");
 
 assert.match(migration, /tracker_installed_at/);
 assert.match(migration, /agent_alert_states/);
@@ -23,9 +24,14 @@ assert.match(agent, /authApi\.updateAlertStates\(agent\.accessToken, ids, action
 assert.match(agent, /\}, \[visible, customer\?\.id\]\)/);
 assert.match(api, /replayed: true/);
 assert.match(api, /DEPOSIT_PROMPT_PENDING/);
+assert.match(api, /rawSpeed == null \|\| rawSpeed === "" \? null/);
+assert.match(api, /speedKph == null/);
 assert.match(api, /PAYMENT_ALREADY_PROCESSING/);
 assert.match(api, /IDEMPOTENCY_KEY_REUSED/);
 assert.match(api, /idempotency_key: idempotencyKey/);
 assert.match(customerApp, /Payment request already in progress/);
+assert.match(trackerSpeedMigration, /alter column speed_kph drop not null/);
+assert.match(agent, /autoCapitalize = "none"/);
+assert.match(agent, /autoCapitalize=\{autoCapitalize\}/);
 
 console.log("Customer and agent persistence regression checks passed.");

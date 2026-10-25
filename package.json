@@ -10,7 +10,7 @@
     "test": "node scripts/run-tests.mjs",
     "check": "node scripts/check-production.js",
     "export:android": "expo export --platform android --output-dir dist/android",
-    "build:apk": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/customer-release.ps1 -Action build -Channel preview",
+    "build:apk": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/customer-release.ps1 -Action build -Channel production-apk",
     "update:preview": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/customer-release.ps1 -Action update -Channel preview",
     "update:production": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/customer-release.ps1 -Action update -Channel production"
   },

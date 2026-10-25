@@ -1,6 +1,7 @@
 import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, Alert, Animated, AppState, BackHandler, Image, KeyboardAvoidingView, Linking, Modal, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, Switch, Text, TextInput, View } from "react-native";
 import OpenStreetMap from "./src/components/OpenStreetMap";
+import LiveFleetMap from "./src/components/LiveFleetMap";
 import * as Location from "expo-location";
 import * as Notifications from "expo-notifications";
 import { AppUpdateNotice } from "./src/components/AppUpdateNotice";
@@ -348,6 +349,18 @@ function PaymentSuccess({ receipt, onClose }) {
   return <Modal visible={!!receipt} transparent animationType="fade" onRequestClose={onClose}><View style={styles.successOverlay}><Animated.View style={[styles.successCard, { transform: [{ scale }] }]}><View style={styles.successIcon}><Ionicons name="checkmark" size={44} color={colors.white} /></View><Text style={styles.successTitle}>{receipt?.monthlyComplete ? "Agreed instalment completed!" : "Payment confirmed!"}</Text><Text style={styles.successAmount}>{money(receipt?.amount ?? 0)}</Text><Text style={styles.successVehicle}>{receipt?.registration}</Text>{receipt?.monthlyTarget ? (receipt.monthlyComplete ? <Text style={styles.successBreakdown}>Your agreed {money(receipt.monthlyTarget)} instalment is fully paid.</Text> : <Text style={styles.successBreakdown}>{money(receipt.monthlyRemaining)} remains toward your agreed instalment.</Text>) : <Text style={styles.successBreakdown}>Your chosen payment has been applied to this vehicle.</Text>}<Text style={styles.successBalance}>Vehicle finance balance: {money(receipt?.remainingBalance ?? 0)}</Text><View style={styles.receiptBox}><Text style={styles.receiptLabel}>M-PESA RECEIPT</Text><Text style={styles.receiptId}>{receipt?.mpesaReceiptNumber}</Text><Text style={styles.receiptTime}>Confirmed now • M-Pesa</Text></View><Pressable onPress={onClose} style={styles.primaryButton}><Text style={styles.primaryButtonText}>Done</Text></Pressable></Animated.View></View></Modal>;
 }
 
+function PaymentNotice({ notice, onClose, onOpenAlerts }) {
+  return <Modal visible={!!notice} transparent animationType="fade" onRequestClose={onClose}>
+    <View style={styles.modalOverlay}><View style={styles.reportSuccessCard}>
+      <View style={[styles.depositModalIcon, { backgroundColor: colors.green }]}><Ionicons name="checkmark" size={28} color={colors.white} /></View>
+      <Text style={styles.depositModalTitle}>{notice?.title || "Payment received"}</Text>
+      <Text style={styles.depositModalText}>{notice?.message}</Text>
+      <Pressable onPress={onOpenAlerts} style={styles.primaryButton}><Ionicons name="notifications-outline" size={18} color={colors.white} /><Text style={styles.primaryButtonText}>View notifications</Text></Pressable>
+      <Pressable onPress={onClose} style={styles.modalCancel}><Text style={styles.modalCancelText}>Close</Text></Pressable>
+    </View></View>
+  </Modal>;
+}
+
 function PullToRefresh({ onRefresh, children, style }) {
   return <RefreshControl style={style} refreshing={false} onRefresh={onRefresh} colors={[colors.blue]} tintColor={colors.blue} progressBackgroundColor={colors.white}>{children}</RefreshControl>;
 }
@@ -496,7 +509,7 @@ function MonitoringScreen({ selectedBike, vehicles, onSelectBike, security, onMo
   );
   const changeImmobilizer = value => Alert.alert(
     value ? "Immobilize vehicle?" : "Allow engine start?",
-    value ? "For safety, the command is accepted only after the tracker confirms the vehicle is stationary and ignition is off." : "This will allow the engine to start. GPS monitoring remains active.",
+    value ? "For safety, the command is accepted only after a fresh tracker report shows the vehicle is stationary. Keep the bike parked before immobilizing it." : "This will allow the engine to start. GPS monitoring remains active.",
     [{ text: "Cancel", style: "cancel" }, { text: value ? "Immobilize" : "Allow", style: value ? "destructive" : "default", onPress: async () => { setBusy("immobilizer"); await onImmobilizerChange(selectedBike, value); setBusy(null); } }],
   );
   return <ScrollView style={styles.pageScroll} contentContainerStyle={styles.pageContent} refreshControl={<PullToRefresh onRefresh={onRefresh} />}>
@@ -608,77 +621,61 @@ function PhoneLocationTrackingScreen() {
 
 function TrackingScreen({ selectedBike, onSelectBike, accessToken, vehicles = [] }) {
   const allVehicles = vehicles.length ? vehicles : bikes;
-  const mapRef = useRef(null);
-  const sheetY = useRef(new Animated.Value(0)).current;
-  const refreshSpin = useRef(new Animated.Value(0)).current;
-  const [expanded, setExpanded] = useState(false);
-  const [refreshing, setRefreshing] = useState(false);
   const [range, setRange] = useState("Today");
-  const [mapType, setMapType] = useState("standard");
-  const [phoneLocation, setPhoneLocation] = useState(null);
-  const [now, setNow] = useState(Date.now());
   const [vehicleSearch, setVehicleSearch] = useState(`${selectedBike.registration} • ${selectedBike.model}`);
   const [vehiclePickerOpen, setVehiclePickerOpen] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [now, setNow] = useState(Date.now());
   const { motorcycle, route, setRoute, loading, routeLoading, error, refresh, loadRoute } = useTracking({ motorcycleId: selectedBike.id, accessToken });
-  const bike = motorcycle ? { ...motorcycle, model: selectedBike.model, registrationNumber: selectedBike.registration } : null;
-  const marker = useRef(new AnimatedRegion({ latitude: 0, longitude: 0, latitudeDelta: 0, longitudeDelta: 0 })).current;
-  useEffect(() => { const timer = setInterval(() => setNow(Date.now()), 10000); return () => clearInterval(timer); }, []);
-  useEffect(() => { if (bike?.location) marker.timing({ latitude: bike.location.latitude, longitude: bike.location.longitude, duration: 900, useNativeDriver: false }).start(); }, [bike?.location?.latitude, bike?.location?.longitude, marker]);
-  useEffect(() => { if (!loading && bike?.location) requestAnimationFrame(() => mapRef.current?.animateCamera({ center: bike.location, zoom: 16 }, { duration: 700 })); }, [selectedBike.id, loading]);
-  useEffect(() => {
-    let active = true;
-    Location.getForegroundPermissionsAsync().then(async permission => {
-      if (permission.status !== "granted") return;
-      const result = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-      if (active) setPhoneLocation({ latitude: result.coords.latitude, longitude: result.coords.longitude });
-    }).catch(() => {});
-    return () => { active = false; };
-  }, []);
-  const location = bike?.location ?? { latitude: 0, longitude: 0 };
-  const status = trackerState({ providerStatus: bike?.trackerStatus ?? bike?.location?.trackerStatus, recordedAt: bike?.location?.recordedAt, staleMs: STALE_MS, offlineMs: OFFLINE_MS });
-  const gpsAccuracy = Number.isFinite(Number(bike?.location?.accuracyMeters)) ? Math.round(Number(bike.location.accuracyMeters)) : null;
-  const gpsQuality = gpsAccuracy == null ? "Unavailable" : gpsAccuracy <= 5 ? "Excellent" : gpsAccuracy <= 10 ? "Good" : gpsAccuracy <= 25 ? "Fair" : "Poor";
-  const gpsQualityColor = gpsAccuracy == null ? colors.gray : gpsAccuracy <= 10 ? colors.green : gpsAccuracy <= 25 ? colors.orange : "#DC3B2A";
-  const routeCoordinates = useMemo(() => route?.points?.map(({ latitude, longitude }) => ({ latitude, longitude })) ?? [], [route]);
+  const bike = useMemo(() => motorcycle ? { ...selectedBike, ...motorcycle, location: motorcycle.location ?? selectedBike.location } : selectedBike, [motorcycle, selectedBike]);
+  const allFleetVehicles = useMemo(() => allVehicles.map(vehicle => vehicle.id === selectedBike.id ? { ...vehicle, ...bike } : vehicle), [allVehicles, bike, selectedBike.id]);
   const matchingVehicles = useMemo(() => {
     const query = vehicleSearch.trim().toLowerCase();
-    return query ? allVehicles.filter(vehicle => `${vehicle.registration} ${vehicle.model}`.toLowerCase().includes(query)) : allVehicles;
-  }, [vehicleSearch]);
-  useEffect(() => { if (!vehiclePickerOpen) setVehicleSearch(`${selectedBike.registration} • ${selectedBike.model}`); }, [selectedBike.id, vehiclePickerOpen]);
-  const fleetMarkers = useMemo(() => allVehicles.filter(vehicle => vehicle.id !== selectedBike.id && Number.isFinite(vehicle.location?.latitude) && Number.isFinite(vehicle.location?.longitude)).map(vehicle => ({ vehicle, coordinate: vehicle.location })), [selectedBike.id, allVehicles]);
-  useEffect(() => { if (routeCoordinates.length > 1) mapRef.current?.fitToCoordinates(routeCoordinates, { edgePadding: { top: 80, right: 55, bottom: expanded ? 345 : 215, left: 40 }, animated: true }); }, [expanded, routeCoordinates]);
-  const locatePhone = async () => Alert.alert("Allow Jixels to access your location?", "This shows your position relative to your motorcycle. Tracking the bike does not require your phone location.", [{ text: "Not now", style: "cancel" }, { text: "Continue", onPress: async () => { const permission = await Location.requestForegroundPermissionsAsync(); if (permission.status !== "granted") return; const result = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced }); const point = { latitude: result.coords.latitude, longitude: result.coords.longitude }; setPhoneLocation(point); mapRef.current?.animateCamera({ center: point, zoom: 15 }, { duration: 700 }); } }]);
-  const refreshLocation = useCallback(async () => { if (refreshing) return; setRefreshing(true); refreshSpin.setValue(0); const spin = Animated.loop(Animated.timing(refreshSpin, { toValue: 1, duration: 800, useNativeDriver: true })); spin.start(); try { await refresh(); } finally { spin.stop(); setRefreshing(false); } }, [refresh, refreshing, refreshSpin]);
-  const toggleSheet = () => { const next = !expanded; setExpanded(next); Animated.spring(sheetY, { toValue: next ? -174 : 0, useNativeDriver: true, damping: 20, stiffness: 180 }).start(); };
-  if (loading) return <ActivitySkeleton screen="tracking" />;
-  if (!bike?.location) {
-    // Do not mount the native map until the tracker has supplied a valid GPS
-    // point. Some Android devices close the activity when Google Maps starts
-    // with a placeholder point and no configured map tiles.
-    return <View style={[styles.mapContainer, { backgroundColor: colors.surface, padding: 18, justifyContent: "center" }]}><View style={[styles.card, { gap: 13 }]}><View style={styles.waitingTrackerIcon}><Ionicons name="location-outline" size={26} color={colors.blue} /></View><Text style={styles.waitingTrackerTitle}>Live map is ready</Text><Text style={styles.waitingTrackerText}>{error ?? `${selectedBike.registration} is linked to your account. The live map will open automatically when the tracker sends its first valid GPS location.`}</Text><View style={styles.financeStrip}><View><Text style={styles.microLabel}>VEHICLE</Text><Text style={styles.cardTitle}>{selectedBike.registration}</Text></View><View><Text style={styles.microLabel}>TRACKER</Text><Text style={styles.cardTitle}>{selectedBike.tracker || "Assigned"}</Text></View></View><Pressable onPress={refreshLocation} style={styles.primaryButton}><Ionicons name="refresh" size={18} color={colors.white} /><Text style={styles.primaryButtonText}>{refreshing ? "Checking tracker…" : "Refresh live location"}</Text></Pressable><Pressable onPress={locatePhone} style={styles.outlineButton}><Ionicons name="navigate-outline" size={18} color={colors.blue} /><Text style={styles.outlineButtonText}>Show my phone location</Text></Pressable></View></View>;
-    /*
-    const previewCenter = phoneLocation ?? { latitude: 0.0236, longitude: 37.9062 };
-    return <View style={styles.mapContainer}><MapView ref={mapRef} provider={Platform.OS === "android" ? PROVIDER_GOOGLE : undefined} style={StyleSheet.absoluteFill} mapType={mapType} initialRegion={{ ...previewCenter, latitudeDelta: phoneLocation ? .08 : 7.5, longitudeDelta: phoneLocation ? .08 : 7.5 }} showsCompass showsMyLocationButton={false}>{phoneLocation && <Marker coordinate={phoneLocation} title="Your phone location"><View style={styles.phoneMarker}><View style={styles.phoneMarkerInner} /></View></Marker>}</MapView><View style={styles.vehiclePicker}><Pressable onPress={() => setVehiclePickerOpen(open => !open)} style={styles.vehiclePickerInput}><Ionicons name="search" size={18} color={colors.blue} /><TextInput value={vehicleSearch} onChangeText={text => { setVehicleSearch(text); setVehiclePickerOpen(true); }} onFocus={() => { setVehicleSearch(""); setVehiclePickerOpen(true); }} placeholder="Search vehicle or plate" placeholderTextColor="#7890A8" style={styles.vehicleSearchInput} /><Ionicons name={vehiclePickerOpen ? "chevron-up" : "chevron-down"} size={17} color={colors.gray} /></Pressable>{vehiclePickerOpen && <View style={styles.vehicleDropdown}>{matchingVehicles.length ? matchingVehicles.map(vehicle => <Pressable key={vehicle.id} onPress={() => { onSelectBike(vehicle); setVehicleSearch(`${vehicle.registration} • ${vehicle.model}`); setVehiclePickerOpen(false); }} style={[styles.vehicleDropdownRow, vehicle.id === selectedBike.id && styles.vehicleDropdownSelected]}><View style={styles.vehicleDropdownIcon}>{vehicle.type === "car" ? <Ionicons name="car-sport" size={18} color={colors.blue} /> : <MaterialCommunityIcons name="motorbike" size={19} color={colors.blue} />}</View><View style={{ flex: 1 }}><Text style={styles.vehicleDropdownPlate}>{vehicle.registration}</Text><Text style={styles.vehicleDropdownModel}>{vehicle.model}</Text></View><View style={[styles.tableStatusDot, { backgroundColor: vehicle.status === "online" ? colors.green : colors.orange }]} /></Pressable>) : <Text style={styles.noVehicleText}>No vehicle found</Text>}</View>}</View><View style={styles.waitingTrackerCard}><View style={styles.waitingTrackerIcon}><Ionicons name="radio-outline" size={22} color={colors.orange} /></View><View style={{ flex: 1 }}><Text style={styles.waitingTrackerTitle}>Waiting for {selectedBike.registration}</Text><Text style={styles.waitingTrackerText}>{error ?? "The map is ready. This vehicle will appear when its tracker sends a valid location."}</Text></View></View><View style={styles.mapControls}><RoundButton icon="navigate-outline" label="Show my phone location" onPress={locatePhone} /><RoundButton icon="layers-outline" label="Map type" active={mapType === "hybrid"} onPress={() => setMapType(value => value === "standard" ? "hybrid" : "standard")} /><RoundButton label="Retry tracker" onPress={refreshLocation}><Animated.View style={{ transform: [{ rotate: refreshSpin.interpolate({ inputRange: [0, 1], outputRange: ["0deg", "360deg"] }) }] }}><Ionicons name="refresh" size={20} color={colors.blue} /></Animated.View></RoundButton></View></View>;
-    */
-  }
-  const openExternalMap = target => {
-    const point = target?.location;
-    if (!point) return Alert.alert("Location unavailable", "This tracker has not sent a valid GPS position yet.");
-    Linking.openURL(`https://www.openstreetmap.org/?mlat=${encodeURIComponent(point.latitude)}&mlon=${encodeURIComponent(point.longitude)}#map=16/${encodeURIComponent(point.latitude)}/${encodeURIComponent(point.longitude)}`).catch(() => Alert.alert("Map unavailable", "Install or update a browser or Maps app, then try again."));
+    return query ? allFleetVehicles.filter(vehicle => `${vehicle.registration} ${vehicle.model}`.toLowerCase().includes(query)) : allFleetVehicles;
+  }, [vehicleSearch, allFleetVehicles]);
+  const status = trackerState({ providerStatus: bike?.trackerStatus ?? bike?.location?.trackerStatus, recordedAt: bike?.location?.recordedAt, staleMs: STALE_MS, offlineMs: OFFLINE_MS });
+  const routeCoordinates = useMemo(() => route?.points?.map(({ latitude, longitude }) => ({ latitude, longitude })) ?? [], [route]);
+  useEffect(() => { const timer = setInterval(() => setNow(Date.now()), 10000); return () => clearInterval(timer); }, []);
+  useEffect(() => { setVehicleSearch(`${selectedBike.registration} • ${selectedBike.model}`); setVehiclePickerOpen(false); }, [selectedBike.id, selectedBike.registration, selectedBike.model]);
+  const selectBike = useCallback(id => {
+    const vehicle = allFleetVehicles.find(item => String(item.id) === String(id));
+    if (vehicle) onSelectBike(vehicle);
+  }, [allFleetVehicles, onSelectBike]);
+  const refreshLocation = async () => {
+    if (refreshing) return;
+    setRefreshing(true);
+    try { await refresh(); } finally { setRefreshing(false); }
   };
-  const locatedVehicles = allVehicles.filter(vehicle => Number.isFinite(vehicle.location?.latitude) && Number.isFinite(vehicle.location?.longitude));
-  return <View style={[styles.mapContainer, { backgroundColor: colors.surface }]}><ScrollView contentContainerStyle={[styles.pageContent, { paddingTop: 18 }]}><View style={[styles.welcomeCard, { backgroundColor: colors.blueDark }]}><View style={styles.welcomeIcon}><Ionicons name="location" size={25} color={colors.white}/></View><View style={{ flex: 1 }}><Text style={styles.welcomeName}>Live tracker locations</Text><Text style={styles.welcomeCopy}>{locatedVehicles.length ? `${locatedVehicles.length} tracker${locatedVehicles.length === 1 ? "" : "s"} reporting a location.` : "Waiting for tracker GPS locations."}</Text></View></View><View style={styles.card}><Text style={styles.sectionTitle}>Your trackers</Text>{allVehicles.map(vehicle => <View key={vehicle.id} style={styles.financeStrip}><View style={{ flex: 1 }}><Text style={styles.cardTitle}>{vehicle.registration}</Text><Text style={styles.cardSub}>{vehicle.model} · Tracker {vehicle.tracker || "Assigned"}</Text><Text style={styles.cardSub}>{vehicle.location ? `${Number(vehicle.location.latitude).toFixed(5)}, ${Number(vehicle.location.longitude).toFixed(5)}` : "No GPS location received yet"}</Text></View><Pressable onPress={() => openExternalMap(vehicle)} style={styles.smallPrimary}><Ionicons name="map-outline" size={17} color={colors.white}/><Text style={styles.smallPrimaryText}>Map</Text></Pressable></View>)}</View><Pressable onPress={refreshLocation} style={styles.primaryButton}><Ionicons name="refresh" size={18} color={colors.white}/><Text style={styles.primaryButtonText}>{refreshing ? "Refreshing locations…" : "Refresh all tracker locations"}</Text></Pressable></ScrollView></View>;
-  /* Legacy native map controls retained only for source history.
-    <View style={styles.vehiclePicker}><Pressable onPress={() => setVehiclePickerOpen(open => !open)} style={styles.vehiclePickerInput}><Ionicons name="search" size={18} color={colors.blue} /><TextInput value={vehicleSearch} onChangeText={text => { setVehicleSearch(text); setVehiclePickerOpen(true); }} onFocus={() => { setVehicleSearch(""); setVehiclePickerOpen(true); }} placeholder="Search vehicle or plate" placeholderTextColor="#7890A8" style={styles.vehicleSearchInput} /><Ionicons name={vehiclePickerOpen ? "chevron-up" : "chevron-down"} size={17} color={colors.gray} /></Pressable>{vehiclePickerOpen && <View style={styles.vehicleDropdown}>{matchingVehicles.length ? matchingVehicles.map(vehicle => <Pressable key={vehicle.id} onPress={() => { onSelectBike(vehicle); setVehicleSearch(`${vehicle.registration} • ${vehicle.model}`); setVehiclePickerOpen(false); }} style={[styles.vehicleDropdownRow, vehicle.id === selectedBike.id && styles.vehicleDropdownSelected]}><View style={styles.vehicleDropdownIcon}>{vehicle.type === "car" ? <Ionicons name="car-sport" size={18} color={colors.blue} /> : <MaterialCommunityIcons name="motorbike" size={19} color={colors.blue} />}</View><View style={{ flex: 1 }}><Text style={styles.vehicleDropdownPlate}>{vehicle.registration}</Text><Text style={styles.vehicleDropdownModel}>{vehicle.model}</Text></View><View style={[styles.tableStatusDot, { backgroundColor: vehicle.status === "online" ? colors.green : colors.orange }]} /></Pressable>) : <Text style={styles.noVehicleText}>No vehicle found</Text>}</View>}</View>
-    <View style={styles.mapControls}><RoundButton icon="locate" label="Recenter" onPress={() => mapRef.current?.animateCamera({ center: location, zoom: 16 }, { duration: 700 })} /><RoundButton icon="navigate-outline" label="My location" onPress={locatePhone} /><RoundButton icon="layers-outline" label="Map type" active={mapType === "hybrid"} onPress={() => setMapType(v => v === "standard" ? "hybrid" : "standard")} /><RoundButton label="Refresh" onPress={refreshLocation}><Animated.View style={{ transform: [{ rotate: refreshSpin.interpolate({ inputRange: [0, 1], outputRange: ["0deg", "360deg"] }) }] }}><Ionicons name="refresh" size={20} color={colors.blue} /></Animated.View></RoundButton></View>
+  const toggleRoute = async () => {
+    if (route) { setRoute(null); return; }
+    await loadRoute(range);
+  };
+  if (loading && !bike?.location) return <ActivitySkeleton screen="tracking" />;
+  const locatedCount = allFleetVehicles.filter(vehicle => Number.isFinite(Number(vehicle.location?.latitude)) && Number.isFinite(Number(vehicle.location?.longitude))).length;
+  return <View style={[styles.mapContainer, { backgroundColor: colors.surface }]}>
+    <LiveFleetMap selected={bike} vehicles={allFleetVehicles} route={route} onSelectVehicle={selectBike} />
+    <View style={styles.vehiclePicker}>
+      <Pressable onPress={() => setVehiclePickerOpen(open => !open)} style={styles.vehiclePickerInput}>
+        <Ionicons name="search" size={18} color={colors.blue} />
+        <TextInput value={vehicleSearch} onChangeText={text => { setVehicleSearch(text); setVehiclePickerOpen(true); }} onFocus={() => { setVehicleSearch(""); setVehiclePickerOpen(true); }} placeholder="Find one of your bikes" placeholderTextColor="#7890A8" style={styles.vehicleSearchInput} />
+        <Ionicons name={vehiclePickerOpen ? "chevron-up" : "chevron-down"} size={17} color={colors.gray} />
+      </Pressable>
+      {vehiclePickerOpen && <View style={styles.vehicleDropdown}>{matchingVehicles.length ? matchingVehicles.map(vehicle => <Pressable key={vehicle.id} onPress={() => selectBike(vehicle.id)} style={[styles.vehicleDropdownRow, vehicle.id === selectedBike.id && styles.vehicleDropdownSelected]}><View style={styles.vehicleDropdownIcon}><MaterialCommunityIcons name="motorbike" size={19} color={colors.blue} /></View><View style={{ flex: 1 }}><Text style={styles.vehicleDropdownPlate}>{vehicle.registration}</Text><Text style={styles.vehicleDropdownModel}>{vehicle.model}</Text></View><View style={[styles.tableStatusDot, { backgroundColor: vehicle.status === "online" ? colors.green : colors.orange }]} /></Pressable>) : <Text style={styles.noVehicleText}>No matching bike</Text>}</View>}
+    </View>
     {!!error && <View style={styles.mapError}><Ionicons name="warning" color={colors.orange} /><Text numberOfLines={2} style={styles.mapErrorText}>{error}</Text></View>}
-    <Animated.View style={[styles.mapSheet, { transform: [{ translateY: sheetY }] }]}><Pressable onPress={toggleSheet}><View style={styles.handle} /><View style={styles.bikeTop}><View style={{ flex: 1 }}><Text style={styles.sheetBike}>{selectedBike.model}</Text><Text style={styles.cardSub}>{selectedBike.registration}</Text></View><StatusPill status={status} /></View><View style={styles.mapMetrics}><View style={{ flex: 1 }}><Text style={styles.microLabel}>SPEED</Text><Text style={styles.speed}>{bike.location.speedKph} <Text style={styles.speedUnit}>km/h</Text></Text></View><View style={styles.metricDivider} /><View style={{ flex: 1 }}><Text style={styles.microLabel}>LAST UPDATE</Text><Text style={styles.lastUpdate}>{relativeTime(bike.location.recordedAt, now)}</Text></View></View></Pressable><View style={styles.sheetExpanded}><View style={styles.sheetDetail}><View><Text style={styles.cardSub}>GPS accuracy</Text><Text style={styles.gpsAccuracyHint}>Live tracker precision</Text></View><View style={styles.gpsAccuracyValue}><View style={[styles.gpsAccuracyDot, { backgroundColor: gpsQualityColor }]} /><Text style={[styles.detailStrong, { color: gpsQualityColor }]}>{gpsQuality} • {gpsAccuracy == null ? "—" : `±${gpsAccuracy} m`}</Text></View></View><View style={styles.rangeRow}>{ranges.map(item => <Pressable key={item} onPress={async () => { setRange(item); if (route) await loadRoute(item); }} style={[styles.rangeButton, range === item && styles.rangeActive]}><Text style={[styles.rangeText, range === item && styles.rangeTextActive]}>{item}</Text></Pressable>)}</View><Pressable disabled={routeLoading} onPress={() => route ? setRoute(null) : loadRoute(range)} style={[styles.outlineButton, styles.fullRouteButton]}>{routeLoading ? <ActivityIndicator color={colors.blue} /> : <><Ionicons name="git-branch-outline" color={colors.blue} /><Text style={styles.outlineButtonText}>{route ? "Hide Route" : "Route History"}</Text></>}</Pressable>{route && <View style={styles.tripRow}><Text style={styles.tripText}>{route.distanceKm} km</Text><Text style={styles.tripText}>{Math.floor(route.durationMinutes / 60)}h {route.durationMinutes % 60}m</Text><Text style={styles.tripText}>{route.stops} stops</Text></View>}</View></Animated.View>
+    <View style={[styles.mapSheet, { bottom: 12, height: undefined, paddingBottom: 14 }]}>
+      <View style={styles.bikeTop}><View style={{ flex: 1 }}><Text style={styles.sheetBike}>{selectedBike.model}</Text><Text style={styles.cardSub}>{selectedBike.registration} · {locatedCount} of {allFleetVehicles.length} bikes reporting</Text></View><StatusPill status={status} /></View>
+      {bike.location ? <View style={styles.mapMetrics}><View style={{ flex: 1 }}><Text style={styles.microLabel}>SPEED</Text><Text style={styles.speed}>{Number(bike.location.speedKph ?? 0)} <Text style={styles.speedUnit}>km/h</Text></Text></View><View style={styles.metricDivider} /><View style={{ flex: 1 }}><Text style={styles.microLabel}>LAST UPDATE</Text><Text style={styles.lastUpdate}>{relativeTime(bike.location.recordedAt, now)}</Text></View></View> : <Text style={styles.stateMessage}>{error ?? "Waiting for this bike's first valid GPS location. Other bikes with locations remain visible."}</Text>}
+      <View style={styles.rangeRow}>{ranges.map(item => <Pressable key={item} onPress={() => setRange(item)} style={[styles.rangeButton, range === item && styles.rangeActive]}><Text style={[styles.rangeText, range === item && styles.rangeTextActive]}>{item}</Text></Pressable>)}</View>
+      <View style={{ flexDirection: "row", gap: 8 }}>
+        <Pressable disabled={routeLoading} onPress={toggleRoute} style={[styles.outlineButton, { flex: 1, marginTop: 10 }]}>{routeLoading ? <ActivityIndicator color={colors.blue} /> : <><Ionicons name={route ? "git-branch" : "git-branch-outline"} color={colors.blue} /><Text style={styles.outlineButtonText}>{route ? "Hide selected bike route" : "View selected bike route"}</Text></>}</Pressable>
+        <Pressable disabled={refreshing} onPress={refreshLocation} style={[styles.outlineButton, { marginTop: 10, paddingHorizontal: 13 }]}>{refreshing ? <ActivityIndicator color={colors.blue} /> : <Ionicons name="refresh" size={18} color={colors.blue} />}</Pressable>
+      </View>
+      {route && <View style={styles.tripRow}><Text style={styles.tripText}>{route.distanceKm ?? 0} km</Text><Text style={styles.tripText}>{Math.floor((route.durationMinutes ?? 0) / 60)}h {(route.durationMinutes ?? 0) % 60}m</Text><Text style={styles.tripText}>{route.stops ?? 0} stops</Text></View>}
+      {routeCoordinates.length === 0 && route && <Text style={styles.stateMessage}>No saved route points for this bike and time range.</Text>}
+    </View>
   </View>;
 }
-
-  */
-}
-
 function useConnectivity() {
   const [isOnline, setIsOnline] = useState(true);
   const update = useCallback(state => setIsOnline(state.isConnected !== false && state.isInternetReachable !== false), []);
@@ -732,6 +729,9 @@ function CustomerApp({ session, onLogout }) {
   // request-loading state and show skeletons only while awaiting a response.
   const booting = false;
   const [paymentReceipt, setPaymentReceipt] = useState(null);
+  const [paymentNotice, setPaymentNotice] = useState(null);
+  const knownAlertIds = useRef(null);
+  const shownPaymentNoticeIds = useRef(new Set());
   useEffect(() => {
     Promise.all([
       Location.getForegroundPermissionsAsync(),
@@ -808,7 +808,16 @@ function CustomerApp({ session, onLogout }) {
         }
         if (alertsResult.status === "fulfilled") {
           const records = alertsResult.value?.alerts ?? alertsResult.value;
-          setAlerts(Array.isArray(records) ? dedupeById(records) : []);
+          const nextAlerts = Array.isArray(records) ? dedupeById(records) : [];
+          if (knownAlertIds.current) {
+            const newPayment = nextAlerts.find(alert => alert.type === "payment" && !knownAlertIds.current.has(String(alert.id)) && !shownPaymentNoticeIds.current.has(String(alert.id)));
+            if (newPayment) {
+              shownPaymentNoticeIds.current.add(String(newPayment.id));
+              setPaymentNotice({ id: String(newPayment.id), title: newPayment.title || "Payment received", message: newPayment.message || newPayment.body || "Your payment has been confirmed." });
+            }
+          }
+          knownAlertIds.current = new Set([...(knownAlertIds.current ?? []), ...nextAlerts.map(alert => String(alert.id))]);
+          setAlerts(nextAlerts);
         }
       } catch (error) {
         if (!active) return;
@@ -900,8 +909,12 @@ function CustomerApp({ session, onLogout }) {
   useEffect(() => {
     const received = Notifications.addNotificationReceivedListener(notification => {
       const content = notification.request.content;
-      if (content.data?.inAppRecorded) return;
       const eventId = content.data?.eventId ?? content.data?.mpesaReceiptNumber ?? notification.request.identifier;
+      if (content.data?.type === "payment" && !shownPaymentNoticeIds.current.has(String(eventId))) {
+        shownPaymentNoticeIds.current.add(String(eventId));
+        setPaymentNotice({ id: String(eventId), title: content.title ?? "Payment received", message: content.body ?? "Your payment has been confirmed." });
+      }
+      if (content.data?.inAppRecorded) return;
       setAlerts(current => upsertById(current, { id: eventId, type: content.data?.type ?? "tracker", icon: content.data?.type === "payment" ? "checkmark-circle-outline" : "notifications-outline", title: content.title ?? "Jixels update", message: content.body ?? "You have a new account update.", age: "now", unread: true }));
       if (content.data?.type === "payment" && session?.accessToken) {
         customerApi.getPayments(session.accessToken).then(response => {
@@ -1077,9 +1090,9 @@ function CustomerApp({ session, onLogout }) {
     }
   };
   if (recordsLoading) return <View style={[styles.appShell, { paddingTop: insets.top }]}><StatusBar style="light" /><ActivitySkeleton screen="dashboard" /></View>;
-  if (!selectedBike) return <View style={[styles.appShell, { paddingTop: insets.top, paddingBottom: Math.max(insets.bottom, 22) }]}><StatusBar style="light" /><View style={styles.main}><PageHeader title="Dashboard" subtitle="Your Jixels account" expanded={drawerExpanded} onToggle={() => setDrawerExpanded(value => !value)} unread={unread} onAlerts={() => navigate("alerts")} profile={profile} /><UnassignedDashboard profile={profile} navigate={navigate} onRefresh={refreshable.onRefresh} /></View>{drawerExpanded && <><Pressable accessibilityLabel="Close menu" onPress={() => setDrawerExpanded(false)} style={styles.drawerBackdrop} /><Drawer topInset={0} bottomInset={Math.max(insets.bottom, 28)} expanded active={screen} unread={unread} onToggle={() => setDrawerExpanded(false)} onSelect={navigate} onLogout={onLogout} /></>}<PaymentSuccess receipt={paymentReceipt} onClose={() => setPaymentReceipt(null)} /></View>;
+  if (!selectedBike) return <View style={[styles.appShell, { paddingTop: insets.top, paddingBottom: Math.max(insets.bottom, 22) }]}><StatusBar style="light" /><View style={styles.main}><PageHeader title="Dashboard" subtitle="Your Jixels account" expanded={drawerExpanded} onToggle={() => setDrawerExpanded(value => !value)} unread={unread} onAlerts={() => navigate("alerts")} profile={profile} /><UnassignedDashboard profile={profile} navigate={navigate} onRefresh={refreshable.onRefresh} /></View>{drawerExpanded && <><Pressable accessibilityLabel="Close menu" onPress={() => setDrawerExpanded(false)} style={styles.drawerBackdrop} /><Drawer topInset={0} bottomInset={Math.max(insets.bottom, 28)} expanded active={screen} unread={unread} onToggle={() => setDrawerExpanded(false)} onSelect={navigate} onLogout={onLogout} /></>}<PaymentSuccess receipt={paymentReceipt} onClose={() => setPaymentReceipt(null)} /><PaymentNotice notice={paymentNotice} onClose={() => setPaymentNotice(null)} onOpenAlerts={() => { setPaymentNotice(null); setScreen("alerts"); }} /></View>;
   if (!isOnline && !offlineAcknowledged) return <OfflineGate onContinue={() => setOfflineAcknowledged(true)} onRetry={() => checkConnectivity().catch(() => {})} />;
-  return <View style={[styles.appShell, { paddingTop: insets.top, paddingBottom: Math.max(insets.bottom, 22) }]}><StatusBar style="light" /><View style={[styles.main, darkMode && styles.darkPage]}>{!isOnline && <View style={styles.offlineBanner}><Ionicons name="cloud-offline-outline" size={14} color={colors.white} /><Text style={styles.offlineBannerText}>Offline • {syncQueue.length} waiting to sync</Text></View>}<PageHeader dark={darkMode} title={title} subtitle={subtitles[screen]} expanded={drawerExpanded} onToggle={() => setDrawerExpanded(v => !v)} unread={unread} onAlerts={() => navigate("alerts")} profile={profile} /><Animated.View style={[styles.screen, { opacity: screenMotion, transform: [{ translateX: screenMotion.interpolate({ inputRange: [0, 1], outputRange: [12, 0] }) }] }]}>{booting ? <ActivitySkeleton screen={screen} /> : <>{screen === "dashboard" && <Dashboard darkMode={darkMode} selectedBike={selectedBike} onSelectBike={setSelectedBike} navigate={navigate} totalPaid={totalPaid} profile={profile} {...refreshable} />}{screen === "bikes" && <BikesScreen selectedBike={selectedBike} onSelectBike={setSelectedBike} navigate={navigate} {...refreshable} />}{screen === "tracking" && (selectedBike ? <TrackingScreen selectedBike={selectedBike} onSelectBike={setSelectedBike} accessToken={session?.accessToken} /> : <PhoneLocationTrackingScreen />)}{screen === "monitoring" && <MonitoringScreen selectedBike={selectedBike} vehicles={monitoringVehicles} onSelectBike={setSelectedBike} security={security} onMonitoringChange={updateMonitoring} onImmobilizerChange={updateImmobilizer} isOnline={isOnline} {...refreshable} />}{screen === "payments" && <PaymentScreen selectedBike={paymentSelectedBike} paymentVehicles={paymentVehicles} onSelectBike={setSelectedBike} onPaid={addPayment} registeredPhone={profile.phone} isOnline={isOnline} {...refreshable} />}{screen === "history" && <HistoryScreen darkMode={darkMode} payments={payments} deletePayments={dismissCustomerPayments} {...refreshable} />}{screen === "reports" && <ReportsScreen profile={profile} selectedBike={selectedBike} vehicles={bikes} onSelectBike={setSelectedBike} onGenerate={generateReport} isOnline={isOnline} {...refreshable} />}{screen === "alerts" && <AlertsScreen darkMode={darkMode} alerts={alerts} markAllRead={() => markCustomerAlertsRead(alerts.map(alert => alert.id))} markAlertRead={id => markCustomerAlertsRead([id])} deleteAlerts={deleteCustomerAlerts} {...refreshable} />}{screen === "settings" && <SettingsScreen profile={profile} onSave={setProfile} onSaveProfile={saveCustomerProfile} {...refreshable} />}</>}</Animated.View></View>{permissionAlertVisible && <View pointerEvents="box-none" style={styles.dashboardPermissionWrap}><View style={styles.dashboardPermissionAlert}><View style={styles.dashboardPermissionIcon}><Ionicons name="shield-checkmark" size={25} color={colors.white} /></View><View style={styles.dashboardPermissionBody}><Text style={styles.dashboardPermissionTitle}>Allow Jixels access</Text><Text style={styles.dashboardPermissionText}>Enable device location for the live map and notifications for tracker and payment alerts.</Text></View><View style={styles.dashboardPermissionActions}><Pressable disabled={permissionBusy} onPress={() => setPermissionAlertVisible(false)} style={styles.permissionCancelButton}><Text style={styles.permissionCancelText}>Cancel</Text></Pressable><Pressable disabled={permissionBusy} onPress={acceptPermissions} style={styles.permissionAcceptButton}>{permissionBusy ? <ActivityIndicator color={colors.white} size="small" /> : <Text style={styles.permissionAcceptText}>Accept</Text>}</Pressable></View></View></View>}{drawerExpanded && <><Pressable accessibilityLabel="Close menu" onPress={() => setDrawerExpanded(false)} style={styles.drawerBackdrop} /><Drawer topInset={0} bottomInset={Math.max(insets.bottom, 28)} expanded active={screen} unread={unread} onToggle={() => setDrawerExpanded(false)} onSelect={navigate} onLogout={onLogout} /></>}<PaymentSuccess receipt={paymentReceipt} onClose={() => setPaymentReceipt(null)} /></View>;
+  return <View style={[styles.appShell, { paddingTop: insets.top, paddingBottom: Math.max(insets.bottom, 22) }]}><StatusBar style="light" /><View style={[styles.main, darkMode && styles.darkPage]}>{!isOnline && <View style={styles.offlineBanner}><Ionicons name="cloud-offline-outline" size={14} color={colors.white} /><Text style={styles.offlineBannerText}>Offline • {syncQueue.length} waiting to sync</Text></View>}<PageHeader dark={darkMode} title={title} subtitle={subtitles[screen]} expanded={drawerExpanded} onToggle={() => setDrawerExpanded(v => !v)} unread={unread} onAlerts={() => navigate("alerts")} profile={profile} /><Animated.View style={[styles.screen, { opacity: screenMotion, transform: [{ translateX: screenMotion.interpolate({ inputRange: [0, 1], outputRange: [12, 0] }) }] }]}>{booting ? <ActivitySkeleton screen={screen} /> : <>{screen === "dashboard" && <Dashboard darkMode={darkMode} selectedBike={selectedBike} onSelectBike={setSelectedBike} navigate={navigate} totalPaid={totalPaid} profile={profile} {...refreshable} />}{screen === "bikes" && <BikesScreen selectedBike={selectedBike} onSelectBike={setSelectedBike} navigate={navigate} {...refreshable} />}{screen === "tracking" && (selectedBike ? <TrackingScreen selectedBike={selectedBike} vehicles={bikes} onSelectBike={setSelectedBike} accessToken={session?.accessToken} /> : <PhoneLocationTrackingScreen />)}{screen === "monitoring" && <MonitoringScreen selectedBike={selectedBike} vehicles={monitoringVehicles} onSelectBike={setSelectedBike} security={security} onMonitoringChange={updateMonitoring} onImmobilizerChange={updateImmobilizer} isOnline={isOnline} {...refreshable} />}{screen === "payments" && <PaymentScreen selectedBike={paymentSelectedBike} paymentVehicles={paymentVehicles} onSelectBike={setSelectedBike} onPaid={addPayment} registeredPhone={profile.phone} isOnline={isOnline} {...refreshable} />}{screen === "history" && <HistoryScreen darkMode={darkMode} payments={payments} deletePayments={dismissCustomerPayments} {...refreshable} />}{screen === "reports" && <ReportsScreen profile={profile} selectedBike={selectedBike} vehicles={bikes} onSelectBike={setSelectedBike} onGenerate={generateReport} isOnline={isOnline} {...refreshable} />}{screen === "alerts" && <AlertsScreen darkMode={darkMode} alerts={alerts} markAllRead={() => markCustomerAlertsRead(alerts.map(alert => alert.id))} markAlertRead={id => markCustomerAlertsRead([id])} deleteAlerts={deleteCustomerAlerts} {...refreshable} />}{screen === "settings" && <SettingsScreen profile={profile} onSave={setProfile} onSaveProfile={saveCustomerProfile} {...refreshable} />}</>}</Animated.View></View>{permissionAlertVisible && <View pointerEvents="box-none" style={styles.dashboardPermissionWrap}><View style={styles.dashboardPermissionAlert}><View style={styles.dashboardPermissionIcon}><Ionicons name="shield-checkmark" size={25} color={colors.white} /></View><View style={styles.dashboardPermissionBody}><Text style={styles.dashboardPermissionTitle}>Allow Jixels access</Text><Text style={styles.dashboardPermissionText}>Enable device location for the live map and notifications for tracker and payment alerts.</Text></View><View style={styles.dashboardPermissionActions}><Pressable disabled={permissionBusy} onPress={() => setPermissionAlertVisible(false)} style={styles.permissionCancelButton}><Text style={styles.permissionCancelText}>Cancel</Text></Pressable><Pressable disabled={permissionBusy} onPress={acceptPermissions} style={styles.permissionAcceptButton}>{permissionBusy ? <ActivityIndicator color={colors.white} size="small" /> : <Text style={styles.permissionAcceptText}>Accept</Text>}</Pressable></View></View></View>}{drawerExpanded && <><Pressable accessibilityLabel="Close menu" onPress={() => setDrawerExpanded(false)} style={styles.drawerBackdrop} /><Drawer topInset={0} bottomInset={Math.max(insets.bottom, 28)} expanded active={screen} unread={unread} onToggle={() => setDrawerExpanded(false)} onSelect={navigate} onLogout={onLogout} /></>}<PaymentSuccess receipt={paymentReceipt} onClose={() => setPaymentReceipt(null)} /><PaymentNotice notice={paymentNotice} onClose={() => setPaymentNotice(null)} onOpenAlerts={() => { setPaymentNotice(null); setScreen("alerts"); }} /></View>;
 }
 
 export default function App() {

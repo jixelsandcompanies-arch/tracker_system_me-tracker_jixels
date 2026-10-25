@@ -219,6 +219,21 @@ async function loadRoute(admin: SupabaseClient, vehicleId: string | null, tracke
   return { points, ...routeSummary(points), from: window.from, to: window.to };
 }
 
+async function customerBikeForUser(admin: SupabaseClient, userId: string, bikeId: string) {
+  const { data: profile, error: profileError } = await admin.from("profiles").select("email").eq("id", userId).maybeSingle();
+  if (profileError) return { bike: null, tracker: null, error: profileError };
+  const email = String(profile?.email ?? "").trim();
+  if (!email) return { bike: null, tracker: null, error: null };
+  const { data: customer, error: customerError } = await admin.from("customers").select("id").ilike("email", email).maybeSingle();
+  if (customerError || !customer?.id) return { bike: null, tracker: null, error: customerError };
+  const { data: bike, error: bikeError } = await admin.from("bikes")
+    .select("id,identifier,customer_id,monitoring_armed,immobilized,trackers(id,identifier,tramigo_device_id,latitude,longitude,last_seen_at,is_online)")
+    .eq("id", bikeId).eq("customer_id", customer.id).maybeSingle();
+  if (bikeError || !bike) return { bike: null, tracker: null, error: bikeError };
+  const relation = (bike as any).trackers;
+  return { bike, tracker: Array.isArray(relation) ? relation[0] ?? null : relation ?? null, error: null };
+}
+
 function isExpoPushToken(value: unknown) {
   return typeof value === "string" && /^(?:Expo|Exponent)PushToken\[[^\]]+\]$/.test(value);
 }
@@ -1918,7 +1933,7 @@ Deno.serve(async (request) => {
       const balance = Math.max(0, Number(account?.outstanding ?? total - paid));
       const dueAt = account?.due_at ?? account?.data?.dueAt ?? null;
       const financeStatus = balance <= 0 ? "Completed" : dueAt && new Date(dueAt).getTime() < now ? "Overdue" : account?.data?.status ?? "On Track";
-      return { id: bike.id, registration: bike.trackers?.[0]?.plate_number || bike.identifier, identifier: bike.identifier, model: bike.model || "Jixels vehicle", vehicle_type: bike.product_type, product_type: bike.product_type, tracker: bike.trackers?.[0]?.identifier ?? "Pending", status: bike.trackers?.[0]?.is_online ? "online" : "offline", is_online: Boolean(bike.trackers?.[0]?.is_online), latitude: bike.trackers?.[0]?.latitude, longitude: bike.trackers?.[0]?.longitude, last_seen_at: bike.trackers?.[0]?.last_seen_at, total, payable_amount: total, paid, balance, outstanding: balance, finance_status: financeStatus, monthly_payment: monthlyByBike.get(String(bike.id)) ?? 0, next_payment: dueAt ? new Date(dueAt).toLocaleDateString("en-KE", { timeZone: "Africa/Nairobi" }) : "", monitoring_armed: false, immobilized: false };
+      return { id: bike.id, registration: bike.trackers?.[0]?.plate_number || bike.identifier, identifier: bike.identifier, model: bike.model || "Jixels vehicle", vehicle_type: bike.product_type, product_type: bike.product_type, tracker: bike.trackers?.[0]?.identifier ?? "Pending", status: bike.trackers?.[0]?.is_online ? "online" : "offline", is_online: Boolean(bike.trackers?.[0]?.is_online), latitude: bike.trackers?.[0]?.latitude, longitude: bike.trackers?.[0]?.longitude, last_seen_at: bike.trackers?.[0]?.last_seen_at, total, payable_amount: total, paid, balance, outstanding: balance, finance_status: financeStatus, monthly_payment: monthlyByBike.get(String(bike.id)) ?? 0, next_payment: dueAt ? new Date(dueAt).toLocaleDateString("en-KE", { timeZone: "Africa/Nairobi" }) : "", monitoring_armed: Boolean(bike.monitoring_armed), immobilized: Boolean(bike.immobilized) };
     });
     return response({ profile, vehicles });
   }
@@ -2024,37 +2039,85 @@ Deno.serve(async (request) => {
   const statusMatch = route.match(/^\/v1\/customer\/motorcycles\/([^/]+)\/security-status$/);
   if (statusMatch && request.method === "GET") {
     const vehicleId = decodeURIComponent(statusMatch[1]);
-    const { data: vehicle } = await admin.from("vehicles").select("id,tracker_imei,monitoring_armed,immobilized").eq("id", vehicleId).eq("owner_id", user.id).single();
+    const ownedBike = await customerBikeForUser(admin, user.id, vehicleId);
+    if (ownedBike.error) return fail("Vehicle security could not be loaded.", 503, "SECURITY_STATUS_UNAVAILABLE");
+    if (ownedBike.bike) {
+      const identifier = String(ownedBike.tracker?.tramigo_device_id ?? ownedBike.tracker?.identifier ?? "").trim();
+      const deviceId = String(ownedBike.tracker?.tramigo_device_id ?? (/^\d{10,20}$/.test(identifier) ? identifier : ""));
+      let provider = null;
+      const configuredPath = Deno.env.get("TRAMIGO_CLOUD_OUTBOUND_STATUS_PATH");
+      if (deviceId && configuredPath) {
+        try { provider = await tramigoRequest(tramigoPath(configuredPath, deviceId)); } catch (_) { /* Keep last saved customer security state. */ }
+      }
+      return response({ vehicleId, monitoringArmed: Boolean((ownedBike.bike as any).monitoring_armed), immobilized: Boolean((ownedBike.bike as any).immobilized), provider });
+    }
+    const { data: vehicle, error } = await admin.from("vehicles").select("id,tracker_imei,monitoring_armed,immobilized").eq("id", vehicleId).eq("owner_id", user.id).maybeSingle();
+    if (error) return fail("Vehicle security could not be loaded.", 503, "SECURITY_STATUS_UNAVAILABLE");
     if (!vehicle) return fail("Vehicle not found.", 404, "NOT_FOUND");
     let provider = null;
     const configuredPath = Deno.env.get("TRAMIGO_CLOUD_OUTBOUND_STATUS_PATH");
     if (vehicle.tracker_imei && configuredPath) {
-      try { provider = await tramigoRequest(tramigoPath(configuredPath, vehicle.tracker_imei)); } catch (_) { /* return last trusted local state */ }
+      try { provider = await tramigoRequest(tramigoPath(configuredPath, vehicle.tracker_imei)); } catch (_) { /* Return the last trusted local state. */ }
     }
     return response({ vehicleId, monitoringArmed: vehicle.monitoring_armed, immobilized: vehicle.immobilized, provider });
   }
   if (route === "/v1/customer/motorcycles/security-status" && request.method === "GET") {
-    const { data: vehicles } = await admin.from("vehicles").select("id,registration,monitoring_armed,immobilized").eq("owner_id", user.id);
-    return response({ vehicles: vehicles ?? [] });
+    const [{ data: vehicles, error: vehicleError }, { data: profile, error: profileError }] = await Promise.all([
+      admin.from("vehicles").select("id,registration,monitoring_armed,immobilized").eq("owner_id", user.id),
+      admin.from("profiles").select("email").eq("id", user.id).maybeSingle(),
+    ]);
+    if (vehicleError || profileError) return fail("Vehicle security could not be loaded.", 503, "SECURITY_STATUS_UNAVAILABLE");
+    const email = String(profile?.email ?? "").trim();
+    const { data: customer, error: customerError } = email ? await admin.from("customers").select("id").ilike("email", email).maybeSingle() : { data: null, error: null };
+    if (customerError) return fail("Vehicle security could not be loaded.", 503, "SECURITY_STATUS_UNAVAILABLE");
+    const { data: customerBikes, error: bikeError } = customer?.id
+      ? await admin.from("bikes").select("id,identifier,monitoring_armed,immobilized").eq("customer_id", customer.id)
+      : { data: [], error: null };
+    if (bikeError) return fail("Vehicle security could not be loaded.", 503, "SECURITY_STATUS_UNAVAILABLE");
+    return response({ vehicles: [
+      ...(vehicles ?? []),
+      ...(customerBikes ?? []).map((bike: any) => ({ ...bike, registration: bike.identifier })),
+    ] });
   }
   const securityMatch = route.match(/^\/v1\/customer\/motorcycles\/([^/]+)\/(monitoring|immobilizer)$/);
   if (securityMatch && request.method === "POST") {
-    const vehicleId = decodeURIComponent(securityMatch[1]); const action = securityMatch[2];
-    const { data: vehicle } = await admin.from("vehicles").select("id,tracker_imei").eq("id", vehicleId).eq("owner_id", user.id).single();
-    if (!vehicle) return fail("Vehicle not found.", 404, "NOT_FOUND");
-    if (!vehicle.tracker_imei) return fail("This vehicle has no Tramigo tracker assigned.", 409, "TRACKER_NOT_ASSIGNED");
-    const enabled = action === "monitoring" ? Boolean(body.armed) : Boolean(body.immobilized);
+    const vehicleId = decodeURIComponent(securityMatch[1]);
+    const action = securityMatch[2];
+    const field = action === "monitoring" ? "armed" : "immobilized";
+    if (typeof body[field] !== "boolean") return fail("Choose whether to enable or disable this control.", 422, "INVALID_SECURITY_ACTION");
+    const enabled = body[field] as boolean;
+    const ownedBike = await customerBikeForUser(admin, user.id, vehicleId);
+    if (ownedBike.error) return fail("Vehicle security could not be loaded.", 503, "SECURITY_STATUS_UNAVAILABLE");
+    const bike = ownedBike.bike as any;
+    const legacy = bike ? null : (await admin.from("vehicles").select("id,tracker_imei").eq("id", vehicleId).eq("owner_id", user.id).maybeSingle()).data;
+    if (!bike && !legacy) return fail("Vehicle not found.", 404, "NOT_FOUND");
+    const tracker = ownedBike.tracker;
+    const rawIdentifier = String(bike ? (tracker?.tramigo_device_id ?? tracker?.identifier ?? "") : (legacy?.tracker_imei ?? "")).trim();
+    const deviceId = bike ? (tracker?.tramigo_device_id || (/^\d{10,20}$/.test(rawIdentifier) ? rawIdentifier : "")) : rawIdentifier;
+    if (!deviceId) return fail("This vehicle has no Tramigo tracker assigned.", 409, "TRACKER_NOT_ASSIGNED");
+    if (bike && !tracker?.id) return fail("This bike has no assigned tracker.", 409, "TRACKER_NOT_ASSIGNED");
+    if (action === "immobilizer" && enabled) {
+      let locationQuery = admin.from("tracker_locations").select("speed_kph,recorded_at").order("recorded_at", { ascending: false }).limit(1).maybeSingle();
+      locationQuery = bike ? locationQuery.eq("tracker_id", tracker.id) : locationQuery.eq("vehicle_id", vehicleId);
+      const { data: latestLocation, error: locationError } = await locationQuery;
+      const ageMs = latestLocation?.recorded_at ? Date.now() - new Date(latestLocation.recorded_at).getTime() : Infinity;
+      const speedKph = Number(latestLocation?.speed_kph);
+      if (locationError || !latestLocation || !Number.isFinite(ageMs) || ageMs < 0 || ageMs > 60_000 || !Number.isFinite(speedKph) || speedKph > 0.5) {
+        return fail("The tracker cannot confirm that the bike is stationary. Try again after it reports a fresh stopped location.", 409, "VEHICLE_NOT_SAFE_TO_IMMOBILIZE");
+      }
+    }
     const configuredPath = action === "monitoring" ? Deno.env.get("TRAMIGO_CLOUD_CONTROL_STATUS_PATH") : Deno.env.get("TRAMIGO_CLOUD_IMMOBILIZER_PATH");
     if (!configuredPath) return fail("Tramigo security control is not configured.", 503, "TRAMIGO_NOT_CONFIGURED");
     try {
-      const provider = await tramigoRequest(tramigoPath(configuredPath, vehicle.tracker_imei), { method: "POST", body: { deviceId: vehicle.tracker_imei, imei: vehicle.tracker_imei, enabled, armed: action === "monitoring" ? enabled : undefined, immobilized: action === "immobilizer" ? enabled : undefined } });
+      const provider = await tramigoRequest(tramigoPath(configuredPath, deviceId), { method: "POST", body: { deviceId, imei: deviceId, enabled, armed: action === "monitoring" ? enabled : undefined, immobilized: action === "immobilizer" ? enabled : undefined } });
       const update = action === "monitoring" ? { monitoring_armed: enabled, updated_at: new Date().toISOString() } : { immobilized: enabled, updated_at: new Date().toISOString() };
-      const { error } = await admin.from("vehicles").update(update).eq("id", vehicleId).eq("owner_id", user.id);
-      if (error) return fail("Tramigo accepted the command, but local state could not be saved.", 502, "STATE_SYNC_FAILED");
+      const { error } = bike
+        ? await admin.from("bikes").update(update).eq("id", vehicleId).eq("customer_id", bike.customer_id)
+        : await admin.from("vehicles").update(update).eq("id", vehicleId).eq("owner_id", user.id);
+      if (error) return fail("Tramigo accepted the command, but the security state could not be saved.", 502, "STATE_SYNC_FAILED");
       return response({ vehicleId, action, enabled, provider });
     } catch (error) { return fail(error instanceof Error ? error.message : "Tramigo command failed.", 502, "TRAMIGO_ERROR"); }
-  }
-  if (route === "/v1/customer/profile" && request.method === "PATCH") {
+  }  if (route === "/v1/customer/profile" && request.method === "PATCH") {
     const { data, error } = await client.from("profiles").update({ full_name: body.fullName, phone: body.phone, avatar_url: body.avatarUrl, updated_at: new Date().toISOString() }).eq("id", user.id).select().single();
     return error ? fail(error.message, 400) : response(data);
   }
@@ -2124,14 +2187,46 @@ Deno.serve(async (request) => {
   const routeMatch = route.match(/^\/v1\/customer\/motorcycles\/([^/]+)\/route$/);
   if (routeMatch && request.method === "GET") {
     const vehicleId = decodeURIComponent(routeMatch[1]);
-    const { data: vehicle } = await admin.from("vehicles").select("id").eq("id", vehicleId).eq("owner_id", user.id).maybeSingle();
-    if (!vehicle) return fail("Vehicle not found.", 404, "NOT_FOUND");
     const window = routeWindow(url);
     if ("error" in window) return fail(window.error || "Invalid route window.", 422, "INVALID_ROUTE_WINDOW");
+    const ownedBike = await customerBikeForUser(admin, user.id, vehicleId);
+    if (ownedBike.error) return fail("Route history is temporarily unavailable.", 503, "ROUTE_UNAVAILABLE");
+    if (ownedBike.bike) {
+      const tracker = ownedBike.tracker;
+      if (!tracker?.id) return response({ vehicleId, points: [], distanceKm: 0, durationMinutes: 0, stops: 0, from: window.from, to: window.to, message: "No tracker is assigned to this bike yet." });
+      let providerPointCount = 0;
+      let providerRouteError = false;
+      const providerIdentifier = String(tracker.tramigo_device_id ?? tracker.identifier ?? "").trim();
+      if (providerIdentifier && Deno.env.get("TRAMIGO_USERNAME")) {
+        try {
+          const providerSession = await tramigoSession();
+          const catalogue = await tramigoRequest("/api/v2/devices?page=1&per_page=1000", {}, providerSession);
+          const providerRoute = await fetchTramigoRoute(providerIdentifier, window, providerSession, catalogue);
+          providerPointCount = providerRoute.points.length;
+          if (providerRoute.points.length) {
+            const rows = providerRoute.points.map(point => ({ vehicle_id: null, tracker_id: tracker.id, latitude: point.latitude, longitude: point.longitude, speed_kph: point.speedKph, recorded_at: point.recordedAt }));
+            const { error: historyError } = await admin.from("tracker_locations").insert(rows);
+            if (historyError) console.error("Customer route history insert failed", vehicleId, historyError);
+          }
+        } catch (error) {
+          providerRouteError = true;
+          console.error("Customer provider route unavailable", vehicleId, error);
+        }
+      }
+      try {
+        const result = await loadRoute(admin, null, tracker.id, window);
+        return response({ vehicleId, ...result, providerPointCount, providerRouteError, message: result.points.length ? undefined : "No saved GPS points for this bike and time range." });
+      } catch (error) {
+        console.error("Customer route load failed", vehicleId, error);
+        return fail("Route history is temporarily unavailable.", 503, "ROUTE_UNAVAILABLE");
+      }
+    }
+    const { data: vehicle, error: vehicleError } = await admin.from("vehicles").select("id").eq("id", vehicleId).eq("owner_id", user.id).maybeSingle();
+    if (vehicleError) return fail("Route history is temporarily unavailable.", 503, "ROUTE_UNAVAILABLE");
+    if (!vehicle) return fail("Vehicle not found.", 404, "NOT_FOUND");
     try { return response(await loadRoute(admin, vehicleId, null, window)); }
     catch (error) { console.error("Customer route load failed", vehicleId, error); return fail("Route history is temporarily unavailable.", 503, "ROUTE_UNAVAILABLE"); }
-  }
-  return fail("Endpoint not implemented yet.", 501, "NOT_IMPLEMENTED");
+  }  return fail("Endpoint not implemented yet.", 501, "NOT_IMPLEMENTED");
   } catch (error) {
     // Never let an unexpected Edge Function exception become an opaque 500.
     // The path is logged without credentials or request data for diagnosis.

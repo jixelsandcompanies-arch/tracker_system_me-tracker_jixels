@@ -130,7 +130,7 @@ function customerPaymentComplete(customer) {
 }
 
 function customerSaleStatus(customer) {
-  return customer.install === "Complete" && customerPaymentComplete(customer) ? "Complete" : "Pending";
+  return customerPaymentComplete(customer) ? "Complete" : "Pending";
 }
 
 function displayNameFromEmail(email) {
@@ -1004,6 +1004,8 @@ function AgentApp({ agent, onLogout }) {
   const [isOnline, setIsOnline] = useState(true);
   const [depositCustomerId, setDepositCustomerId] = useState(null);
   const [alertStates, setAlertStates] = useState({});
+  const depositNoticesShown = useRef(new Set());
+  const hasLoadedCustomerRecords = useRef(false);
   const navigationHistory = useRef([]);
   const darkMode = agentProfile.themeMode === "dark";
 
@@ -1058,7 +1060,19 @@ function AgentApp({ agent, onLogout }) {
           authApi.listAssignments(agent.accessToken),
           authApi.listAlertStates(agent.accessToken)
         ]);
-        setCustomers(customerResult.customers || []);
+        const nextCustomers = customerResult.customers || [];
+        if (hasLoadedCustomerRecords.current) {
+          for (const customer of nextCustomers) {
+            const id = String(customer.applicationId || customer.id);
+            if (!customerPaymentComplete(customer) || depositNoticesShown.current.has(id)) continue;
+            depositNoticesShown.current.add(id);
+            Notifications.scheduleNotificationAsync({ content: { title: "Customer deposit confirmed", body: `${customer.name} paid the deposit for ${customer.plateNumber || customer.bike}.`, sound: "default", data: { type: "payment", customerId: id } }, trigger: null }).catch(() => {});
+          }
+        } else {
+          for (const customer of nextCustomers) if (customerPaymentComplete(customer)) depositNoticesShown.current.add(String(customer.applicationId || customer.id));
+          hasLoadedCustomerRecords.current = true;
+        }
+        setCustomers(nextCustomers);
         setAssignedVehicles(normalizeAssignedVehicles({ ...agent, assignedVehicles: assignmentResult.assignments || [] }));
         setAlertStates(Object.fromEntries((alertResult.states || []).map(state => [state.alert_id, { read: Boolean(state.read_at), deleted: Boolean(state.deleted_at) }])));
       } catch (error) {

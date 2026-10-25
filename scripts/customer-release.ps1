@@ -1,6 +1,6 @@
 param(
   [ValidateSet('build', 'update')][string]$Action = 'build',
-  [ValidateSet('preview', 'production')][string]$Channel = 'preview',
+  [ValidateSet('preview', 'production', 'production-apk')][string]$Channel = 'preview',
   [string]$Message = 'Customer approval and vehicle plate updates'
 )
 $ErrorActionPreference = 'Stop'

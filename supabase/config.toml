@@ -8,3 +8,6 @@ otp_expiry = 300
 
 [functions.api]
 verify_jwt = false
+
+[functions.tracker-heartbeat]
+verify_jwt = false

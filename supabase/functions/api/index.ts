@@ -121,7 +121,10 @@ function tramigoLocation(report: any) {
   const trackerStatus = ["online", "active", "connected", "available", "true", "1"].includes(normalizedStatus)
     ? "online"
     : ["offline", "inactive", "disconnected", "unavailable", "false", "0"].includes(normalizedStatus) ? "offline" : null;
-  return { latitude, longitude, speedKph: Number(source?.Speed ?? source?.speed ?? 0), recordedAt: source?.DateTimeActual ?? source?.DateTime_Actual ?? report?.DateTimeActual ?? report?.DateTime_Actual ?? new Date().toISOString(), trackerStatus };
+  const batteryValue = source?.BatteryPercent ?? source?.batteryPercent ?? source?.battery_percent ?? source?.Battery_Level_Percent ?? source?.batteryLevelPercent ?? source?.battery_level_percent;
+  const parsedBattery = batteryValue == null ? null : Number(batteryValue);
+  const batteryPercent = parsedBattery !== null && Number.isInteger(parsedBattery) && parsedBattery >= 0 && parsedBattery <= 100 ? parsedBattery : null;
+  return { latitude, longitude, speedKph: Number(source?.Speed ?? source?.speed ?? 0), recordedAt: source?.DateTimeActual ?? source?.DateTime_Actual ?? report?.DateTimeActual ?? report?.DateTime_Actual ?? new Date().toISOString(), trackerStatus, batteryPercent };
 }
 
 function tramigoReportRecords(payload: any): any[] {
@@ -1236,16 +1239,24 @@ Deno.serve(async (request) => {
         // newer catalogue state during a refresh.
         const isOnline = catalogueStatus === "online" || (catalogueStatus == null && live.trackerStatus === "online") || (live.trackerStatus == null && catalogueStatus == null && Number.isFinite(reportAge) && reportAge <= 10 * 60_000);
         const operationalStatus = catalogueStatus ?? live.trackerStatus ?? (isOnline ? "online" : "offline");
-        const { error: updateError } = await admin.from("trackers").update({
+        const trackerUpdate: Record<string, unknown> = {
           latitude: live.latitude, longitude: live.longitude, last_seen_at: catalogueSeenAt && new Date(catalogueSeenAt) <= new Date() && new Date(catalogueSeenAt) > new Date(liveTimestamp) ? catalogueSeenAt : liveTimestamp,
           is_online: isOnline, operational_status: operationalStatus, updated_at: new Date().toISOString(),
-        }).eq("id", tracker.id);
+        };
+        if (live.batteryPercent !== null) trackerUpdate.battery_percent = live.batteryPercent;
+        const { error: updateError } = await admin.from("trackers").update(trackerUpdate).eq("id", tracker.id);
         if (updateError) throw updateError;
         const { error: historyError } = await admin.from("tracker_locations").insert({
           vehicle_id: tracker.vehicle_id ?? null, tracker_id: tracker.id, latitude: live.latitude, longitude: live.longitude,
           speed_kph: live.speedKph, recorded_at: live.recordedAt,
         });
         if (historyError) console.error("Tracker route history insert failed", tracker.id, historyError);
+        const { error: heartbeatError } = await admin.from("tracker_heartbeats").insert({
+          tracker_id: tracker.id, latitude: live.latitude, longitude: live.longitude,
+          battery_percent: live.batteryPercent, tracker_status: operationalStatus,
+          recorded_at: live.recordedAt,
+        });
+        if (heartbeatError) console.error("Tracker health history insert failed", tracker.id, heartbeatError);
         refreshed.push({ id: tracker.id, identifier: tracker.identifier, deviceId, cloudDeviceId, status: operationalStatus, recordedAt: live.recordedAt });
       } catch (error) {
         console.error("Tramigo tracker refresh failed", tracker.id, error);

@@ -62,6 +62,32 @@ the latest report from `/api/reports/last_location/{deviceId}` and stores it in
 in the supplied API reference. Do not expose these credentials in Vercel or
 the mobile app.
 
+## Tracker health heartbeats
+
+Apply `supabase/migrations/202610250003_tracker_heartbeat_ingestion.sql` to
+the same Supabase project used by the customer and agent apps. Deploy the
+authenticated ingest endpoint and configure its server-only shared token:
+
+```bash
+supabase secrets set TRACKER_INGEST_TOKEN='<long-random-secret>'
+supabase functions deploy tracker-heartbeat --no-verify-jwt
+```
+
+The tracker gateway sends `POST
+https://<your-project-ref>.supabase.co/functions/v1/tracker-heartbeat` with
+`x-tracker-token` and JSON fields `trackerId`, optional `latitude` and
+`longitude` (both or neither), optional `batteryPercent` from 0 to 100, and
+optional device timestamp `recordedAt`. The ID may be the Operations tracker
+identifier or Tramigo device ID. A health-only ping is recorded without adding
+a fake location or stationary route point. If `pg_cron` is enabled, the
+migration schedules trackers silent for over ten minutes to be marked offline.
+Never ship the ingest token inside either mobile app; keep it in a trusted
+device gateway.
+
+The Admin API's Tramigo refresh also writes a health-history sample for each
+provider response. This records what Tramigo reports when a refresh is run;
+it does not mean the tracker itself is posting directly to this endpoint.
+
 ## Safaricom Daraja B2C and C2B
 
 Create a Daraja app in the [Safaricom Developer Portal](https://developer.safaricom.co.ke/), choose Sandbox first, and set these as **Supabase Edge Function secrets** (not Vercel variables):

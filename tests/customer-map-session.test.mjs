@@ -14,7 +14,7 @@ assert.doesNotMatch(app, /error\.status === 404 \|\|/);
 assert.match(nativeMap, /react-native-webview/);
 assert.match(nativeMap, /openstreetmap\.org/);
 assert.match(appConfig, /"expo-channel-name": "production"/);
-assert.match(appConfig, /version: "1\.0\.12"/);
+assert.match(appConfig, /version: "1\.0\.13"/);
 assert.match(app, /<LiveFleetMap selected=\{bike\} vehicles=\{allFleetVehicles\} route=\{route\}/);
 assert.match(fleetMap, /vehicles\s*\.filter\(vehicle => validPoint\(vehicle\.location\)\)\s*\.map\(vehicle =>/);
 assert.match(fleetMap, /routePoints/);

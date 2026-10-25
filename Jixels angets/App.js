@@ -26,6 +26,7 @@ import * as Haptics from "expo-haptics";
 import * as ImagePicker from "expo-image-picker";
 import * as Network from "expo-network";
 import * as Notifications from "expo-notifications";
+import * as Updates from "expo-updates";
 import { ApiError } from "./src/services/api";
 import { authApi, normalizeKenyanAgentPhone } from "./src/services/auth";
 
@@ -37,6 +38,18 @@ Notifications.setNotificationHandler({
     shouldShowList: true
   })
 });
+
+function AppUpdateNotice() {
+  const { isUpdatePending } = Updates.useUpdates();
+  useEffect(() => {
+    if (!Updates.isEnabled || !isUpdatePending) return;
+    Alert.alert("App update ready", "The latest Jixels Agent update has downloaded. Restart the app to apply it.", [
+      { text: "Later", style: "cancel" },
+      { text: "Restart", onPress: () => Updates.reloadAsync().catch(() => Alert.alert("Restart required", "Close and reopen the app to apply the update.")) }
+    ]);
+  }, [isUpdatePending]);
+  return null;
+}
 
 const colors = {
   ink: "#10243B",
@@ -1224,6 +1237,7 @@ function AppContent() {
 
 export default function App() {
   return <SafeAreaProvider>
+    <AppUpdateNotice />
     <SafeAreaView style={{ flex: 1, backgroundColor: "#0D467D" }} edges={["top", "bottom", "left", "right"]}>
       <StatusBar style="light" />
       <AppContent />

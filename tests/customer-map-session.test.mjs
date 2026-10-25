@@ -18,7 +18,7 @@ assert.match(appConfig, /"expo-channel-name": "production"/);
 assert.match(appConfig, /version: "1\.0\.14"/);
 assert.match(sessionStore, /SecureStore\.setItemAsync\(SESSION_KEY/);
 assert.match(sessionStore, /SecureStore\.deleteItemAsync\(SESSION_KEY\)/);
-assert.match(app, /sessionStore\.get\(\)\.then\(savedSession/);
+assert.match(app, /sessionStore\.clear\(\)\.catch\(\(\) => \{\}\)\.finally\(/);
 assert.match(app, /<LiveFleetMap selected=\{bike\} vehicles=\{allFleetVehicles\} route=\{route\}/);
 assert.match(fleetMap, /vehicles\s*\.filter\(vehicle => validPoint\(vehicle\.location\)\)\s*\.map\(vehicle =>/);
 assert.match(fleetMap, /routePoints/);

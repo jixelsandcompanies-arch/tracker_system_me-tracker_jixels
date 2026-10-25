@@ -4,7 +4,7 @@ import { trackingApi } from "../services/tracking";
 
 // GPS trackers can publish a new fix frequently. Keep the REST fallback close
 // to real time when socket delivery is unavailable.
-const POLL_INTERVAL_MS = 5_000;
+const POLL_INTERVAL_MS = 30_000;
 
 export function useTracking({ motorcycleId, accessToken }) {
   const [motorcycle, setMotorcycle] = useState(null);

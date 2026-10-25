@@ -2172,6 +2172,9 @@ Deno.serve(async (request) => {
       : { data: null };
     if (assignedBike) {
       const tracker = (assignedBike as any).trackers?.[0] ?? null;
+      const { data: latestHeartbeat } = tracker?.id
+        ? await admin.from("tracker_heartbeats").select("received_at").eq("tracker_id", tracker.id).order("received_at", { ascending: false }).limit(1).maybeSingle()
+        : { data: null };
       let location = tracker && Number.isFinite(Number(tracker.latitude)) && Number.isFinite(Number(tracker.longitude))
         ? { latitude: Number(tracker.latitude), longitude: Number(tracker.longitude), speedKph: 0, recordedAt: tracker.last_seen_at, trackerStatus: tracker.is_online ? "online" : "offline" }
         : null;
@@ -2179,7 +2182,7 @@ Deno.serve(async (request) => {
         const { data: saved } = await admin.from("tracker_locations").select("latitude,longitude,speed_kph,heading,accuracy_meters,recorded_at").eq("tracker_id", tracker.id).order("recorded_at", { ascending: false }).limit(1).maybeSingle();
         location = saved && { latitude: saved.latitude, longitude: saved.longitude, speedKph: saved.speed_kph, heading: saved.heading, accuracyMeters: saved.accuracy_meters, recordedAt: saved.recorded_at, trackerStatus: tracker.is_online ? "online" : "offline" };
       }
-      return response({ id: assignedBike.id, registration: tracker?.plate_number || assignedBike.identifier, model: assignedBike.model, vehicle_type: assignedBike.product_type, location });
+      return response({ id: assignedBike.id, registration: tracker?.plate_number || assignedBike.identifier, model: assignedBike.model, vehicle_type: assignedBike.product_type, lastHeartbeatAt: latestHeartbeat?.received_at ?? tracker?.last_seen_at ?? null, trackerStatus: tracker?.is_online ? "online" : "offline", location });
     }
     const { data: vehicle } = await admin.from("vehicles").select("id,registration,model,vehicle_type,tracker_imei").eq("id", vehicleId).eq("owner_id", user.id).single();
     if (!vehicle) return fail("Vehicle not found.", 404, "NOT_FOUND");

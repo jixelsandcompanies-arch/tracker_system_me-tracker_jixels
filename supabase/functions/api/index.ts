@@ -2144,14 +2144,18 @@ Deno.serve(async (request) => {
   if (route === "/v1/customer/alerts/read" && request.method === "POST") {
     const ids = Array.isArray(body.ids) ? body.ids.map(String).filter(Boolean).slice(0, 100) : [];
     if (!ids.length) return fail("Choose at least one notification.", 422, "INVALID_ALERT_IDS");
-    const { error } = await admin.from("alerts").update({ read_at: new Date().toISOString() }).eq("owner_id", user.id).in("id", ids);
-    return error ? fail("Notifications could not be marked as read.", 503, "ALERT_UPDATE_FAILED") : response({ updated: ids.length });
+    const databaseIds = ids.filter((id: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id));
+    if (!databaseIds.length) return response({ updated: 0 });
+    const { error } = await admin.from("alerts").update({ read_at: new Date().toISOString() }).eq("owner_id", user.id).in("id", databaseIds);
+    return error ? fail("Notifications could not be marked as read.", 503, "ALERT_UPDATE_FAILED") : response({ updated: databaseIds.length });
   }
   if (route === "/v1/customer/alerts" && request.method === "DELETE") {
     const ids = Array.isArray(body.ids) ? body.ids.map(String).filter(Boolean).slice(0, 100) : [];
     if (!ids.length) return fail("Choose at least one notification.", 422, "INVALID_ALERT_IDS");
-    const { error } = await admin.from("alerts").delete().eq("owner_id", user.id).in("id", ids);
-    return error ? fail("Notifications could not be deleted.", 503, "ALERT_DELETE_FAILED") : response({ deleted: ids.length });
+    const databaseIds = ids.filter((id: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id));
+    if (!databaseIds.length) return response({ deleted: 0 });
+    const { error } = await admin.from("alerts").delete().eq("owner_id", user.id).in("id", databaseIds);
+    return error ? fail("Notifications could not be deleted.", 503, "ALERT_DELETE_FAILED") : response({ deleted: databaseIds.length });
   }
   const locationMatch = route.match(/^\/v1\/customer\/motorcycles\/([^/]+)\/location$/);
   if (locationMatch && request.method === "GET") {

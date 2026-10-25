@@ -1113,15 +1113,14 @@ export default function App() {
   const [session, setSession] = useState(null);
   useEffect(() => {
     let active = true;
-    sessionStore.get().then(savedSession => {
-      if (!active || !savedSession) {
-        if (active) setPhase("auth");
-        return;
-      }
-      setSession(savedSession);
-      setDisplayName(savedSession.user?.name || "");
-      setPhase("app");
-    }).catch(() => { if (active) setPhase("auth"); });
+    // Match the agent app: every cold launch starts at login. Remove any
+    // token saved by an older customer build so it cannot silently restore.
+    sessionStore.clear().catch(() => {}).finally(() => {
+      if (!active) return;
+      setSession(null);
+      setDisplayName("");
+      setPhase("auth");
+    });
     return () => { active = false; };
   }, []);
   useEffect(() => {

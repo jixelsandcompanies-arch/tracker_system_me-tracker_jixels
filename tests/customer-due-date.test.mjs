@@ -21,6 +21,6 @@ assert.match(migration, /'dueAt', due_at_value/);
 assert.match(finance, /row\.due_at \|\| row\.data\?\.dueAt/);
 assert.match(finance, /customers\?select=id,full_name,email,phone,plate_number,tracker_number,status,created_at/);
 assert.match(financeApp, /\.sort\(newestPaymentFirst\)/);
-assert.match(financeApp, /const newestPaymentFirst = \(left, right\).*paymentDate\(right\).*paymentDate\(left\)/);
+assert.match(financeApp, /const newestPaymentFirst = \(left, right\)[\s\S]*?paymentDate\(right\)[\s\S]*?paymentDate\(left\)/);
 
 console.log("Customer due-date onboarding and Finance synchronization checks passed.");

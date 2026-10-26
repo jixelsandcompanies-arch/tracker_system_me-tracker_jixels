@@ -290,6 +290,7 @@ async function bikeActivationReadiness(admin: SupabaseClient, bike: any) {
   const installed = Boolean(application?.tracker_installed_at);
   return {
     ready: Boolean(application && installed && depositPaid),
+    error: null,
     installed,
     depositPaid,
     message: !application

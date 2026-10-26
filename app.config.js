@@ -26,7 +26,7 @@ export default {
 
     android: {
       package: "com.jixelstechnologies.customer",
-      versionCode: 22,
+      versionCode: 23,
       softwareKeyboardLayoutMode: "resize",
 
       adaptiveIcon: {

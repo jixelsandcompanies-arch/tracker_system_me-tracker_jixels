@@ -1,6 +1,12 @@
 name: Customer Android APK
 on:
   workflow_dispatch:
+    inputs:
+      build_only:
+        description: Build the signed production APK without running the JavaScript test suite
+        required: false
+        type: boolean
+        default: false
 permissions:
   contents: write
 concurrency:
@@ -26,7 +32,9 @@ jobs:
           distribution: temurin
           java-version: '17'
       - run: npm ci
-      - run: npm test && npm run check
+      - name: Run tests and production checks
+        if: ${{ !inputs.build_only }}
+        run: npm test && npm run check
       - run: npx expo prebuild --platform android --no-install
       - name: Build with original release signing key
         env:
@@ -49,7 +57,7 @@ jobs:
           "$BUILD_TOOLS/apksigner" verify --verbose --print-certs "$APK" | tee certificate.txt
           grep -qi 'a57c3d1f9900e351e2c40586e0fc6edbd5972f325b69ed537005d176074c50d0' certificate.txt
           "$BUILD_TOOLS/aapt" dump badging "$APK" | head -1 | tee package.txt
-          grep -q "name='com.jixelstechnologies.customer' versionCode='22' versionName='1.0.20'" package.txt
+          grep -q "name='com.jixelstechnologies.customer' versionCode='23' versionName='1.0.20'" package.txt
           NATIVE_CODE=$("$BUILD_TOOLS/aapt" dump badging "$APK" | grep '^native-code:')
           for ABI in arm64-v8a armeabi-v7a; do echo "$NATIVE_CODE" | grep -q "'$ABI'"; done
           "$BUILD_TOOLS/aapt" dump badging "$APK" | grep -q "sdkVersion:'24'"

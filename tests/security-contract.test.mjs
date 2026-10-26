@@ -45,6 +45,13 @@ assert.match(apiFunction, /claim_tracker_refresh/, "live tracker refreshes must 
 assert.match(apiFunction, /TRACKER_BATCH_TOO_LARGE/, "tracker refreshes must have a bounded batch size");
 assert.match(apiFunction, /async function tramigoSession/, "a fleet refresh must reuse one Tramigo provider session");
 assert.match(apiFunction, /claim_location_provider_read/, "customer location requests must be rate-limited before calling Tramigo");
+assert.match(apiFunction, /async function bikeActivationReadiness/, "security activation must require the agent installation record and confirmed deposit");
+assert.match(apiFunction, /requested > 0.*confirmedDeposit >= requested/s, "a deposit counts as paid only when confirmed funds cover the requested amount");
+assert.match(apiFunction, /VEHICLE_SETUP_INCOMPLETE/, "the backend must refuse security arming until installation and deposit are both confirmed");
+assert.match(apiFunction, /confirmedDepositAmount/, "agent payment status must count confirmed deposit transactions specifically");
+assert.doesNotMatch(apiFunction, /payment: confirmedDepositAmount > 0 \? "Deposit Paid"/, "a partial deposit must not be labelled paid");
+assert.match(app, /disabled=\{!isOnline \|\| \(!securityReady && !armed\)\}/, "customers cannot arm monitoring before setup is confirmed");
+assert.match(app, /securityReady: raw\.securityReady \?\? vehicle\.securityReady \?\? false/, "the customer app must require positive server confirmation before enabling controls");
 assert.match(apiFunction, /fetchLatestTramigoLocation/, "customer bike tracking and immobilizer checks must query a fresh Tramigo location");
 assert.match(apiFunction, /reportIsFresh\(latestLocation\)/, "immobilizer commands must reject missing or stale speed reports");
 assert.match(apiFunction, /STATIONARY_MOVEMENT_NOT_CONFIRMED/, "immobilizer commands must require two distinct stationary points");

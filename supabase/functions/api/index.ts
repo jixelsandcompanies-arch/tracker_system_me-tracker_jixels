@@ -275,6 +275,33 @@ async function customerBikeForUser(admin: SupabaseClient, userId: string, bikeId
   return { bike, tracker: Array.isArray(relation) ? relation[0] ?? null : relation ?? null, error: null };
 }
 
+async function bikeActivationReadiness(admin: SupabaseClient, bike: any) {
+  const { data: application, error } = await admin.from("screening_applications")
+    .select("tracker_installed_at,deposit_amount,requested_deposit_amount")
+    .eq("customer_id", bike.customer_id)
+    .eq("product_id", bike.id)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) return { ready: false, error };
+  const requested = Number(application?.requested_deposit_amount ?? 0);
+  const confirmedDeposit = Number(application?.deposit_amount ?? 0);
+  const depositPaid = requested > 0 && Number.isFinite(confirmedDeposit) && confirmedDeposit >= requested;
+  const installed = Boolean(application?.tracker_installed_at);
+  return {
+    ready: Boolean(application && installed && depositPaid),
+    installed,
+    depositPaid,
+    message: !application
+      ? "This vehicle is not linked to an agent installation and confirmed deposit."
+      : !installed
+        ? "The agent must confirm tracker installation first."
+        : !depositPaid
+          ? "The requested deposit must be confirmed as paid first."
+          : null,
+  };
+}
+
 function isExpoPushToken(value: unknown) {
   return typeof value === "string" && /^(?:Expo|Exponent)PushToken\[[^\]]+\]$/.test(value);
 }
@@ -1823,7 +1850,9 @@ Deno.serve(async (request) => {
         });
         const processing = uniqueSalePayments.find((payment) => String(payment.status).toLowerCase() === "processing" && String(payment.payment_type ?? "daily").toLowerCase().replace(/[ _-]/g, "") === "deposit");
         const amountPaid = confirmed.reduce((total, payment) => total + Number(payment.amount ?? 0), 0);
-        const requestedDepositAmount = Number(item.requested_deposit_amount ?? item.deposit_amount ?? 0);
+        const requestedDepositAmount = Number(item.requested_deposit_amount ?? 0);
+        const depositPaid = requestedDepositAmount > 0
+          && Math.max(Number(item.deposit_amount ?? 0), confirmedDepositAmount) >= requestedDepositAmount;
         return {
           id: item.customer_id ?? item.id,
           applicationId: item.id,
@@ -1840,9 +1869,9 @@ Deno.serve(async (request) => {
           vehicleModel: item.product_model ?? item.bikes?.model ?? "Assigned bike",
           tracker: item.tracker_identifier ?? item.bikes?.trackers?.[0]?.identifier ?? "Pending",
           kyc: item.status === "approved" ? "Approved" : "Submitted",
-          install: item.tracker_installed_at ? (confirmedDepositAmount > 0 ? "Complete" : "Awaiting deposit") : "Pending",
+          install: item.tracker_installed_at ? (depositPaid ? "Complete" : "Awaiting deposit") : "Pending",
           installationConfirmed: Boolean(item.tracker_installed_at),
-          payment: confirmedDepositAmount > 0 ? "Deposit Paid" : processing ? "Processing" : "Pending",
+          payment: depositPaid ? "Deposit Paid" : processing ? "Processing" : "Pending",
           requestedDepositAmount,
           payableAmount: Number(item.bikes?.payable_amount ?? 0),
           amount: amountPaid,
@@ -2097,6 +2126,8 @@ Deno.serve(async (request) => {
     const ownedBike = await customerBikeForUser(admin, user.id, vehicleId);
     if (ownedBike.error) return fail("Vehicle security could not be loaded.", 503, "SECURITY_STATUS_UNAVAILABLE");
     if (ownedBike.bike) {
+      const readiness = await bikeActivationReadiness(admin, ownedBike.bike);
+      if (readiness.error) return fail("Vehicle installation and deposit status could not be checked.", 503, "VEHICLE_ACTIVATION_STATUS_UNAVAILABLE");
       const identifier = String(ownedBike.tracker?.tramigo_device_id ?? ownedBike.tracker?.identifier ?? "").trim();
       const deviceId = String(ownedBike.tracker?.tramigo_device_id ?? (/^\d{10,20}$/.test(identifier) ? identifier : ""));
       let provider = null;
@@ -2104,7 +2135,7 @@ Deno.serve(async (request) => {
       if (deviceId && configuredPath) {
         try { provider = await tramigoRequest(tramigoPath(configuredPath, deviceId)); } catch (_) { /* Keep last saved customer security state. */ }
       }
-      return response({ vehicleId, monitoringArmed: Boolean((ownedBike.bike as any).monitoring_armed), immobilized: Boolean((ownedBike.bike as any).immobilized), provider });
+      return response({ vehicleId, monitoringArmed: Boolean((ownedBike.bike as any).monitoring_armed), immobilized: Boolean((ownedBike.bike as any).immobilized), securityReady: readiness.ready, securityMessage: readiness.message, provider });
     }
     const { data: vehicle, error } = await admin.from("vehicles").select("id,tracker_imei,monitoring_armed,immobilized").eq("id", vehicleId).eq("owner_id", user.id).maybeSingle();
     if (error) return fail("Vehicle security could not be loaded.", 503, "SECURITY_STATUS_UNAVAILABLE");
@@ -2129,6 +2160,12 @@ Deno.serve(async (request) => {
       ? await admin.from("bikes").select("id,identifier,monitoring_armed,immobilized,trackers(id,identifier,tramigo_device_id)").eq("customer_id", customer.id)
       : { data: [], error: null };
     if (bikeError) return fail("Vehicle security could not be loaded.", 503, "SECURITY_STATUS_UNAVAILABLE");
+    const readinessByBike = new Map<string, any>();
+    for (const bike of customerBikes ?? []) {
+      const readiness = await bikeActivationReadiness(admin, bike);
+      if (readiness.error) return fail("Vehicle installation and deposit status could not be checked.", 503, "VEHICLE_ACTIVATION_STATUS_UNAVAILABLE");
+      readinessByBike.set(String(bike.id), readiness);
+    }
     // Keep armed customer bikes fresh while their app is active. The customer
     // app polls this endpoint every 30 seconds; writing trusted points here
     // also drives the database movement-alert rule.
@@ -2164,7 +2201,7 @@ Deno.serve(async (request) => {
     }
     return response({ vehicles: [
       ...(vehicles ?? []),
-      ...(customerBikes ?? []).map((bike: any) => ({ ...bike, registration: bike.identifier })),
+      ...(customerBikes ?? []).map((bike: any) => ({ ...bike, registration: bike.identifier, securityReady: readinessByBike.get(String(bike.id))?.ready ?? false, securityMessage: readinessByBike.get(String(bike.id))?.message ?? "Setup is incomplete." })),
     ] });
   }
   const securityMatch = route.match(/^\/v1\/customer\/motorcycles\/([^/]+)\/(monitoring|immobilizer)$/);
@@ -2179,6 +2216,11 @@ Deno.serve(async (request) => {
     const bike = ownedBike.bike as any;
     const legacy = bike ? null : (await admin.from("vehicles").select("id,tracker_imei").eq("id", vehicleId).eq("owner_id", user.id).maybeSingle()).data;
     if (!bike && !legacy) return fail("Vehicle not found.", 404, "NOT_FOUND");
+    if (bike && enabled) {
+      const readiness = await bikeActivationReadiness(admin, bike);
+      if (readiness.error) return fail("Vehicle installation and deposit status could not be checked.", 503, "VEHICLE_ACTIVATION_STATUS_UNAVAILABLE");
+      if (!readiness.ready) return fail(readiness.message ?? "Agent installation confirmation and a fully paid deposit are both required before security can be armed.", 409, "VEHICLE_SETUP_INCOMPLETE");
+    }
     const tracker = ownedBike.tracker;
     const rawIdentifier = String(bike ? (tracker?.tramigo_device_id ?? tracker?.identifier ?? "") : (legacy?.tracker_imei ?? "")).trim();
     const deviceId = bike ? (tracker?.tramigo_device_id || (/^\d{10,20}$/.test(rawIdentifier) ? rawIdentifier : "")) : rawIdentifier;

@@ -476,6 +476,7 @@ function AlertsScreen({ alerts, markAllRead, markAlertRead, deleteAlerts, onRefr
   const [selected, setSelected] = useState(() => new Set());
   const [activeAlert, setActiveAlert] = useState(null);
   const selecting = selected.size > 0;
+
   useEffect(() => {
     if (Platform.OS !== "android" || !selecting) return undefined;
     const subscription = BackHandler.addEventListener("hardwareBackPress", () => {
@@ -484,22 +485,122 @@ function AlertsScreen({ alerts, markAllRead, markAlertRead, deleteAlerts, onRefr
     });
     return () => subscription.remove();
   }, [selecting]);
-  const toggle = id => setSelected(current => { const next = new Set(current); next.has(id) ? next.delete(id) : next.add(id); return next; });
-  const removeSelected = () => { deleteAlerts([...selected]); setSelected(new Set()); };
-  const openAlert = alert => { markAlertRead(alert.id); setActiveAlert(alert); };
+
+  const toggle = id => setSelected(current => {
+    const next = new Set(current);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    return next;
+  });
+  const removeSelected = () => {
+    deleteAlerts([...selected]);
+    setSelected(new Set());
+  };
+  const openAlert = alert => {
+    markAlertRead(alert.id);
+    setActiveAlert(alert);
+  };
+
   return <>
-    <ScrollView style={[styles.nativeListPage, darkMode && styles.darkPage]} contentContainerStyle={styles.nativeListContent} refreshControl={<PullToRefresh onRefresh={onRefresh} />}>
-      <View style={styles.nativeListToolbar}>{selecting ? <><View><Text style={[styles.nativeListHeading, darkMode && styles.darkText]}>{selected.size} selected</Text><Text style={styles.nativeToolbarSub}>Tap messages to add or remove</Text></View><View style={styles.selectionActions}><Pressable onPress={() => setSelected(new Set(alerts.map(alert => alert.id)))} style={styles.selectionButton}><Ionicons name="checkbox-outline" size={18} color={colors.blue} /><Text style={styles.markReadText}>All</Text></Pressable><Pressable onPress={removeSelected} style={[styles.selectionButton, styles.deleteButton]}><Ionicons name="trash-outline" size={18} color="#DC3B2A" /><Text style={styles.deleteText}>Delete</Text></Pressable></View></> : <><View><Text style={[styles.nativeListHeading, darkMode && styles.darkText]}>Messages</Text><Text style={styles.nativeToolbarSub}>Tap to read • Hold to select</Text></View><Pressable onPress={markAllRead} style={styles.markReadButton}><Ionicons name="checkmark-done" size={18} color={colors.blue} /><Text style={styles.markReadText}>Read all</Text></Pressable></>}</View>
-      <View style={[styles.nativeList, darkMode && styles.darkCard]}>{alerts.map((alert, index) => { const checked = selected.has(alert.id); return <Pressable key={alert.id} delayLongPress={900} onLongPress={() => toggle(alert.id)} onPress={() => selecting ? toggle(alert.id) : openAlert(alert)} style={[styles.nativeRow, index < alerts.length - 1 && styles.nativeRowDivider, alert.unread && !darkMode && styles.nativeRowUnread, checked && styles.nativeRowSelected]}>{selecting && <View style={[styles.selectionCheck, checked && styles.selectionCheckActive]}>{checked && <Ionicons name="checkmark" size={15} color={colors.white} />}</View>}<View style={[styles.nativeAvatar, alert.type === "payment" ? styles.nativeAvatarOrange : alert.type === "receipt" ? styles.nativeAvatarGreen : null]}><Ionicons name={alert.icon} size={22} color={colors.white} /></View><View style={styles.nativeRowBody}><View style={styles.nativeRowTop}><Text numberOfLines={1} style={[styles.nativeRowTitle, darkMode && styles.darkText]}>{alert.title}</Text><Text style={styles.nativeRowTime}>{alert.age}</Text></View><Text numberOfLines={2} style={styles.nativeRowMessage}>{alert.message}</Text></View>{alert.unread && !selecting && <View style={styles.nativeUnreadBadge}><Text style={styles.nativeUnreadText}>1</Text></View></Pressable>; })}{alerts.length === 0 && <View style={styles.emptyAlerts}><Ionicons name="chatbubbles-outline" size={34} color={colors.gray} /><Text style={styles.stateMessage}>No messages</Text></View>}</View>
+    <ScrollView
+      style={[styles.nativeListPage, darkMode && styles.darkPage]}
+      contentContainerStyle={styles.nativeListContent}
+      refreshControl={<PullToRefresh onRefresh={onRefresh} />}
+    >
+      <View style={styles.nativeListToolbar}>
+        {selecting ? <>
+          <View>
+            <Text style={[styles.nativeListHeading, darkMode && styles.darkText]}>{selected.size} selected</Text>
+            <Text style={styles.nativeToolbarSub}>Tap messages to add or remove</Text>
+          </View>
+          <View style={styles.selectionActions}>
+            <Pressable onPress={() => setSelected(new Set(alerts.map(alert => alert.id)))} style={styles.selectionButton}>
+              <Ionicons name="checkbox-outline" size={18} color={colors.blue} />
+              <Text style={styles.markReadText}>All</Text>
+            </Pressable>
+            <Pressable onPress={removeSelected} style={[styles.selectionButton, styles.deleteButton]}>
+              <Ionicons name="trash-outline" size={18} color="#DC3B2A" />
+              <Text style={styles.deleteText}>Delete</Text>
+            </Pressable>
+          </View>
+        </> : <>
+          <View>
+            <Text style={[styles.nativeListHeading, darkMode && styles.darkText]}>Messages</Text>
+            <Text style={styles.nativeToolbarSub}>Tap to read • Hold to select</Text>
+          </View>
+          <Pressable onPress={markAllRead} style={styles.markReadButton}>
+            <Ionicons name="checkmark-done" size={18} color={colors.blue} />
+            <Text style={styles.markReadText}>Read all</Text>
+          </Pressable>
+        </>}
+      </View>
+      <View style={[styles.nativeList, darkMode && styles.darkCard]}>
+        {alerts.map((alert, index) => {
+          const checked = selected.has(alert.id);
+          return <Pressable
+            key={alert.id}
+            delayLongPress={900}
+            onLongPress={() => toggle(alert.id)}
+            onPress={() => selecting ? toggle(alert.id) : openAlert(alert)}
+            style={[styles.nativeRow, index < alerts.length - 1 && styles.nativeRowDivider, alert.unread && !darkMode && styles.nativeRowUnread, checked && styles.nativeRowSelected]}
+          >
+            {selecting && <View style={[styles.selectionCheck, checked && styles.selectionCheckActive]}>
+              {checked && <Ionicons name="checkmark" size={15} color={colors.white} />}
+            </View>}
+            <View style={[styles.nativeAvatar, alert.type === "payment" ? styles.nativeAvatarOrange : alert.type === "receipt" ? styles.nativeAvatarGreen : null]}>
+              <Ionicons name={alert.icon} size={22} color={colors.white} />
+            </View>
+            <View style={styles.nativeRowBody}>
+              <View style={styles.nativeRowTop}>
+                <Text numberOfLines={1} style={[styles.nativeRowTitle, darkMode && styles.darkText]}>{alert.title}</Text>
+                <Text style={styles.nativeRowTime}>{alert.age}</Text>
+              </View>
+              <Text numberOfLines={2} style={styles.nativeRowMessage}>{alert.message}</Text>
+            </View>
+            {alert.unread && !selecting && <View style={styles.nativeUnreadBadge}>
+              <Text style={styles.nativeUnreadText}>1</Text>
+            </View>}
+          </Pressable>;
+        })}
+        {alerts.length === 0 && <View style={styles.emptyAlerts}>
+          <Ionicons name="chatbubbles-outline" size={34} color={colors.gray} />
+          <Text style={styles.stateMessage}>No messages</Text>
+        </View>}
+      </View>
     </ScrollView>
-    <Modal visible={!!activeAlert} transparent animationType="slide" onRequestClose={() => setActiveAlert(null)}><View style={styles.paymentMessageOverlay}><Pressable style={styles.paymentMessageBackdrop} onPress={() => setActiveAlert(null)} /><View style={styles.paymentMessageSheet}><View style={styles.paymentMessageHandle} /><View style={styles.paymentMessageSender}><View style={styles.paymentMessageLogo}><Ionicons name="chatbubble-ellipses" size={24} color={colors.white} /></View><View style={{ flex: 1 }}><Text style={styles.paymentMessageSenderName}>Jixels Customer Trackings</Text><Text style={styles.paymentMessageSenderMeta}>System message • {activeAlert?.age}</Text></View><Pressable onPress={() => setActiveAlert(null)} style={styles.paymentMessageClose}><Ionicons name="close" size={22} color={colors.ink} /></Pressable></View><View style={styles.paymentMessageBubble}><Text style={styles.nativeRowTitle}>{activeAlert?.title}</Text><Text style={[styles.paymentMessageText, { marginTop: 8 }]}>{activeAlert?.message}</Text><Text style={styles.paymentMessageTime}>{activeAlert?.age}</Text></View></View></View></Modal>
+    <Modal visible={!!activeAlert} transparent animationType="slide" onRequestClose={() => setActiveAlert(null)}>
+      <View style={styles.paymentMessageOverlay}>
+        <Pressable style={styles.paymentMessageBackdrop} onPress={() => setActiveAlert(null)} />
+        <View style={styles.paymentMessageSheet}>
+          <View style={styles.paymentMessageHandle} />
+          <View style={styles.paymentMessageSender}>
+            <View style={styles.paymentMessageLogo}>
+              <Ionicons name="chatbubble-ellipses" size={24} color={colors.white} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.paymentMessageSenderName}>Jixels Customer Trackings</Text>
+              <Text style={styles.paymentMessageSenderMeta}>System message • {activeAlert?.age}</Text>
+            </View>
+            <Pressable onPress={() => setActiveAlert(null)} style={styles.paymentMessageClose}>
+              <Ionicons name="close" size={22} color={colors.ink} />
+            </Pressable>
+          </View>
+          <View style={styles.paymentMessageBubble}>
+            <Text style={styles.nativeRowTitle}>{activeAlert?.title}</Text>
+            <Text style={[styles.paymentMessageText, { marginTop: 8 }]}>{activeAlert?.message}</Text>
+            <Text style={styles.paymentMessageTime}>{activeAlert?.age}</Text>
+          </View>
+        </View>
+      </View>
+    </Modal>
   </>;
 }
-
 function MonitoringScreen({ selectedBike, vehicles, onSelectBike, security, onMonitoringChange, onImmobilizerChange, onRefresh, isOnline }) {
   const state = security[selectedBike.id] ?? {};
-  const armed = state.monitoringArmed ?? selectedBike.monitoringArmed ?? true;
+  const armed = state.monitoringArmed ?? selectedBike.monitoringArmed ?? false;
   const immobilized = state.immobilized ?? selectedBike.immobilized ?? false;
+  const securityReady = state.securityReady ?? selectedBike.securityReady ?? false;
+  const securityMessage = state.securityMessage ?? selectedBike.securityMessage ?? "The agent must confirm installation and the system must confirm the full deposit before security controls are enabled.";
   const tampered = (state.tamperStatus ?? selectedBike.tamperStatus) === "tampered";
   const orderedVehicles = [...vehicles].sort((a, b) => Number((security[b.id]?.tamperStatus ?? b.tamperStatus) === "tampered") - Number((security[a.id]?.tamperStatus ?? a.tamperStatus) === "tampered"));
   const tamperedVehicles = orderedVehicles.filter(vehicle => (security[vehicle.id]?.tamperStatus ?? vehicle.tamperStatus) === "tampered");
@@ -518,8 +619,9 @@ function MonitoringScreen({ selectedBike, vehicles, onSelectBike, security, onMo
     <View style={styles.monitorHero}><Ionicons name="shield-checkmark" size={34} color={colors.white} /><View style={{ flex: 1 }}><Text style={styles.monitorHeroTitle}>Vehicle security controls</Text><Text style={styles.monitorHeroText}>GPS stays powered so Jixels can preserve location evidence.</Text></View></View>
     {tamperedVehicles.length > 0 && <View style={[styles.tamperCard, styles.tamperCardDanger]}><Ionicons name="warning" size={25} color="#DC3B2A" /><View style={{ flex: 1 }}><Text style={styles.monitorTitle}>{tamperedVehicles.length} tampered tracker{tamperedVehicles.length === 1 ? "" : "s"} detected</Text><Text style={styles.monitorCopy}>Affected vehicles are shown first below. Select one to see its last trusted location.</Text></View></View>}
     <Text style={styles.fieldLabel}>Choose vehicle</Text><ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.bikeChips}>{orderedVehicles.map(vehicle => { const vehicleTampered = (security[vehicle.id]?.tamperStatus ?? vehicle.tamperStatus) === "tampered"; return <Pressable key={vehicle.id} onPress={() => onSelectBike(vehicle)} style={[styles.bikeChip, selectedBike.id === vehicle.id && styles.bikeChipActive, vehicleTampered && styles.monitorVehicleTampered]}><Text style={[styles.bikeChipText, selectedBike.id === vehicle.id && styles.bikeChipTextActive, vehicleTampered && selectedBike.id !== vehicle.id && { color: "#DC3B2A" }]}>{vehicle.registration}{vehicleTampered ? " • TAMPER" : ""}</Text></Pressable>; })}</ScrollView>
-    <View style={styles.monitorCard}><View style={styles.monitorRow}><View style={styles.monitorIcon}><Ionicons name="notifications-outline" size={22} color={colors.blue} /></View><View style={{ flex: 1 }}><Text style={styles.monitorTitle}>Monitoring</Text><Text style={styles.monitorCopy}>{armed ? "Armed — movement and tamper alerts active" : "Disarmed — GPS remains online"}</Text></View>{busy === "monitoring" ? <ActivityIndicator color={colors.blue} /> : <Switch value={armed} onValueChange={changeMonitoring} trackColor={{ false: "#CBD5E1", true: "#86B9F1" }} thumbColor={armed ? colors.blue : "#F8FAFC"} />}</View>
-      <View style={styles.monitorDivider} /><View style={styles.monitorRow}><View style={[styles.monitorIcon, { backgroundColor: immobilized ? "#FEECEC" : "#EAF9F2" }]}><Ionicons name={immobilized ? "lock-closed" : "lock-open-outline"} size={22} color={immobilized ? "#DC3B2A" : colors.green} /></View><View style={{ flex: 1 }}><Text style={styles.monitorTitle}>Engine immobilizer</Text><Text style={styles.monitorCopy}>{immobilized ? "Immobilized — engine start blocked" : "Released — vehicle can start normally"}</Text></View>{busy === "immobilizer" ? <ActivityIndicator color={colors.blue} /> : <Switch disabled={!isOnline} value={immobilized} onValueChange={changeImmobilizer} trackColor={{ false: "#CBD5E1", true: "#F5A3A3" }} thumbColor={immobilized ? "#DC3B2A" : "#F8FAFC"} />}</View></View>
+    {!securityReady && <View style={styles.infoCallout}><Ionicons name="time-outline" size={21} color={colors.blue} /><Text style={styles.infoCalloutText}>{securityMessage} The agent installation confirmation and paid deposit are checked separately.</Text></View>}
+    <View style={styles.monitorCard}><View style={styles.monitorRow}><View style={styles.monitorIcon}><Ionicons name="notifications-outline" size={22} color={colors.blue} /></View><View style={{ flex: 1 }}><Text style={styles.monitorTitle}>Monitoring</Text><Text style={styles.monitorCopy}>{armed ? "Armed — movement and tamper alerts active" : "Disarmed — GPS remains online"}</Text></View>{busy === "monitoring" ? <ActivityIndicator color={colors.blue} /> : <Switch disabled={!isOnline || (!securityReady && !armed)} value={armed} onValueChange={changeMonitoring} trackColor={{ false: "#CBD5E1", true: "#86B9F1" }} thumbColor={armed ? colors.blue : "#F8FAFC"} />}</View>
+      <View style={styles.monitorDivider} /><View style={styles.monitorRow}><View style={[styles.monitorIcon, { backgroundColor: immobilized ? "#FEECEC" : "#EAF9F2" }]}><Ionicons name={immobilized ? "lock-closed" : "lock-open-outline"} size={22} color={immobilized ? "#DC3B2A" : colors.green} /></View><View style={{ flex: 1 }}><Text style={styles.monitorTitle}>Engine immobilizer</Text><Text style={styles.monitorCopy}>{immobilized ? "Immobilized — engine start blocked" : "Released — vehicle can start normally"}</Text></View>{busy === "immobilizer" ? <ActivityIndicator color={colors.blue} /> : <Switch disabled={!isOnline || (!securityReady && !immobilized)} value={immobilized} onValueChange={changeImmobilizer} trackColor={{ false: "#CBD5E1", true: "#F5A3A3" }} thumbColor={immobilized ? "#DC3B2A" : "#F8FAFC"} />}</View></View>
     <View style={[styles.tamperCard, tampered && styles.tamperCardDanger]}><Ionicons name={tampered ? "warning" : "hardware-chip-outline"} size={25} color={tampered ? "#DC3B2A" : colors.green} /><View style={{ flex: 1 }}><Text style={styles.monitorTitle}>{tampered ? "Tracker tamper detected" : "Tracker hardware secure"}</Text><Text style={styles.monitorCopy}>{tampered ? `Last trusted point: ${state.lastTrustedAddress ?? "Open Live Tracking for coordinates"}` : "Power, enclosure, antenna and heartbeat checks are normal."}</Text></View></View>
     <View style={styles.infoCallout}><Ionicons name="information-circle-outline" size={21} color={colors.blue} /><Text style={styles.infoCalloutText}>Physical removal detection requires tracker hardware with backup battery, enclosure/ignition tamper wires, power-loss and antenna alerts, periodic heartbeats, and server-side anomaly rules. The app displays those verified events and the last trusted GPS point.</Text></View>
   </ScrollView>;
@@ -893,7 +995,7 @@ function CustomerApp({ session, onLogout }) {
         const lastTrustedLocation = raw.lastTrustedLocation ?? raw.tamper?.lastTrustedLocation ?? null;
         const lastTrustedAddress = raw.lastTrustedAddress ?? lastTrustedLocation?.address ?? raw.tamper?.lastTrustedAddress ?? null;
         const detectedAt = raw.tamperDetectedAt ?? raw.tamper?.detectedAt ?? raw.updatedAt ?? null;
-        const normalized = { monitoringArmed: raw.monitoringArmed ?? raw.armed ?? true, immobilized: raw.immobilized ?? false, tamperStatus, lastTrustedLocation, lastTrustedAddress, tamperDetectedAt: detectedAt };
+        const normalized = { monitoringArmed: raw.monitoringArmed ?? raw.armed ?? false, immobilized: raw.immobilized ?? false, securityReady: raw.securityReady ?? vehicle.securityReady ?? false, securityMessage: raw.securityMessage ?? vehicle.securityMessage, tamperStatus, lastTrustedLocation, lastTrustedAddress, tamperDetectedAt: detectedAt };
         setSecurity(current => ({ ...current, [vehicle.id]: { ...current[vehicle.id], ...normalized } }));
         if (tamperStatus !== "tampered") continue;
         const eventId = `tamper-${vehicle.id}-${detectedAt ?? "active"}`;

@@ -14,7 +14,7 @@ assert.match(migration, /agent_alert_states/);
 assert.match(migration, /customer_payment_dismissals/);
 assert.match(api, /\/v1\/agent\/alerts/);
 assert.match(api, /installationMatch = route\.match/);
-assert.match(api, /confirmedDepositAmount > 0 \? "Complete" : "Awaiting deposit"/);
+assert.match(api, /install: item\.tracker_installed_at \? \(depositPaid \? "Complete" : "Awaiting deposit"\)/);
 assert.match(api, /payment_type \?\? "daily"\)\.toLowerCase\(\)\.replace\(\/\[ _-\]\/g, ""\) === "deposit"/);
 assert.match(api, /item\.payment_phone \?\? processing\?\.payer_phone/);
 assert.match(api, /\/v1\/customer\/payments" && request\.method === "DELETE"/);

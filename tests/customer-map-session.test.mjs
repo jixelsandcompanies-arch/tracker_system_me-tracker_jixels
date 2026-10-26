@@ -15,7 +15,7 @@ assert.doesNotMatch(app, /error\.status === 404 \|\|/);
 assert.match(nativeMap, /react-native-webview/);
 assert.match(nativeMap, /openstreetmap\.org/);
 assert.match(appConfig, /"expo-channel-name": "production"/);
-assert.match(appConfig, /version: "1\.0\.15"/);
+assert.match(appConfig, /version: "1\.0\.16"/);
 assert.match(sessionStore, /SecureStore\.setItemAsync\(SESSION_KEY/);
 assert.match(sessionStore, /SecureStore\.deleteItemAsync\(SESSION_KEY\)/);
 assert.match(app, /sessionStore\.clear\(\)\.catch\(\(\) => \{\}\)\.finally/);

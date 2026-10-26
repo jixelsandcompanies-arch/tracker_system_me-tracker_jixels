@@ -41,7 +41,7 @@ jobs:
           chmod +x gradlew
           # Android library lint can stall on react-native-maps in CI. The app
           # is already checked by the JavaScript production checks above.
-          ./gradlew :app:assembleRelease -PreactNativeArchitectures=arm64-v8a,armeabi-v7a,x86,x86_64 --max-workers=2 --no-daemon --console=plain -x lintVitalAnalyzeRelease -x lintVitalRelease
+          ./gradlew :app:assembleRelease -PreactNativeArchitectures=arm64-v8a,armeabi-v7a --max-workers=2 --no-daemon --console=plain -x lintVitalAnalyzeRelease -x lintVitalRelease
       - name: Verify signature and package
         run: |
           BUILD_TOOLS=$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -1)
@@ -49,27 +49,27 @@ jobs:
           "$BUILD_TOOLS/apksigner" verify --verbose --print-certs "$APK" | tee certificate.txt
           grep -qi 'a57c3d1f9900e351e2c40586e0fc6edbd5972f325b69ed537005d176074c50d0' certificate.txt
           "$BUILD_TOOLS/aapt" dump badging "$APK" | head -1 | tee package.txt
-          grep -q "name='com.jixelstechnologies.customer' versionCode='17' versionName='1.0.15'" package.txt
+          grep -q "name='com.jixelstechnologies.customer' versionCode='18' versionName='1.0.16'" package.txt
           NATIVE_CODE=$("$BUILD_TOOLS/aapt" dump badging "$APK" | grep '^native-code:')
-          for ABI in arm64-v8a armeabi-v7a x86 x86_64; do echo "$NATIVE_CODE" | grep -q "'$ABI'"; done
+          for ABI in arm64-v8a armeabi-v7a; do echo "$NATIVE_CODE" | grep -q "'$ABI'"; done
           "$BUILD_TOOLS/aapt" dump badging "$APK" | grep -q "sdkVersion:'24'"
           "$BUILD_TOOLS/zipalign" -c -P 16 4 "$APK"
           unzip -t "$APK" >/dev/null
           "$BUILD_TOOLS/aapt" dump xmltree "$APK" AndroidManifest.xml > manifest.txt
           grep -q 'expo-channel-name' manifest.txt
           grep -q 'production' manifest.txt
-          cp "$APK" Jixels-Customer-1.0.15.apk
-          sha256sum Jixels-Customer-1.0.15.apk > SHA256SUMS.txt
+          cp "$APK" Jixels-Customer-1.0.16.apk
+          sha256sum Jixels-Customer-1.0.16.apk > SHA256SUMS.txt
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: Jixels-Customer-1.0.15
+          name: Jixels-Customer-1.0.16
           path: |
-            Jixels-Customer-1.0.15.apk
+            Jixels-Customer-1.0.16.apk
             SHA256SUMS.txt
           retention-days: 30
       - name: Publish download
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          TAG="customer-1.0.15-build-${GITHUB_RUN_NUMBER}"
-          gh release create "$TAG" Jixels-Customer-1.0.15.apk SHA256SUMS.txt --target "$GITHUB_SHA" --title "Jixels Customer 1.0.15" --notes "Latest customer tracking app update. Signed with the existing customer Android signing key."
+          TAG="customer-1.0.16-build-${GITHUB_RUN_NUMBER}"
+          gh release create "$TAG" Jixels-Customer-1.0.16.apk SHA256SUMS.txt --target "$GITHUB_SHA" --title "Jixels Customer 1.0.16" --notes "Smaller universal Android phone build with ARM 32-bit and 64-bit support. Signed with the existing customer Android signing key."

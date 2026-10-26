@@ -43,7 +43,7 @@ jobs:
           node ../scripts/configure-github-android.mjs
           cd android
           chmod +x gradlew
-          ./gradlew :app:assembleRelease -PreactNativeArchitectures=arm64-v8a,armeabi-v7a,x86,x86_64 --max-workers=2 --no-daemon --console=plain
+          ./gradlew :app:assembleRelease -PreactNativeArchitectures=arm64-v8a,armeabi-v7a --max-workers=2 --no-daemon --console=plain
       - name: Verify signature and package
         run: |
           BUILD_TOOLS=$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -1)
@@ -51,27 +51,27 @@ jobs:
           "$BUILD_TOOLS/apksigner" verify --verbose --print-certs "$APK" | tee certificate.txt
           grep -qi 'bd7151d1fd4b56613206b9513dafa91b6f5a874bb94fcf34653f38303f881dc9' certificate.txt
           "$BUILD_TOOLS/aapt" dump badging "$APK" | head -1 | tee package.txt
-          grep -q "name='com.jixelstechnologies.agent' versionCode='15' versionName='1.1.2'" package.txt
+          grep -q "name='com.jixelstechnologies.agent' versionCode='16' versionName='1.1.3'" package.txt
           NATIVE_CODE=$("$BUILD_TOOLS/aapt" dump badging "$APK" | grep '^native-code:')
-          for ABI in arm64-v8a armeabi-v7a x86 x86_64; do echo "$NATIVE_CODE" | grep -q "'$ABI'"; done
+          for ABI in arm64-v8a armeabi-v7a; do echo "$NATIVE_CODE" | grep -q "'$ABI'"; done
           "$BUILD_TOOLS/aapt" dump badging "$APK" | grep -q "sdkVersion:'24'"
           "$BUILD_TOOLS/zipalign" -c -P 16 4 "$APK"
           unzip -t "$APK" >/dev/null
           "$BUILD_TOOLS/aapt" dump xmltree "$APK" AndroidManifest.xml > manifest.txt
           grep -q 'expo-channel-name' manifest.txt
           grep -q 'production' manifest.txt
-          cp "$APK" Jixels-Agent-1.1.2.apk
-          sha256sum Jixels-Agent-1.1.2.apk > SHA256SUMS.txt
+          cp "$APK" Jixels-Agent-1.1.3.apk
+          sha256sum Jixels-Agent-1.1.3.apk > SHA256SUMS.txt
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: Jixels-Agent-1.1.2
+          name: Jixels-Agent-1.1.3
           path: |
-            Jixels angets/Jixels-Agent-1.1.2.apk
+            Jixels angets/Jixels-Agent-1.1.3.apk
             Jixels angets/SHA256SUMS.txt
           retention-days: 30
       - name: Publish download
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          TAG="agent-1.1.2-build-${GITHUB_RUN_NUMBER}"
-          gh release create "$TAG" Jixels-Agent-1.1.2.apk SHA256SUMS.txt --target "$GITHUB_SHA" --title "Jixels Agent 1.1.2" --notes "Latest agent onboarding and tracking app update. Signed with the existing agent Android signing key."
+          TAG="agent-1.1.3-build-${GITHUB_RUN_NUMBER}"
+          gh release create "$TAG" Jixels-Agent-1.1.3.apk SHA256SUMS.txt --target "$GITHUB_SHA" --title "Jixels Agent 1.1.3" --notes "Smaller universal Android phone build with ARM 32-bit and 64-bit support. Signed with the existing agent Android signing key."

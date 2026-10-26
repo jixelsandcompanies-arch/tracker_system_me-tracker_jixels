@@ -92,7 +92,7 @@ const menu = [
   { key: "payments", label: "Make Payment", icon: "wallet-outline" },
   { key: "history", label: "Payment History", icon: "receipt-outline" },
   { key: "reports", label: "Reports", icon: "document-text-outline" },
-  { key: "alerts", label: "Alerts", icon: "notifications-outline" },
+  { key: "alerts", label: "Messages", icon: "chatbubbles-outline" },
   { key: "settings", label: "Settings", icon: "settings-outline" },
 ];
 
@@ -355,7 +355,7 @@ function PaymentNotice({ notice, onClose, onOpenAlerts }) {
       <View style={[styles.depositModalIcon, { backgroundColor: colors.green }]}><Ionicons name="checkmark" size={28} color={colors.white} /></View>
       <Text style={styles.depositModalTitle}>{notice?.title || "Payment received"}</Text>
       <Text style={styles.depositModalText}>{notice?.message}</Text>
-      <Pressable onPress={onOpenAlerts} style={styles.primaryButton}><Ionicons name="notifications-outline" size={18} color={colors.white} /><Text style={styles.primaryButtonText}>View notifications</Text></Pressable>
+      <Pressable onPress={onOpenAlerts} style={styles.primaryButton}><Ionicons name="chatbubbles-outline" size={18} color={colors.white} /><Text style={styles.primaryButtonText}>Open Messages</Text></Pressable>
       <Pressable onPress={onClose} style={styles.modalCancel}><Text style={styles.modalCancelText}>Close</Text></Pressable>
     </View></View>
   </Modal>;
@@ -489,10 +489,10 @@ function AlertsScreen({ alerts, markAllRead, markAlertRead, deleteAlerts, onRefr
   const openAlert = alert => { markAlertRead(alert.id); setActiveAlert(alert); };
   return <>
     <ScrollView style={[styles.nativeListPage, darkMode && styles.darkPage]} contentContainerStyle={styles.nativeListContent} refreshControl={<PullToRefresh onRefresh={onRefresh} />}>
-      <View style={styles.nativeListToolbar}>{selecting ? <><View><Text style={[styles.nativeListHeading, darkMode && styles.darkText]}>{selected.size} selected</Text><Text style={styles.nativeToolbarSub}>Tap notifications to add or remove</Text></View><View style={styles.selectionActions}><Pressable onPress={() => setSelected(new Set(alerts.map(alert => alert.id)))} style={styles.selectionButton}><Ionicons name="checkbox-outline" size={18} color={colors.blue} /><Text style={styles.markReadText}>All</Text></Pressable><Pressable onPress={removeSelected} style={[styles.selectionButton, styles.deleteButton]}><Ionicons name="trash-outline" size={18} color="#DC3B2A" /><Text style={styles.deleteText}>Delete</Text></Pressable></View></> : <><View><Text style={[styles.nativeListHeading, darkMode && styles.darkText]}>Recent notifications</Text><Text style={styles.nativeToolbarSub}>Tap to read • Hold to select</Text></View><Pressable onPress={markAllRead} style={styles.markReadButton}><Ionicons name="checkmark-done" size={18} color={colors.blue} /><Text style={styles.markReadText}>Read all</Text></Pressable></>}</View>
-      <View style={[styles.nativeList, darkMode && styles.darkCard]}>{alerts.map((alert, index) => { const checked = selected.has(alert.id); return <Pressable key={alert.id} delayLongPress={900} onLongPress={() => toggle(alert.id)} onPress={() => selecting ? toggle(alert.id) : openAlert(alert)} style={[styles.nativeRow, index < alerts.length - 1 && styles.nativeRowDivider, alert.unread && !darkMode && styles.nativeRowUnread, checked && styles.nativeRowSelected]}>{selecting && <View style={[styles.selectionCheck, checked && styles.selectionCheckActive]}>{checked && <Ionicons name="checkmark" size={15} color={colors.white} />}</View>}<View style={[styles.nativeAvatar, alert.type === "payment" ? styles.nativeAvatarOrange : alert.type === "receipt" ? styles.nativeAvatarGreen : null]}><Ionicons name={alert.icon} size={22} color={colors.white} /></View><View style={styles.nativeRowBody}><View style={styles.nativeRowTop}><Text numberOfLines={1} style={[styles.nativeRowTitle, darkMode && styles.darkText]}>{alert.title}</Text><Text style={styles.nativeRowTime}>{alert.age}</Text></View><Text numberOfLines={2} style={styles.nativeRowMessage}>{alert.message}</Text></View>{alert.unread && !selecting && <View style={styles.nativeUnreadBadge}><Text style={styles.nativeUnreadText}>1</Text></View>}</Pressable>; })}{alerts.length === 0 && <View style={styles.emptyAlerts}><Ionicons name="notifications-off-outline" size={34} color={colors.gray} /><Text style={styles.stateMessage}>No notifications</Text></View>}</View>
+      <View style={styles.nativeListToolbar}>{selecting ? <><View><Text style={[styles.nativeListHeading, darkMode && styles.darkText]}>{selected.size} selected</Text><Text style={styles.nativeToolbarSub}>Tap messages to add or remove</Text></View><View style={styles.selectionActions}><Pressable onPress={() => setSelected(new Set(alerts.map(alert => alert.id)))} style={styles.selectionButton}><Ionicons name="checkbox-outline" size={18} color={colors.blue} /><Text style={styles.markReadText}>All</Text></Pressable><Pressable onPress={removeSelected} style={[styles.selectionButton, styles.deleteButton]}><Ionicons name="trash-outline" size={18} color="#DC3B2A" /><Text style={styles.deleteText}>Delete</Text></Pressable></View></> : <><View><Text style={[styles.nativeListHeading, darkMode && styles.darkText]}>Messages</Text><Text style={styles.nativeToolbarSub}>Tap to read • Hold to select</Text></View><Pressable onPress={markAllRead} style={styles.markReadButton}><Ionicons name="checkmark-done" size={18} color={colors.blue} /><Text style={styles.markReadText}>Read all</Text></Pressable></>}</View>
+      <View style={[styles.nativeList, darkMode && styles.darkCard]}>{alerts.map((alert, index) => { const checked = selected.has(alert.id); return <Pressable key={alert.id} delayLongPress={900} onLongPress={() => toggle(alert.id)} onPress={() => selecting ? toggle(alert.id) : openAlert(alert)} style={[styles.nativeRow, index < alerts.length - 1 && styles.nativeRowDivider, alert.unread && !darkMode && styles.nativeRowUnread, checked && styles.nativeRowSelected]}>{selecting && <View style={[styles.selectionCheck, checked && styles.selectionCheckActive]}>{checked && <Ionicons name="checkmark" size={15} color={colors.white} />}</View>}<View style={[styles.nativeAvatar, alert.type === "payment" ? styles.nativeAvatarOrange : alert.type === "receipt" ? styles.nativeAvatarGreen : null]}><Ionicons name={alert.icon} size={22} color={colors.white} /></View><View style={styles.nativeRowBody}><View style={styles.nativeRowTop}><Text numberOfLines={1} style={[styles.nativeRowTitle, darkMode && styles.darkText]}>{alert.title}</Text><Text style={styles.nativeRowTime}>{alert.age}</Text></View><Text numberOfLines={2} style={styles.nativeRowMessage}>{alert.message}</Text></View>{alert.unread && !selecting && <View style={styles.nativeUnreadBadge}><Text style={styles.nativeUnreadText}>1</Text></View></Pressable>; })}{alerts.length === 0 && <View style={styles.emptyAlerts}><Ionicons name="chatbubbles-outline" size={34} color={colors.gray} /><Text style={styles.stateMessage}>No messages</Text></View>}</View>
     </ScrollView>
-    <Modal visible={!!activeAlert} transparent animationType="slide" onRequestClose={() => setActiveAlert(null)}><View style={styles.paymentMessageOverlay}><Pressable style={styles.paymentMessageBackdrop} onPress={() => setActiveAlert(null)} /><View style={styles.paymentMessageSheet}><View style={styles.paymentMessageHandle} /><View style={styles.paymentMessageSender}><View style={styles.paymentMessageLogo}><Ionicons name="notifications" size={24} color={colors.white} /></View><View style={{ flex: 1 }}><Text style={styles.paymentMessageSenderName}>Jixels Customer Trackings</Text><Text style={styles.paymentMessageSenderMeta}>Account notification • {activeAlert?.age}</Text></View><Pressable onPress={() => setActiveAlert(null)} style={styles.paymentMessageClose}><Ionicons name="close" size={22} color={colors.ink} /></Pressable></View><View style={styles.paymentMessageBubble}><Text style={styles.nativeRowTitle}>{activeAlert?.title}</Text><Text style={[styles.paymentMessageText, { marginTop: 8 }]}>{activeAlert?.message}</Text><Text style={styles.paymentMessageTime}>{activeAlert?.age}</Text></View></View></View></Modal>
+    <Modal visible={!!activeAlert} transparent animationType="slide" onRequestClose={() => setActiveAlert(null)}><View style={styles.paymentMessageOverlay}><Pressable style={styles.paymentMessageBackdrop} onPress={() => setActiveAlert(null)} /><View style={styles.paymentMessageSheet}><View style={styles.paymentMessageHandle} /><View style={styles.paymentMessageSender}><View style={styles.paymentMessageLogo}><Ionicons name="chatbubble-ellipses" size={24} color={colors.white} /></View><View style={{ flex: 1 }}><Text style={styles.paymentMessageSenderName}>Jixels Customer Trackings</Text><Text style={styles.paymentMessageSenderMeta}>System message • {activeAlert?.age}</Text></View><Pressable onPress={() => setActiveAlert(null)} style={styles.paymentMessageClose}><Ionicons name="close" size={22} color={colors.ink} /></Pressable></View><View style={styles.paymentMessageBubble}><Text style={styles.nativeRowTitle}>{activeAlert?.title}</Text><Text style={[styles.paymentMessageText, { marginTop: 8 }]}>{activeAlert?.message}</Text><Text style={styles.paymentMessageTime}>{activeAlert?.age}</Text></View></View></View></Modal>
   </>;
 }
 
@@ -736,6 +736,7 @@ function CustomerApp({ session, onLogout }) {
   const [paymentNotice, setPaymentNotice] = useState(null);
   const knownAlertIds = useRef(null);
   const shownPaymentNoticeIds = useRef(new Set());
+  const shownMessageNotificationIds = useRef(new Set());
   useEffect(() => {
     Promise.all([
       Location.getForegroundPermissionsAsync(),
@@ -818,6 +819,15 @@ function CustomerApp({ session, onLogout }) {
             if (newPayment) {
               shownPaymentNoticeIds.current.add(String(newPayment.id));
               setPaymentNotice({ id: String(newPayment.id), title: newPayment.title || "Payment received", message: newPayment.message || newPayment.body || "Your payment has been confirmed." });
+            }
+            for (const alert of nextAlerts) {
+              const alertId = String(alert.id);
+              if (!alert.unread || alert.type === "payment" || knownAlertIds.current.has(alertId) || shownMessageNotificationIds.current.has(alertId)) continue;
+              shownMessageNotificationIds.current.add(alertId);
+              Notifications.scheduleNotificationAsync({
+                content: { title: alert.title || "Jixels message", body: alert.message || alert.body || "Open Messages to read this update.", sound: "default", data: { type: alert.type || "message", eventId: alertId, screen: "alerts", inAppRecorded: true } },
+                trigger: null,
+              }).catch(() => {});
             }
           }
           knownAlertIds.current = new Set([...(knownAlertIds.current ?? []), ...nextAlerts.map(alert => String(alert.id))]);
@@ -983,7 +993,7 @@ function CustomerApp({ session, onLogout }) {
   }, [profile.name, profile.phone, session.accessToken]);
   useEffect(() => { Notifications.setBadgeCountAsync(unread).catch(() => {}); }, [unread]);
   const title = menu.find(item => item.key === screen)?.label ?? "Dashboard";
-  const subtitles = { dashboard: "Overview of your Jixels account", bikes: "Track and pay for vehicles you own", tracking: selectedBike?.registration ?? "Your current location", monitoring: selectedBike ? `Security for ${selectedBike.registration}` : "Vehicle security controls", payments: selectedBike ? `Payment for ${selectedBike.registration}` : "No vehicle selected", history: "Your confirmed vehicle payments", reports: "Download vehicle route reports", alerts: "Important account updates", settings: "Profile, contact and security details" };
+  const subtitles = { dashboard: "Overview of your Jixels account", bikes: "Track and pay for vehicles you own", tracking: selectedBike?.registration ?? "Your current location", monitoring: selectedBike ? `Security for ${selectedBike.registration}` : "Vehicle security controls", payments: selectedBike ? `Payment for ${selectedBike.registration}` : "No vehicle selected", history: "Your confirmed vehicle payments", reports: "Download vehicle route reports", alerts: "Messages from Jixels about your account and vehicles", settings: "Profile, contact and security details" };
   const navigate = key => {
     if (key !== screen) {
       nativeTap();

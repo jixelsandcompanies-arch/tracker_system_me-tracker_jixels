@@ -124,7 +124,43 @@ function tramigoLocation(report: any) {
   const batteryValue = source?.BatteryPercent ?? source?.batteryPercent ?? source?.battery_percent ?? source?.Battery_Level_Percent ?? source?.batteryLevelPercent ?? source?.battery_level_percent;
   const parsedBattery = batteryValue == null ? null : Number(batteryValue);
   const batteryPercent = parsedBattery !== null && Number.isInteger(parsedBattery) && parsedBattery >= 0 && parsedBattery <= 100 ? parsedBattery : null;
-  return { latitude, longitude, speedKph: Number(source?.Speed ?? source?.speed ?? 0), recordedAt: source?.DateTimeActual ?? source?.DateTime_Actual ?? report?.DateTimeActual ?? report?.DateTime_Actual ?? new Date().toISOString(), trackerStatus, batteryPercent };
+  const rawSpeed = source?.Speed ?? source?.speed;
+  const parsedSpeed = rawSpeed == null || rawSpeed === "" ? null : Number(rawSpeed);
+  const rawRecordedAt = source?.DateTimeActual ?? source?.DateTime_Actual ?? source?.DateTime_Received ?? report?.DateTimeActual ?? report?.DateTime_Actual ?? report?.DateTime_Received;
+  const parsedRecordedAt = rawRecordedAt == null ? null : new Date(String(rawRecordedAt));
+  return {
+    latitude,
+    longitude,
+    speedKph: parsedSpeed !== null && Number.isFinite(parsedSpeed) && parsedSpeed >= 0 ? parsedSpeed : null,
+    recordedAt: parsedRecordedAt && Number.isFinite(parsedRecordedAt.getTime()) ? safeLiveTimestamp(parsedRecordedAt.toISOString()) : null,
+    trackerStatus,
+    batteryPercent,
+  };
+}
+
+async function fetchLatestTramigoLocation(identifier: string, existingSession?: TramigoSession, existingCatalogue?: any) {
+  const session = existingSession ?? await tramigoSession();
+  const catalogue = existingCatalogue ?? await tramigoRequest("/api/v2/devices?page=1&per_page=1000", {}, session);
+  const cloudDeviceId = await tramigoCloudDeviceId(identifier, catalogue, session);
+  const report = await tramigoRequest(`/api/reports/last_location/${encodeURIComponent(cloudDeviceId)}`, {}, session);
+  return tramigoLocation(report);
+}
+
+function reportIsFresh(location: any, maxAgeMs = 60_000) {
+  if (!location?.recordedAt || location.speedKph == null || !Number.isFinite(Number(location.speedKph))) return false;
+  const ageMs = Date.now() - new Date(location.recordedAt).getTime();
+  return Number.isFinite(ageMs) && ageMs >= 0 && ageMs <= maxAgeMs;
+}
+
+function distanceMeters(first: { latitude: number; longitude: number }, second: { latitude: number; longitude: number }) {
+  const radians = (value: number) => value * Math.PI / 180;
+  const latitudeDelta = radians(second.latitude - first.latitude);
+  const longitudeDelta = radians(second.longitude - first.longitude);
+  const firstLatitude = radians(first.latitude);
+  const secondLatitude = radians(second.latitude);
+  const haversine = Math.sin(latitudeDelta / 2) ** 2
+    + Math.cos(firstLatitude) * Math.cos(secondLatitude) * Math.sin(longitudeDelta / 2) ** 2;
+  return 6_371_000 * 2 * Math.atan2(Math.sqrt(haversine), Math.sqrt(1 - haversine));
 }
 
 function tramigoReportRecords(payload: any): any[] {
@@ -2090,9 +2126,42 @@ Deno.serve(async (request) => {
     const { data: customer, error: customerError } = email ? await admin.from("customers").select("id").ilike("email", email).maybeSingle() : { data: null, error: null };
     if (customerError) return fail("Vehicle security could not be loaded.", 503, "SECURITY_STATUS_UNAVAILABLE");
     const { data: customerBikes, error: bikeError } = customer?.id
-      ? await admin.from("bikes").select("id,identifier,monitoring_armed,immobilized").eq("customer_id", customer.id)
+      ? await admin.from("bikes").select("id,identifier,monitoring_armed,immobilized,trackers(id,identifier,tramigo_device_id)").eq("customer_id", customer.id)
       : { data: [], error: null };
     if (bikeError) return fail("Vehicle security could not be loaded.", 503, "SECURITY_STATUS_UNAVAILABLE");
+    // Keep armed customer bikes fresh while their app is active. The customer
+    // app polls this endpoint every 30 seconds; writing trusted points here
+    // also drives the database movement-alert rule.
+    let providerSession: TramigoSession | undefined;
+    let deviceCatalogue: any;
+    for (const bike of customerBikes ?? []) {
+      if (!bike.monitoring_armed) continue;
+      const trackerRelation = (bike as any).trackers;
+      const tracker = Array.isArray(trackerRelation) ? trackerRelation[0] : trackerRelation;
+      const identifier = String(tracker?.tramigo_device_id ?? tracker?.identifier ?? "").trim();
+      if (!tracker?.id || !identifier || !Deno.env.get("TRAMIGO_USERNAME")) continue;
+      const { data: canQueryProvider, error: rateLimitError } = await admin.rpc("claim_location_provider_read", {
+        p_key: `${user.id}:${bike.id}`, p_max_requests: 4, p_window_seconds: 60,
+      });
+      if (rateLimitError || canQueryProvider !== true) continue;
+      try {
+        providerSession ??= await tramigoSession();
+        deviceCatalogue ??= await tramigoRequest("/api/v2/devices?page=1&per_page=1000", {}, providerSession);
+        const location = await fetchLatestTramigoLocation(identifier, providerSession, deviceCatalogue);
+        if (!reportIsFresh(location)) continue;
+        const { error: locationError } = await admin.from("tracker_locations").insert({
+          vehicle_id: null,
+          tracker_id: tracker.id,
+          latitude: location.latitude,
+          longitude: location.longitude,
+          speed_kph: location.speedKph,
+          recorded_at: location.recordedAt,
+        });
+        if (locationError) console.error("Customer monitoring location could not be saved", bike.id, locationError.message);
+      } catch (error) {
+        console.error("Customer Tramigo monitoring refresh failed", bike.id, error instanceof Error ? error.message : "unknown error");
+      }
+    }
     return response({ vehicles: [
       ...(vehicles ?? []),
       ...(customerBikes ?? []).map((bike: any) => ({ ...bike, registration: bike.identifier })),
@@ -2116,14 +2185,37 @@ Deno.serve(async (request) => {
     if (!deviceId) return fail("This vehicle has no Tramigo tracker assigned.", 409, "TRACKER_NOT_ASSIGNED");
     if (bike && !tracker?.id) return fail("This bike has no assigned tracker.", 409, "TRACKER_NOT_ASSIGNED");
     if (action === "immobilizer" && enabled) {
-      let locationQuery = admin.from("tracker_locations").select("speed_kph,recorded_at").order("recorded_at", { ascending: false }).limit(1).maybeSingle();
-      locationQuery = bike ? locationQuery.eq("tracker_id", tracker.id) : locationQuery.eq("vehicle_id", vehicleId);
-      const { data: latestLocation, error: locationError } = await locationQuery;
-      const ageMs = latestLocation?.recorded_at ? Date.now() - new Date(latestLocation.recorded_at).getTime() : Infinity;
-      const speedKph = latestLocation?.speed_kph == null ? null : Number(latestLocation.speed_kph);
-      if (locationError || !latestLocation || !Number.isFinite(ageMs) || ageMs < 0 || ageMs > 60_000 || speedKph == null || !Number.isFinite(speedKph) || speedKph > 0.5) {
-        return fail("The tracker cannot confirm that the bike is stationary. Try again after it reports a fresh stopped location.", 409, "VEHICLE_NOT_SAFE_TO_IMMOBILIZE");
+      const { data: canQueryProvider, error: rateLimitError } = await admin.rpc("claim_location_provider_read", {
+        p_key: `${user.id}:${vehicleId}`, p_max_requests: 4, p_window_seconds: 60,
+      });
+      if (rateLimitError || canQueryProvider !== true) return fail("Wait briefly for the next tracker update before immobilizing.", 429, "TRACKER_READ_RATE_LIMITED");
+      let latestLocation: any;
+      try { latestLocation = await fetchLatestTramigoLocation(deviceId); }
+      catch (error) { return fail(error instanceof Error ? error.message : "The tracker did not return a fresh position.", 503, "TRACKER_POSITION_UNAVAILABLE"); }
+      if (!reportIsFresh(latestLocation) || Number(latestLocation.speedKph) > 0.5) {
+        return fail("The tracker cannot confirm the bike is stopped. A fresh report with known speed at or below 0.5 km/h is required.", 409, "VEHICLE_NOT_SAFE_TO_IMMOBILIZE");
       }
+      let previousQuery = admin.from("tracker_locations").select("latitude,longitude,recorded_at").order("recorded_at", { ascending: false }).limit(1).maybeSingle();
+      previousQuery = bike ? previousQuery.eq("tracker_id", tracker.id) : previousQuery.eq("vehicle_id", vehicleId);
+      const { data: previousLocation, error: previousError } = await previousQuery;
+      const reportTime = new Date(latestLocation.recordedAt).getTime();
+      const previousTime = previousLocation?.recorded_at ? new Date(previousLocation.recorded_at).getTime() : NaN;
+      const previousAgeMs = Date.now() - previousTime;
+      if (previousError || !previousLocation || !Number.isFinite(previousTime) || previousTime >= reportTime || previousAgeMs < 0 || previousAgeMs > 60_000) {
+        return fail("Wait for two new tracker positions before immobilizing so the system can confirm the bike stayed still.", 409, "STATIONARY_MOVEMENT_NOT_CONFIRMED");
+      }
+      if (distanceMeters(previousLocation, latestLocation) > 30) {
+        return fail("The tracker shows the bike moved recently. Park it and wait for two stationary updates before immobilizing.", 409, "VEHICLE_MOVEMENT_CONFIRMED");
+      }
+      const { error: saveLocationError } = await admin.from("tracker_locations").insert({
+        vehicle_id: bike ? null : vehicleId,
+        tracker_id: bike ? tracker.id : null,
+        latitude: latestLocation.latitude,
+        longitude: latestLocation.longitude,
+        speed_kph: latestLocation.speedKph,
+        recorded_at: latestLocation.recordedAt,
+      });
+      if (saveLocationError) return fail("The fresh stationary report could not be saved, so no immobilizer command was sent.", 503, "TRACKER_POSITION_SAVE_FAILED");
     }
     const configuredPath = action === "monitoring" ? Deno.env.get("TRAMIGO_CLOUD_CONTROL_STATUS_PATH") : Deno.env.get("TRAMIGO_CLOUD_IMMOBILIZER_PATH");
     if (!configuredPath) return fail("Tramigo security control is not configured.", 503, "TRAMIGO_NOT_CONFIGURED");
@@ -2143,7 +2235,7 @@ Deno.serve(async (request) => {
   if (route === "/v1/customer/alerts" && request.method === "GET") {
     const { data, error } = await admin.from("alerts").select("id,title,body,detail,kind,severity,created_at,read_at").eq("owner_id", user.id).order("created_at", { ascending: false }).limit(100);
     if (error) return fail("Your notifications are temporarily unavailable.", 503, "ALERTS_UNAVAILABLE");
-    return response({ alerts: (data ?? []).map((alert: any) => ({ id: alert.id, title: alert.title, message: alert.detail || alert.body, type: alert.kind || "notification", icon: alert.kind === "payment" ? "wallet-outline" : "notifications-outline", severity: alert.severity, age: new Date(alert.created_at).toLocaleString("en-KE", { timeZone: "Africa/Nairobi" }), unread: !alert.read_at, createdAt: alert.created_at })) });
+    return response({ alerts: (data ?? []).map((alert: any) => ({ id: alert.id, title: alert.title, message: alert.detail || alert.body, type: alert.kind || "notification", icon: alert.kind === "payment" ? "wallet-outline" : alert.kind === "movement" ? "bicycle-outline" : "notifications-outline", severity: alert.severity, age: new Date(alert.created_at).toLocaleString("en-KE", { timeZone: "Africa/Nairobi" }), unread: !alert.read_at, createdAt: alert.created_at })) });
   }
   if (route === "/v1/customer/alerts/read" && request.method === "POST") {
     const ids = Array.isArray(body.ids) ? body.ids.map(String).filter(Boolean).slice(0, 100) : [];
@@ -2172,13 +2264,31 @@ Deno.serve(async (request) => {
       ? await admin.from("customers").select("id").ilike("email", String(customerProfile.email).trim()).maybeSingle()
       : { data: null };
     const { data: assignedBike } = assignedCustomer?.id
-      ? await admin.from("bikes").select("id,identifier,model,product_type,trackers(id,identifier,plate_number,latitude,longitude,last_seen_at,is_online)").eq("id", vehicleId).eq("customer_id", assignedCustomer.id).maybeSingle()
+      ? await admin.from("bikes").select("id,identifier,model,product_type,monitoring_armed,trackers(id,identifier,tramigo_device_id,plate_number,latitude,longitude,last_seen_at,is_online)").eq("id", vehicleId).eq("customer_id", assignedCustomer.id).maybeSingle()
       : { data: null };
     if (assignedBike) {
       const tracker = (assignedBike as any).trackers?.[0] ?? null;
-      let location = tracker && Number.isFinite(Number(tracker.latitude)) && Number.isFinite(Number(tracker.longitude))
-        ? { latitude: Number(tracker.latitude), longitude: Number(tracker.longitude), speedKph: 0, recordedAt: tracker.last_seen_at, trackerStatus: tracker.is_online ? "online" : "offline" }
-        : null;
+      let location = null;
+      const trackerIdentifier = String(tracker?.tramigo_device_id ?? tracker?.identifier ?? "").trim();
+      if (tracker?.id && trackerIdentifier && Deno.env.get("TRAMIGO_USERNAME")) {
+        const { data: canQueryProvider, error: rateLimitError } = await admin.rpc("claim_location_provider_read", {
+          p_key: `${user.id}:${vehicleId}`, p_max_requests: 4, p_window_seconds: 60,
+        });
+        if (!rateLimitError && canQueryProvider === true) {
+          try {
+            const latest = await fetchLatestTramigoLocation(trackerIdentifier);
+            if (latest?.recordedAt && Number.isFinite(latest.latitude) && Number.isFinite(latest.longitude)) {
+              location = { ...latest, trackerStatus: latest.trackerStatus ?? (tracker.is_online ? "online" : "offline") };
+              if (reportIsFresh(latest)) {
+                const { error: locationError } = await admin.from("tracker_locations").insert({ vehicle_id: null, tracker_id: tracker.id, latitude: latest.latitude, longitude: latest.longitude, speed_kph: latest.speedKph, recorded_at: latest.recordedAt });
+                if (locationError) console.error("Customer live tracker point could not be saved", vehicleId, locationError.message);
+              }
+            }
+          } catch (error) {
+            console.error("Customer live Tramigo location unavailable", vehicleId, error instanceof Error ? error.message : "unknown error");
+          }
+        }
+      }
       if (!location && tracker?.id) {
         const { data: saved } = await admin.from("tracker_locations").select("latitude,longitude,speed_kph,heading,accuracy_meters,recorded_at").eq("tracker_id", tracker.id).order("recorded_at", { ascending: false }).limit(1).maybeSingle();
         location = saved && { latitude: saved.latitude, longitude: saved.longitude, speedKph: saved.speed_kph, heading: saved.heading, accuracyMeters: saved.accuracy_meters, recordedAt: saved.recorded_at, trackerStatus: tracker.is_online ? "online" : "offline" };

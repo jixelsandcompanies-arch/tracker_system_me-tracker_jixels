@@ -62,14 +62,46 @@ the latest report from `/api/reports/last_location/{deviceId}` and stores it in
 in the supplied API reference. Do not expose these credentials in Vercel or
 the mobile app.
 
-The customer app's monitoring and immobilizer controls also require the
-server-only `TRAMIGO_CLOUD_CONTROL_STATUS_PATH` and
-`TRAMIGO_CLOUD_IMMOBILIZER_PATH` secrets. Set each to the POST path documented
-for the connected Tramigo account, using `{deviceId}` where the tracker ID
-belongs. These paths are account-specific; do not guess them. Immobilizing a
-bike additionally requires a tracker report from the last 60 seconds with a
-reported speed at or below 0.5 km/h. The app rejects the command if it cannot
-confirm the bike is stationary.
+The customer app's security controls require the server-only
+`TRAMIGO_CLOUD_CONTROL_STATUS_PATH` and `TRAMIGO_CLOUD_IMMOBILIZER_PATH`
+secrets. Set each to the POST path and command contract documented for the
+connected Tramigo account, using `{deviceId}` where the tracker ID belongs.
+The read-only status path is `TRAMIGO_CLOUD_OUTBOUND_STATUS_PATH`. These API
+paths and command payloads are account-specific; do not guess them. The mobile
+app must never contain Tramigo credentials.
+
+Before sending an immobilizer command, the API fetches a direct Tramigo report
+and requires a known speed at or below 0.5 km/h, a report no older than 60
+seconds, and two distinct recent tracker positions no more than 30 metres
+apart. If speed, timestamp, or a second position is missing, the command is
+rejected. The tracker must also have the immobilizer relay installed and
+supported by the vehicle hardware.
+
+When monitoring is armed, fresh customer tracker points create a persistent
+movement message after a speed report of at least 3 km/h or a position change
+of at least 50 metres. The customer app refreshes the armed fleet while it is
+open. To keep monitoring active after the app closes, deploy the
+`tramigo-monitor` Edge Function and schedule it in the Supabase project:
+
+1. Apply all migrations, then deploy `api`, `tracker-heartbeat`, and
+   `tramigo-monitor`. Enable the Supabase `pg_cron`, `pg_net`, and Vault
+   extensions for the project.
+2. In the Supabase SQL Editor, save the monitor URL and service-role key to
+   Vault. Do not put either value in the app or repository:
+
+   ```sql
+   select vault.create_secret('https://<project-ref>.supabase.co/functions/v1/tramigo-monitor', 'tramigo-monitor-url');
+   select vault.create_secret('<service-role-key-from-project-settings>', 'tramigo-monitor-service-role-key');
+   ```
+
+3. Call `select public.schedule_tramigo_monitor();` from the SQL Editor. This
+   schedules a one-minute server poll; check `cron.job_run_details` for its
+   run results.
+
+The confirmed-movement rule writes durable customer messages. The Customer
+app displays them in **Messages** and raises a device notification when a new
+message arrives. It uses trusted Tramigo reports; it does not treat a missing
+speed reading as stationary.
 
 ## Tracker health heartbeats
 

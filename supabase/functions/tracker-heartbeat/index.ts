@@ -37,6 +37,8 @@ Deno.serve(async (request) => {
   const longitude = hasLongitude ? Number(longitudeValue) : null;
   const batteryValue = payload.batteryPercent ?? payload.battery_percent;
   const battery = batteryValue === undefined || batteryValue === null || batteryValue === "" ? null : Number(batteryValue);
+  const speedValue = payload.speedKph ?? payload.speed_kph;
+  const speedKph = speedValue === undefined || speedValue === null || speedValue === "" ? null : Number(speedValue);
   const recordedValue = payload.recordedAt ?? payload.recorded_at;
   const recordedAt = recordedValue == null || recordedValue === "" ? null : new Date(String(recordedValue));
 
@@ -46,6 +48,7 @@ Deno.serve(async (request) => {
     return json({ error: "Coordinates are invalid" }, 400);
   }
   if (battery !== null && (!Number.isInteger(battery) || battery < 0 || battery > 100)) return json({ error: "batteryPercent must be an integer from 0 to 100" }, 400);
+  if (speedKph !== null && (!Number.isFinite(speedKph) || speedKph < 0 || speedKph > 300)) return json({ error: "speedKph must be a number from 0 to 300" }, 400);
   if (recordedAt && !Number.isFinite(recordedAt.getTime())) return json({ error: "recordedAt must be a valid timestamp" }, 400);
 
   const supabaseUrl = Deno.env.get("SUPABASE_URL");
@@ -57,6 +60,7 @@ Deno.serve(async (request) => {
     tracker_latitude: latitude,
     tracker_longitude: longitude,
     tracker_battery: battery,
+    tracker_speed_kph: speedKph,
     tracker_recorded_at: recordedAt?.toISOString() ?? null,
   });
   if (error) {

@@ -11,3 +11,6 @@ verify_jwt = false
 
 [functions.tracker-heartbeat]
 verify_jwt = false
+
+[functions.tramigo-monitor]
+verify_jwt = true

@@ -7,6 +7,7 @@ const request = (path, token) => apiRequest(path, { token });
 
 function normalizeLocation(location) {
   if (!location) return location;
+  if (location.latitude == null || location.latitude === "" || location.longitude == null || location.longitude === "") return null;
   const latitude = Number(location.latitude);
   const longitude = Number(location.longitude);
   if (!Number.isFinite(latitude) || !Number.isFinite(longitude) || latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180) return null;
@@ -18,9 +19,11 @@ function normalizeLocation(location) {
     ...location,
     latitude,
     longitude,
-    speedKph: Number(location.speedKph ?? location.speed ?? 0),
+    speedKph: location.speedKph == null && location.speed == null
+      ? null
+      : Number(location.speedKph ?? location.speed),
     accuracyMeters: Number.isFinite(Number(rawAccuracy)) ? Math.max(0, Math.round(Number(rawAccuracy))) : null,
-    recordedAt: location.recordedAt ?? location.timestamp ?? new Date().toISOString(),
+    recordedAt: location.recordedAt ?? location.timestamp ?? null,
   };
 }
 

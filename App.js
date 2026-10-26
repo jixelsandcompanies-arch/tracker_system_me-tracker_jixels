@@ -97,7 +97,9 @@ const menu = [
 ];
 
 function relativeTime(value, now) {
-  const seconds = Math.max(0, Math.floor((now - new Date(value).getTime()) / 1000));
+  const timestamp = new Date(value).getTime();
+  if (!Number.isFinite(timestamp)) return "Unknown";
+  const seconds = Math.max(0, Math.floor((now - timestamp) / 1000));
   if (seconds < 60) return `${seconds} sec ago`;
   const minutes = Math.floor(seconds / 60);
   return minutes === 1 ? "1 min ago" : `${minutes} min ago`;
@@ -352,7 +354,7 @@ function PaymentSuccess({ receipt, onClose }) {
 function PaymentNotice({ notice, onClose, onOpenAlerts }) {
   return <Modal visible={!!notice} transparent animationType="fade" onRequestClose={onClose}>
     <View style={styles.modalOverlay}><View style={styles.reportSuccessCard}>
-      <View style={[styles.depositModalIcon, { backgroundColor: colors.green }]}><Ionicons name="checkmark" size={28} color={colors.white} /></View>
+      <View style={[styles.depositModalIcon, { backgroundColor: colors.green }]}><Ionicons name="wallet-outline" size={26} color={colors.white} /></View>
       <Text style={styles.depositModalTitle}>{notice?.title || "Payment received"}</Text>
       <Text style={styles.depositModalText}>{notice?.message}</Text>
       <Pressable onPress={onOpenAlerts} style={styles.primaryButton}><Ionicons name="chatbubbles-outline" size={18} color={colors.white} /><Text style={styles.primaryButtonText}>Open Messages</Text></Pressable>
@@ -601,6 +603,9 @@ function MonitoringScreen({ selectedBike, vehicles, onSelectBike, security, onMo
   const immobilized = state.immobilized ?? selectedBike.immobilized ?? false;
   const securityReady = state.securityReady ?? selectedBike.securityReady ?? false;
   const securityMessage = state.securityMessage ?? selectedBike.securityMessage ?? "The agent must confirm installation and the system must confirm the full deposit before security controls are enabled.";
+  const controlGateMessage = !isOnline
+    ? "Connect the Customer app to the internet to send a secure vehicle control command."
+    : !securityReady ? securityMessage : null;
   const tampered = (state.tamperStatus ?? selectedBike.tamperStatus) === "tampered";
   const orderedVehicles = [...vehicles].sort((a, b) => Number((security[b.id]?.tamperStatus ?? b.tamperStatus) === "tampered") - Number((security[a.id]?.tamperStatus ?? a.tamperStatus) === "tampered"));
   const tamperedVehicles = orderedVehicles.filter(vehicle => (security[vehicle.id]?.tamperStatus ?? vehicle.tamperStatus) === "tampered");
@@ -619,7 +624,7 @@ function MonitoringScreen({ selectedBike, vehicles, onSelectBike, security, onMo
     <View style={styles.monitorHero}><Ionicons name="shield-checkmark" size={34} color={colors.white} /><View style={{ flex: 1 }}><Text style={styles.monitorHeroTitle}>Vehicle security controls</Text><Text style={styles.monitorHeroText}>GPS stays powered so Jixels can preserve location evidence.</Text></View></View>
     {tamperedVehicles.length > 0 && <View style={[styles.tamperCard, styles.tamperCardDanger]}><Ionicons name="warning" size={25} color="#DC3B2A" /><View style={{ flex: 1 }}><Text style={styles.monitorTitle}>{tamperedVehicles.length} tampered tracker{tamperedVehicles.length === 1 ? "" : "s"} detected</Text><Text style={styles.monitorCopy}>Affected vehicles are shown first below. Select one to see its last trusted location.</Text></View></View>}
     <Text style={styles.fieldLabel}>Choose vehicle</Text><ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.bikeChips}>{orderedVehicles.map(vehicle => { const vehicleTampered = (security[vehicle.id]?.tamperStatus ?? vehicle.tamperStatus) === "tampered"; return <Pressable key={vehicle.id} onPress={() => onSelectBike(vehicle)} style={[styles.bikeChip, selectedBike.id === vehicle.id && styles.bikeChipActive, vehicleTampered && styles.monitorVehicleTampered]}><Text style={[styles.bikeChipText, selectedBike.id === vehicle.id && styles.bikeChipTextActive, vehicleTampered && selectedBike.id !== vehicle.id && { color: "#DC3B2A" }]}>{vehicle.registration}{vehicleTampered ? " • TAMPER" : ""}</Text></Pressable>; })}</ScrollView>
-    {!securityReady && <View style={styles.infoCallout}><Ionicons name="time-outline" size={21} color={colors.blue} /><Text style={styles.infoCalloutText}>{securityMessage} The agent installation confirmation and paid deposit are checked separately.</Text></View>}
+    {controlGateMessage && <View style={styles.infoCallout}><Ionicons name={isOnline ? "time-outline" : "cloud-offline-outline"} size={21} color={colors.blue} /><Text style={styles.infoCalloutText}>{controlGateMessage}{isOnline && !securityReady ? " The agent installation confirmation and paid deposit are checked separately." : ""}</Text></View>}
     <View style={styles.monitorCard}><View style={styles.monitorRow}><View style={styles.monitorIcon}><Ionicons name="notifications-outline" size={22} color={colors.blue} /></View><View style={{ flex: 1 }}><Text style={styles.monitorTitle}>Monitoring</Text><Text style={styles.monitorCopy}>{armed ? "Armed — movement and tamper alerts active" : "Disarmed — GPS remains online"}</Text></View>{busy === "monitoring" ? <ActivityIndicator color={colors.blue} /> : <Switch disabled={!isOnline || (!securityReady && !armed)} value={armed} onValueChange={changeMonitoring} trackColor={{ false: "#CBD5E1", true: "#86B9F1" }} thumbColor={armed ? colors.blue : "#F8FAFC"} />}</View>
       <View style={styles.monitorDivider} /><View style={styles.monitorRow}><View style={[styles.monitorIcon, { backgroundColor: immobilized ? "#FEECEC" : "#EAF9F2" }]}><Ionicons name={immobilized ? "lock-closed" : "lock-open-outline"} size={22} color={immobilized ? "#DC3B2A" : colors.green} /></View><View style={{ flex: 1 }}><Text style={styles.monitorTitle}>Engine immobilizer</Text><Text style={styles.monitorCopy}>{immobilized ? "Immobilized — engine start blocked" : "Released — vehicle can start normally"}</Text></View>{busy === "immobilizer" ? <ActivityIndicator color={colors.blue} /> : <Switch disabled={!isOnline || (!securityReady && !immobilized)} value={immobilized} onValueChange={changeImmobilizer} trackColor={{ false: "#CBD5E1", true: "#F5A3A3" }} thumbColor={immobilized ? "#DC3B2A" : "#F8FAFC"} />}</View></View>
     <View style={[styles.tamperCard, tampered && styles.tamperCardDanger]}><Ionicons name={tampered ? "warning" : "hardware-chip-outline"} size={25} color={tampered ? "#DC3B2A" : colors.green} /><View style={{ flex: 1 }}><Text style={styles.monitorTitle}>{tampered ? "Tracker tamper detected" : "Tracker hardware secure"}</Text><Text style={styles.monitorCopy}>{tampered ? `Last trusted point: ${state.lastTrustedAddress ?? "Open Live Tracking for coordinates"}` : "Power, enclosure, antenna and heartbeat checks are normal."}</Text></View></View>
@@ -730,7 +735,7 @@ function TrackingScreen({ selectedBike, onSelectBike, accessToken, vehicles = []
   const [vehiclePickerOpen, setVehiclePickerOpen] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [now, setNow] = useState(Date.now());
-  const { motorcycle, route, setRoute, loading, routeLoading, error, refresh, loadRoute } = useTracking({ motorcycleId: selectedBike.id, accessToken });
+  const { motorcycle, route, setRoute, loading, routeLoading, routeError, error, refresh, loadRoute } = useTracking({ motorcycleId: selectedBike.id, accessToken });
   const bike = useMemo(() => motorcycle ? { ...selectedBike, ...motorcycle, location: motorcycle.location ?? selectedBike.location } : selectedBike, [motorcycle, selectedBike]);
   const allFleetVehicles = useMemo(() => allVehicles.map(vehicle => vehicle.id === selectedBike.id ? { ...vehicle, ...bike } : vehicle), [allVehicles, bike, selectedBike.id]);
   const matchingVehicles = useMemo(() => {
@@ -739,6 +744,14 @@ function TrackingScreen({ selectedBike, onSelectBike, accessToken, vehicles = []
   }, [vehicleSearch, allFleetVehicles]);
   const status = trackerState({ providerStatus: bike?.trackerStatus ?? bike?.location?.trackerStatus, recordedAt: bike?.location?.recordedAt, staleMs: STALE_MS, offlineMs: OFFLINE_MS });
   const routeCoordinates = useMemo(() => route?.points?.map(({ latitude, longitude }) => ({ latitude, longitude })) ?? [], [route]);
+  const speedRecordedAt = new Date(bike?.location?.recordedAt ?? 0).getTime();
+  const speedAgeMs = Date.now() - speedRecordedAt;
+  const currentSpeedKph = Number.isFinite(Number(bike?.location?.speedKph))
+    && bike?.location?.speedKph != null
+    && Number.isFinite(speedRecordedAt)
+    && speedAgeMs >= 0 && speedAgeMs <= STALE_MS
+    ? Math.round(Number(bike.location.speedKph))
+    : null;
   useEffect(() => { const timer = setInterval(() => setNow(Date.now()), 10000); return () => clearInterval(timer); }, []);
   useEffect(() => { setVehicleSearch(`${selectedBike.registration} • ${selectedBike.model}`); setVehiclePickerOpen(false); }, [selectedBike.id, selectedBike.registration, selectedBike.model]);
   const selectBike = useCallback(id => {
@@ -755,7 +768,7 @@ function TrackingScreen({ selectedBike, onSelectBike, accessToken, vehicles = []
     await loadRoute(range);
   };
   if (loading && !bike?.location) return <ActivitySkeleton screen="tracking" />;
-  const locatedCount = allFleetVehicles.filter(vehicle => Number.isFinite(Number(vehicle.location?.latitude)) && Number.isFinite(Number(vehicle.location?.longitude))).length;
+  const locatedCount = allFleetVehicles.filter(vehicle => vehicle.location?.latitude != null && vehicle.location?.longitude != null && Number.isFinite(Number(vehicle.location.latitude)) && Number.isFinite(Number(vehicle.location.longitude))).length;
   return <View style={[styles.mapContainer, { backgroundColor: colors.surface }]}>
     <LiveFleetMap selected={bike} vehicles={allFleetVehicles} route={route} onSelectVehicle={selectBike} />
     <View style={styles.vehiclePicker}>
@@ -769,14 +782,15 @@ function TrackingScreen({ selectedBike, onSelectBike, accessToken, vehicles = []
     {!!error && <View style={styles.mapError}><Ionicons name="warning" color={colors.orange} /><Text numberOfLines={2} style={styles.mapErrorText}>{error}</Text></View>}
     <View style={[styles.mapSheet, { bottom: 12, height: undefined, paddingBottom: 14 }]}>
       <View style={styles.bikeTop}><View style={{ flex: 1 }}><Text style={styles.sheetBike}>{selectedBike.model}</Text><Text style={styles.cardSub}>{selectedBike.registration} · {locatedCount} of {allFleetVehicles.length} bikes reporting</Text></View><StatusPill status={status} /></View>
-      {bike.location ? <View style={styles.mapMetrics}><View style={{ flex: 1 }}><Text style={styles.microLabel}>SPEED</Text><Text style={styles.speed}>{Number(bike.location.speedKph ?? 0)} <Text style={styles.speedUnit}>km/h</Text></Text></View><View style={styles.metricDivider} /><View style={{ flex: 1 }}><Text style={styles.microLabel}>LAST UPDATE</Text><Text style={styles.lastUpdate}>{relativeTime(bike.location.recordedAt, now)}</Text></View></View> : <Text style={styles.stateMessage}>{error ?? "Waiting for this bike's first valid GPS location. Other bikes with locations remain visible."}</Text>}
-      <View style={styles.rangeRow}>{ranges.map(item => <Pressable key={item} onPress={() => setRange(item)} style={[styles.rangeButton, range === item && styles.rangeActive]}><Text style={[styles.rangeText, range === item && styles.rangeTextActive]}>{item}</Text></Pressable>)}</View>
+      {bike.location ? <View style={styles.mapMetrics}><View style={{ flex: 1 }}><Text style={styles.microLabel}>SPEED</Text><Text style={styles.speed}>{currentSpeedKph ?? "—"} <Text style={styles.speedUnit}>km/h</Text></Text></View><View style={styles.metricDivider} /><View style={{ flex: 1 }}><Text style={styles.microLabel}>LAST UPDATE</Text><Text style={styles.lastUpdate}>{relativeTime(bike.location.recordedAt, now)}</Text></View></View> : <Text style={styles.stateMessage}>{error ?? "Waiting for this bike's first valid GPS location. Other bikes with locations remain visible."}</Text>}
+      <View style={styles.rangeRow}>{ranges.map(item => <Pressable key={item} onPress={() => { setRange(item); if (route) loadRoute(item); }} style={[styles.rangeButton, range === item && styles.rangeActive]}><Text style={[styles.rangeText, range === item && styles.rangeTextActive]}>{item}</Text></Pressable>)}</View>
       <View style={{ flexDirection: "row", gap: 8 }}>
         <Pressable disabled={routeLoading} onPress={toggleRoute} style={[styles.outlineButton, { flex: 1, marginTop: 10 }]}>{routeLoading ? <ActivityIndicator color={colors.blue} /> : <><Ionicons name={route ? "git-branch" : "git-branch-outline"} color={colors.blue} /><Text style={styles.outlineButtonText}>{route ? "Hide selected bike route" : "View selected bike route"}</Text></>}</Pressable>
         <Pressable disabled={refreshing} onPress={refreshLocation} style={[styles.outlineButton, { marginTop: 10, paddingHorizontal: 13 }]}>{refreshing ? <ActivityIndicator color={colors.blue} /> : <Ionicons name="refresh" size={18} color={colors.blue} />}</Pressable>
       </View>
-      {route && <View style={styles.tripRow}><Text style={styles.tripText}>{route.distanceKm ?? 0} km</Text><Text style={styles.tripText}>{Math.floor((route.durationMinutes ?? 0) / 60)}h {(route.durationMinutes ?? 0) % 60}m</Text><Text style={styles.tripText}>{route.stops ?? 0} stops</Text></View>}
-      {routeCoordinates.length === 0 && route && <Text style={styles.stateMessage}>No saved route points for this bike and time range.</Text>}
+      {routeError && <Text style={styles.stateMessage}>{routeError}</Text>}
+      {route && routeCoordinates.length >= 2 && <View style={styles.tripRow}><Text style={styles.tripText}>{Number(route.distanceKm ?? 0).toFixed(2)} km travelled</Text><Text style={styles.tripText}>{Math.floor((route.durationMinutes ?? 0) / 60)}h {(route.durationMinutes ?? 0) % 60}m</Text><Text style={styles.tripText}>{route.stops ?? 0} stops</Text></View>}
+      {route && routeCoordinates.length < 2 && <Text style={styles.stateMessage}>{route.providerRouteError ? "Tramigo route history could not be reached, and there are not enough saved GPS points for this time range." : routeCoordinates.length === 1 ? "One GPS point was found. At least two points are needed to draw a route or calculate distance." : route.message || "No saved GPS points for this bike and time range."}</Text>}
     </View>
   </View>;
 }
@@ -889,7 +903,7 @@ function CustomerApp({ session, onLogout }) {
           monitoringArmed: Boolean(vehicle.monitoring_armed),
           immobilized: Boolean(vehicle.immobilized),
           tamperStatus: vehicle.tamper_status || "unknown",
-          location: Number.isFinite(Number(vehicle.latitude)) && Number.isFinite(Number(vehicle.longitude)) ? { latitude: Number(vehicle.latitude), longitude: Number(vehicle.longitude), speedKph: 0, recordedAt: vehicle.last_seen_at } : null,
+          location: vehicle.latitude != null && vehicle.longitude != null && Number.isFinite(Number(vehicle.latitude)) && Number.isFinite(Number(vehicle.longitude)) ? { latitude: Number(vehicle.latitude), longitude: Number(vehicle.longitude), speedKph: null, recordedAt: vehicle.last_seen_at } : null,
         }));
         const firstVehicle = bikes[0] || null;
         setSelectedBike((current) => bikes.find((vehicle) => vehicle.id === current?.id) || firstVehicle);

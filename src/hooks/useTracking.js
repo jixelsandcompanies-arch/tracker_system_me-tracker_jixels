@@ -2,8 +2,8 @@ import { AppState } from "react-native";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { trackingApi } from "../services/tracking";
 
-// GPS trackers can publish a new fix frequently. Keep the REST fallback close
-// to real time when socket delivery is unavailable.
+// Keep REST refresh active even while the socket is connected: some provider
+// integrations keep a socket open without delivering every fresh GPS report.
 const POLL_INTERVAL_MS = 5_000;
 
 export function useTracking({ motorcycleId, accessToken }) {
@@ -64,12 +64,12 @@ export function useTracking({ motorcycleId, accessToken }) {
     if (!accessToken) return () => { mounted.current = false; };
 
     let socket;
-    let pollTimer;
     const appStateSubscription = AppState.addEventListener("change", state => {
       appIsActive.current = state === "active";
       if (appIsActive.current) refresh();
     });
     const poll = () => { if (appIsActive.current) refresh(); };
+    const pollTimer = setInterval(poll, POLL_INTERVAL_MS);
     try {
       socket = trackingApi.connect(motorcycleId, accessToken, (location) => {
         if (mounted.current && activeMotorcycleId.current === motorcycleId && location) {
@@ -77,15 +77,8 @@ export function useTracking({ motorcycleId, accessToken }) {
           setError(null);
         }
       });
-      socket.on("connect_error", () => {
-        if (!pollTimer) pollTimer = setInterval(poll, POLL_INTERVAL_MS);
-      });
-      socket.on("connect", () => {
-        if (pollTimer) clearInterval(pollTimer);
-        pollTimer = undefined;
-      });
     } catch {
-      pollTimer = setInterval(poll, POLL_INTERVAL_MS);
+      // REST polling continues if the socket cannot be created.
     }
 
     return () => {

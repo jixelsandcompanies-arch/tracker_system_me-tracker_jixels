@@ -4,9 +4,10 @@ import { normalizeKenyanAgentPhone } from "../src/utils/kenyanPhone.js";
 
 assert.equal(normalizeKenyanAgentPhone("0712 345 678"), "254712345678");
 assert.equal(normalizeKenyanAgentPhone("0112-345-678"), "254112345678");
-assert.equal(normalizeKenyanAgentPhone("+254 712 345 678"), "254712345678");
-assert.equal(normalizeKenyanAgentPhone("254112345678"), "254112345678");
-assert.equal(normalizeKenyanAgentPhone("712345678"), "254712345678");
+assert.equal(normalizeKenyanAgentPhone("0712345678"), "254712345678");
+assert.equal(normalizeKenyanAgentPhone("0112345678"), "254112345678");
+assert.equal(normalizeKenyanAgentPhone("254 712 345 678"), null);
+assert.equal(normalizeKenyanAgentPhone("712345678"), null);
 assert.equal(normalizeKenyanAgentPhone("0712"), null);
 assert.equal(normalizeKenyanAgentPhone("+1 202 555 0100"), null);
 

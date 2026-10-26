@@ -1777,12 +1777,15 @@ Deno.serve(async (request) => {
           return true;
         });
         const confirmed = uniqueSalePayments.filter((payment) => ["paid", "completed", "confirmed"].includes(String(payment.status).toLowerCase()));
+        const confirmedDepositAmount = confirmed
+          .filter((payment) => String(payment.payment_type ?? "daily").toLowerCase().replace(/[ _-]/g, "") === "deposit")
+          .reduce((total, payment) => total + Number(payment.amount ?? 0), 0);
         const monthlyPayments = confirmed.filter((payment) => {
           const paymentType = String(payment.payment_type ?? "daily").toLowerCase().replace(/[ _-]/g, "");
           const paidAt = new Date(payment.paid_at ?? payment.created_at ?? "");
           return paymentType !== "deposit" && Number.isFinite(paidAt.getTime()) && paidAt >= commissionMonthStart && paidAt < commissionNextMonthStart;
         });
-        const processing = uniqueSalePayments.find((payment) => String(payment.status).toLowerCase() === "processing");
+        const processing = uniqueSalePayments.find((payment) => String(payment.status).toLowerCase() === "processing" && String(payment.payment_type ?? "daily").toLowerCase().replace(/[ _-]/g, "") === "deposit");
         const amountPaid = confirmed.reduce((total, payment) => total + Number(payment.amount ?? 0), 0);
         const requestedDepositAmount = Number(item.requested_deposit_amount ?? item.deposit_amount ?? 0);
         return {
@@ -1801,8 +1804,9 @@ Deno.serve(async (request) => {
           vehicleModel: item.product_model ?? item.bikes?.model ?? "Assigned bike",
           tracker: item.tracker_identifier ?? item.bikes?.trackers?.[0]?.identifier ?? "Pending",
           kyc: item.status === "approved" ? "Approved" : "Submitted",
-          install: item.tracker_installed_at ? "Complete" : "Pending",
-          payment: amountPaid > 0 ? "Deposit Paid" : processing ? "Processing" : "Pending",
+          install: item.tracker_installed_at ? (confirmedDepositAmount > 0 ? "Complete" : "Awaiting deposit") : "Pending",
+          installationConfirmed: Boolean(item.tracker_installed_at),
+          payment: confirmedDepositAmount > 0 ? "Deposit Paid" : processing ? "Processing" : "Pending",
           requestedDepositAmount,
           payableAmount: Number(item.bikes?.payable_amount ?? 0),
           amount: amountPaid,

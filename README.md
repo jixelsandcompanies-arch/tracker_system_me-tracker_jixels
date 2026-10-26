@@ -62,6 +62,15 @@ the latest report from `/api/reports/last_location/{deviceId}` and stores it in
 in the supplied API reference. Do not expose these credentials in Vercel or
 the mobile app.
 
+The customer app's monitoring and immobilizer controls also require the
+server-only `TRAMIGO_CLOUD_CONTROL_STATUS_PATH` and
+`TRAMIGO_CLOUD_IMMOBILIZER_PATH` secrets. Set each to the POST path documented
+for the connected Tramigo account, using `{deviceId}` where the tracker ID
+belongs. These paths are account-specific; do not guess them. Immobilizing a
+bike additionally requires a tracker report from the last 60 seconds with a
+reported speed at or below 0.5 km/h. The app rejects the command if it cannot
+confirm the bike is stationary.
+
 ## Tracker health heartbeats
 
 Apply `supabase/migrations/202610250003_tracker_heartbeat_ingestion.sql` to

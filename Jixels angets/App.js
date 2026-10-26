@@ -39,6 +39,22 @@ Notifications.setNotificationHandler({
   })
 });
 
+async function enableAgentNotifications() {
+  if (Platform.OS === "android") {
+    await Notifications.setNotificationChannelAsync("agent", {
+      name: "Jixels Agent Trackings",
+      description: "Customer payment and field operation updates",
+      importance: Notifications.AndroidImportance.HIGH,
+      vibrationPattern: [0, 250, 150, 250],
+      sound: "default"
+    });
+  }
+  const current = await Notifications.getPermissionsAsync();
+  if (current.status !== "granted" && current.canAskAgain) {
+    await Notifications.requestPermissionsAsync();
+  }
+}
+
 function AppUpdateNotice() {
   const { isUpdatePending } = Updates.useUpdates();
   useEffect(() => {
@@ -176,7 +192,7 @@ function pullRefresh(onRefresh, refreshing = false) {
 function statusColors(value = "") {
   const lower = value.toLowerCase();
   if (["paid", "deposit paid", "approved", "complete", "online", "ready", "available", "earned"].includes(lower)) return [colors.green, colors.greenPale];
-  if (["pending", "assigned", "submitted", "processing"].includes(lower)) return [colors.orange, colors.orangePale];
+  if (["pending", "assigned", "submitted", "processing", "awaiting deposit"].includes(lower)) return [colors.orange, colors.orangePale];
   return [colors.red, colors.redPale];
 }
 
@@ -373,7 +389,7 @@ function Login({ onLogin }) {
       if (!name.trim() || !cleanEmail || !password.trim()) return Alert.alert("Missing details", "Complete your name, email, and password.");
       if (!cleanEmail.includes("@")) return Alert.alert("Check email", "Enter a valid agent email address.");
       const normalizedPhone = normalizeKenyanAgentPhone(phone);
-      if (!normalizedPhone) return Alert.alert("Check phone number", "Enter a Kenyan mobile number such as 0712 345 678, 0112 345 678, or +254 712 345 678.");
+      if (!normalizedPhone) return Alert.alert("Check phone number", "Enter a Kenyan mobile number starting with 07 or 01, such as 0712 345 678 or 0112 345 678.");
       if (password.length < 8) return Alert.alert("Password too short", "Use at least 8 characters.");
       if (password !== confirm) return Alert.alert("Check password", "Passwords do not match.");
       setBusy(true);
@@ -430,7 +446,7 @@ function Login({ onLogin }) {
         </> : <>
           {mode === "register" && <Field label="Full name" value={name} onChangeText={setName} />}
           <Field label="Email address" value={email} onChangeText={setEmail} keyboardType="email-address" />
-          {mode === "register" && <Field label="Kenyan phone number" value={phone} onChangeText={setPhone} placeholder="0712 345 678 or +254 712 345 678" keyboardType="phone-pad" />}
+          {mode === "register" && <Field label="Kenyan phone number" value={phone} onChangeText={setPhone} placeholder="0712 345 678 or 0112 345 678" keyboardType="phone-pad" />}
           <Field label="Password" value={password} onChangeText={setPassword} secureTextEntry />
           {mode === "register" && <Field label="Confirm password" value={confirm} onChangeText={setConfirm} secureTextEntry />}
           {mode === "login" && <Pressable onPress={() => setResettingPassword(true)}><Text style={styles.forgotText}>Forgot password?</Text></Pressable>}
@@ -592,7 +608,7 @@ function Customers({ customers, onDeposit, onRefresh, refreshing, darkMode = fal
       </View>
       <View style={styles.listStatus}>
         <Pill value={customer.payment} />
-        {!customerPaymentComplete(customer) && <Pressable onPress={() => onDeposit(customer.applicationId || customer.id)} style={styles.depositButton}><Text style={styles.depositButtonText}>{customer.payment === "Processing" ? "Payment pending" : "Prompt payment"}</Text></Pressable>}
+        {!customerPaymentComplete(customer) && <Pressable disabled={customer.payment === "Processing"} onPress={() => onDeposit(customer.applicationId || customer.id)} style={[styles.depositButton, customer.payment === "Processing" && { opacity: 0.55 }]}><Text style={styles.depositButtonText}>{customer.payment === "Processing" ? "Payment pending" : "Prompt payment"}</Text></Pressable>}
         <Text style={styles.smallMeta}>{customer.customerCode || "Customer code pending"}</Text>
       </View>
     </View>)}
@@ -723,7 +739,7 @@ function Trackers({ customers, onInstallComplete, onRefresh, refreshing, darkMod
       <Text style={styles.installSub}>{customer.name} • Plate {customer.plateNumber || customer.bike} • Tracker {customer.tracker} • Sale {customerSaleStatus(customer)}</Text>
       <View style={styles.installActions}>
         <Pill value={customer.install} />
-        {customer.install !== "Complete" && <Pressable onPress={() => onInstallComplete(customer.applicationId || customer.id)} style={styles.miniButton}><Text style={styles.miniButtonText}>Mark installed</Text></Pressable>}
+        {!customer.installationConfirmed && customer.install !== "Complete" && <Pressable onPress={() => onInstallComplete(customer.applicationId || customer.id)} style={styles.miniButton}><Text style={styles.miniButtonText}>Mark installed</Text></Pressable>}
       </View>
     </View>)}
   </ScrollView>;
@@ -962,19 +978,31 @@ function Settings({ agent, onSave, onRefresh, refreshing, darkMode = false }) {
 function DepositPrompt({ customer, visible, onCancel, onSubmit }) {
   const [amount, setAmount] = useState("");
   const [phone, setPhone] = useState("");
+  const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
     setAmount(customer?.requestedDepositAmount ? String(customer.requestedDepositAmount) : "");
-    setPhone(customer?.payerPhone || customer?.phone || "");
+    const initialPhone = String(customer?.payerPhone || customer?.phone || "");
+    const digits = initialPhone.replace(/\D/g, "");
+    setPhone(/^254[17]\d{8}$/.test(digits) ? `0${digits.slice(3)}` : initialPhone);
+    setSubmitting(false);
   }, [visible, customer?.id]);
 
-  function submit() {
+  async function submit() {
+    if (submitting) return;
     const depositAmount = Number(amount);
     if (!customer) return;
     if (!Number.isFinite(depositAmount) || depositAmount <= 0) return Alert.alert("Deposit amount", "Enter a valid customer deposit amount.");
     if (customer.payableAmount > 0 && depositAmount > customer.payableAmount) return Alert.alert("Deposit amount", "The deposit cannot be higher than the total payable amount.");
-    if (!phone.trim()) return Alert.alert("Phone number", "Enter the phone number to receive the STK push.");
-    onSubmit(customer.id, depositAmount, phone.trim());
+    const normalizedPhone = normalizeKenyanAgentPhone(phone);
+    if (!normalizedPhone) return Alert.alert("Phone number", "Enter a Kenyan mobile number starting with 07 or 01.");
+    setSubmitting(true);
+    try {
+      const accepted = await onSubmit(customer.applicationId || customer.id, depositAmount, normalizedPhone);
+      if (!accepted) setSubmitting(false);
+    } catch (_) {
+      setSubmitting(false);
+    }
   }
 
   return <Modal visible={visible} transparent animationType="fade" onRequestClose={onCancel}>
@@ -985,8 +1013,8 @@ function DepositPrompt({ customer, visible, onCancel, onSubmit }) {
         <Text style={styles.depositModalText}>{customer ? `Send STK push to ${customer.name}. Deposit is deducted from ${money(customer.payableAmount)} total payable.` : "Send STK push to customer."}</Text>
         <Field label="Deposit amount" value={amount} onChangeText={setAmount} keyboardType="numeric" />
         <Field label="Payment phone number" value={phone} onChangeText={setPhone} keyboardType="phone-pad" />
-        <Pressable onPress={submit} style={styles.primaryButton}><Ionicons name="paper-plane-outline" size={18} color={colors.white} /><Text style={styles.primaryText}>Send STK push</Text></Pressable>
-        <Pressable onPress={onCancel} style={styles.modalCancel}><Text style={styles.modalCancelText}>Cancel</Text></Pressable>
+        <Pressable disabled={submitting} onPress={submit} style={[styles.primaryButton, submitting && { opacity: 0.7 }]}>{submitting ? <><ActivityIndicator color={colors.white} size="small" /><Text style={styles.primaryText}>Sending prompt…</Text></> : <><Ionicons name="paper-plane-outline" size={18} color={colors.white} /><Text style={styles.primaryText}>Send STK push</Text></>}</Pressable>
+        <Pressable disabled={submitting} onPress={onCancel} style={styles.modalCancel}><Text style={styles.modalCancelText}>{submitting ? "Please wait" : "Cancel"}</Text></Pressable>
       </View>
     </View>
   </Modal>;
@@ -1024,8 +1052,8 @@ function AgentApp({ agent, onLogout }) {
   }, [screen]);
 
   const agentAlerts = useMemo(() => customers.flatMap(customer => [
-    ...(!customerPaymentComplete(customer) ? [{ id: `${customer.applicationId || customer.id}-payment`, type: "payment", icon: "wallet-outline", title: "Payment pending", message: `${customer.name} has no confirmed deposit.`, age: "now", customerName: customer.name }] : []),
-    ...(customer.install !== "Complete" ? [{ id: `${customer.applicationId || customer.id}-install`, type: "install", icon: "radio-outline", title: "Install pending", message: `${customer.plateNumber || customer.bike} tracker installation is not complete.`, age: "today", customerName: customer.name }] : []),
+    ...(customerPaymentComplete(customer) ? [{ id: `${customer.applicationId || customer.id}-payment-confirmed`, type: "payment", icon: "wallet-outline", title: "Deposit received", message: `${customer.name} has paid ${money(customer.amount || customer.requestedDepositAmount || 0)}.`, age: "recent", customerName: customer.name }] : [{ id: `${customer.applicationId || customer.id}-payment`, type: "payment", icon: "wallet-outline", title: "Payment pending", message: `${customer.name} has no confirmed deposit.`, age: "now", customerName: customer.name }]),
+    ...(customer.install !== "Complete" ? [{ id: `${customer.applicationId || customer.id}-install`, type: "install", icon: "radio-outline", title: customer.installationConfirmed ? "Awaiting confirmed deposit" : "Install pending", message: customer.installationConfirmed ? `${customer.plateNumber || customer.bike} installation is recorded; the tracker will show complete after the deposit is confirmed.` : `${customer.plateNumber || customer.bike} tracker installation is not complete.`, age: "today", customerName: customer.name }] : []),
     ...(customer.kyc !== "Approved" ? [{ id: `${customer.applicationId || customer.id}-kyc`, type: "kyc", icon: "id-card-outline", title: "KYC review", message: `${customer.name} is waiting for admin KYC approval.`, age: "today", customerName: customer.name }] : [])
   ]).filter(alert => !alertStates[alert.id]?.deleted).map(alert => ({ ...alert, unread: !alertStates[alert.id]?.read })), [customers, alertStates]);
   const unread = agentAlerts.filter(alert => alert.unread).length;
@@ -1075,7 +1103,7 @@ function AgentApp({ agent, onLogout }) {
             const id = String(customer.applicationId || customer.id);
             if (!customerPaymentComplete(customer) || depositNoticesShown.current.has(id)) continue;
             depositNoticesShown.current.add(id);
-            Notifications.scheduleNotificationAsync({ content: { title: "Customer deposit confirmed", body: `${customer.name} paid the deposit for ${customer.plateNumber || customer.bike}.`, sound: "default", data: { type: "payment", customerId: id } }, trigger: null }).catch(() => {});
+            Notifications.scheduleNotificationAsync({ content: { title: "Customer deposit confirmed", body: `${customer.name} paid the deposit for ${customer.plateNumber || customer.bike}.`, sound: "default", data: { type: "payment", customerId: id }, ...(Platform.OS === "android" ? { channelId: "agent" } : {}) }, trigger: null }).catch(() => {});
           }
         } else {
           for (const customer of nextCustomers) if (customerPaymentComplete(customer)) depositNoticesShown.current.add(String(customer.applicationId || customer.id));
@@ -1101,12 +1129,7 @@ function AgentApp({ agent, onLogout }) {
   useEffect(() => {
     refresh();
     const assignmentSync = setInterval(() => refresh({ showSpinner: false }), 5_000);
-    if (Platform.OS === "android") {
-      Notifications.setNotificationChannelAsync("agent", {
-        name: "Jixels Agent Trackings",
-        importance: Notifications.AndroidImportance.HIGH
-      }).catch(() => {});
-    }
+    enableAgentNotifications().catch(error => console.warn("Agent notifications are unavailable", error));
     return () => clearInterval(assignmentSync);
   }, [refresh]);
 
@@ -1131,13 +1154,13 @@ function AgentApp({ agent, onLogout }) {
 
   function requestDeposit(id) {
     const customer = customers.find(item => (item.applicationId || item.id) === id);
-    if (!customer || customerPaymentComplete(customer)) return;
+    if (!customer || customerPaymentComplete(customer) || customer.payment === "Processing") return;
     setDepositCustomerId(customer.applicationId || customer.id);
   }
 
   async function sendDepositPrompt(id, depositAmount, payerPhone) {
     const customer = customers.find(item => (item.applicationId || item.id) === id);
-    if (!customer) return;
+    if (!customer) return false;
     try {
       const result = await authApi.promptDeposit(agent.accessToken, id, depositAmount, payerPhone);
       const payment = result.payment || {};
@@ -1150,12 +1173,14 @@ function AgentApp({ agent, onLogout }) {
         receipt: payment.reference || item.receipt
       } : item));
     } catch (error) {
-      return Alert.alert("Payment prompt unavailable", error instanceof Error ? error.message : "Try again before sending the payment prompt.");
+      Alert.alert("Payment prompt unavailable", error instanceof Error ? error.message : "Try again before sending the payment prompt.");
+      return false;
     }
     Notifications.scheduleNotificationAsync({
-      content: { title: "STK push sent", body: `${customer.name} has been prompted on ${payerPhone} to pay ${money(depositAmount)}.`, sound: "default" },
+      content: { title: "STK push sent", body: `${customer.name} has been prompted on ${payerPhone} to pay ${money(depositAmount)}.`, sound: "default", ...(Platform.OS === "android" ? { channelId: "agent" } : {}) },
       trigger: null
     }).catch(() => {});
+    return true;
   }
 
   async function updateAgentAlertStates(ids, action) {
@@ -1175,13 +1200,17 @@ function AgentApp({ agent, onLogout }) {
   async function markInstallComplete(id) {
     try {
       await authApi.updateInstallation(agent.accessToken, id, true);
-      setCustomers(current => current.map(customer => (customer.applicationId || customer.id) === id ? { ...customer, install: "Complete" } : customer));
+      setCustomers(current => current.map(customer => (customer.applicationId || customer.id) === id ? {
+        ...customer,
+        installationConfirmed: true,
+        install: customer.payment === "Deposit Paid" ? "Complete" : "Awaiting deposit"
+      } : customer));
     } catch (error) {
       Alert.alert("Installation could not be saved", error instanceof Error ? error.message : "Try again when your connection is available.");
       return;
     }
     Notifications.scheduleNotificationAsync({
-      content: { title: "Tracker installed", body: "Tracker installation record completed.", sound: "default" },
+      content: { title: "Tracker installation recorded", body: "The vehicle will show complete after its deposit is confirmed.", sound: "default", ...(Platform.OS === "android" ? { channelId: "agent" } : {}) },
       trigger: null
     }).catch(() => {});
   }

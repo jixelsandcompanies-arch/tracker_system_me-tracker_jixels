@@ -2260,10 +2260,15 @@ Deno.serve(async (request) => {
       });
       if (saveLocationError) return fail("The fresh stationary report could not be saved, so no immobilizer command was sent.", 503, "TRACKER_POSITION_SAVE_FAILED");
     }
-    const configuredPath = action === "monitoring" ? Deno.env.get("TRAMIGO_CLOUD_CONTROL_STATUS_PATH") : Deno.env.get("TRAMIGO_CLOUD_IMMOBILIZER_PATH");
-    if (!configuredPath) return fail("Tramigo security control is not configured.", 503, "TRAMIGO_NOT_CONFIGURED");
+    // Monitoring is a server-side alert state: the tracker keeps sending GPS
+    // either way, so arming it must not depend on an undocumented Tramigo
+    // command endpoint. Only engine immobilization sends a device command.
+    const configuredPath = action === "immobilizer" ? Deno.env.get("TRAMIGO_CLOUD_IMMOBILIZER_PATH") : null;
+    if (action === "immobilizer" && !configuredPath) return fail("Tramigo immobilizer control is not configured.", 503, "TRAMIGO_NOT_CONFIGURED");
     try {
-      const provider = await tramigoRequest(tramigoPath(configuredPath, deviceId), { method: "POST", body: { deviceId, imei: deviceId, enabled, armed: action === "monitoring" ? enabled : undefined, immobilized: action === "immobilizer" ? enabled : undefined } });
+      const provider = action === "immobilizer"
+        ? await tramigoRequest(tramigoPath(configuredPath!, deviceId), { method: "POST", body: { deviceId, imei: deviceId, enabled, immobilized: enabled } })
+        : null;
       const update = action === "monitoring" ? { monitoring_armed: enabled, updated_at: new Date().toISOString() } : { immobilized: enabled, updated_at: new Date().toISOString() };
       const { error } = bike
         ? await admin.from("bikes").update(update).eq("id", vehicleId).eq("customer_id", bike.customer_id)

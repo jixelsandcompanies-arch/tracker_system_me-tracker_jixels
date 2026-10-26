@@ -62,13 +62,14 @@ the latest report from `/api/reports/last_location/{deviceId}` and stores it in
 in the supplied API reference. Do not expose these credentials in Vercel or
 the mobile app.
 
-The customer app's security controls require the server-only
-`TRAMIGO_CLOUD_CONTROL_STATUS_PATH` and `TRAMIGO_CLOUD_IMMOBILIZER_PATH`
-secrets. Set each to the POST path and command contract documented for the
-connected Tramigo account, using `{deviceId}` where the tracker ID belongs.
-The read-only status path is `TRAMIGO_CLOUD_OUTBOUND_STATUS_PATH`. These API
-paths and command payloads are account-specific; do not guess them. The mobile
-app must never contain Tramigo credentials.
+Customer monitoring is armed as a server-side alert state; GPS remains on and
+does not require a device command. Engine immobilization needs the server-only
+`TRAMIGO_CLOUD_IMMOBILIZER_PATH` set to the POST path and command contract
+documented for the connected Tramigo account, using `{deviceId}` where the
+tracker ID belongs. The optional read-only status path is
+`TRAMIGO_CLOUD_OUTBOUND_STATUS_PATH`. These API paths and command payloads are
+account-specific; do not guess them. The mobile app must never contain Tramigo
+credentials.
 
 Before sending an immobilizer command, the API fetches a direct Tramigo report
 and requires a known speed at or below 0.5 km/h, a report no older than 60

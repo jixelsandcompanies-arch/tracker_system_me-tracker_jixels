@@ -1,6 +1,9 @@
 -- Keep armed Tramigo devices monitored when no customer app is open.
 -- Enable pg_cron, pg_net, and Vault in the Supabase project, then create the
 -- two Vault secrets documented in README.md before calling the schedule RPC.
+create extension if not exists pg_cron;
+create extension if not exists pg_net;
+
 create or replace function public.schedule_tramigo_monitor()
 returns bigint
 language plpgsql

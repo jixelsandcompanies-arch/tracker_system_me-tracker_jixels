@@ -100,9 +100,8 @@ function relativeTime(value, now) {
   const timestamp = new Date(value).getTime();
   if (!Number.isFinite(timestamp)) return "Unknown";
   const seconds = Math.max(0, Math.floor((now - timestamp) / 1000));
-  if (seconds < 60) return `${seconds} sec ago`;
-  const minutes = Math.floor(seconds / 60);
-  return minutes === 1 ? "1 min ago" : `${minutes} min ago`;
+  if (seconds <= 5) return `${seconds} sec ago`;
+  return "Waiting for next GPS update";
 }
 
 const Logo = memo(function Logo({ compact = false }) {

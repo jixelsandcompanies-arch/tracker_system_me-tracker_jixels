@@ -2474,7 +2474,7 @@ Deno.serve(async (request) => {
       const trackerIdentifier = String(tracker?.tramigo_device_id ?? tracker?.identifier ?? "").trim();
       if (tracker?.id && trackerIdentifier && Deno.env.get("TRAMIGO_USERNAME")) {
         const { data: canQueryProvider, error: rateLimitError } = await admin.rpc("claim_location_provider_read", {
-          p_key: `${user.id}:${vehicleId}`, p_max_requests: 1, p_window_seconds: 10,
+          p_key: `${user.id}:${vehicleId}`, p_max_requests: 1, p_window_seconds: 3,
         });
         if (!rateLimitError && canQueryProvider === true) {
           try {
@@ -2516,7 +2516,7 @@ Deno.serve(async (request) => {
     // A short per-owner lease makes repeated polling return the last trusted
     // location instead of turning a stolen session into a Tramigo API flood.
     const { data: canQueryProvider, error: rateLimitError } = await admin.rpc("claim_location_provider_read", {
-      p_key: `${user.id}:${vehicleId}`, p_max_requests: 1, p_window_seconds: 10,
+      p_key: `${user.id}:${vehicleId}`, p_max_requests: 1, p_window_seconds: 3,
     });
     if (rateLimitError) console.error("Location provider rate limit unavailable", rateLimitError);
     if (vehicle.tracker_imei && Deno.env.get("TRAMIGO_USERNAME") && !rateLimitError && canQueryProvider === true) {

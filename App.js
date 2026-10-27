@@ -730,7 +730,7 @@ function TrackingScreen({ selectedBike, onSelectBike, accessToken, vehicles = []
   const [vehiclePickerOpen, setVehiclePickerOpen] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [manualRefreshMessage, setManualRefreshMessage] = useState("");
-  const [refreshSeconds, setRefreshSeconds] = useState(1);
+  const [refreshSeconds, setRefreshSeconds] = useState(3);
   const { motorcycle, route, setRoute, loading, routeLoading, routeError, error, refresh, loadRoute } = useTracking({ motorcycleId: selectedBike.id, accessToken, baselineLocation: selectedBike.location });
   // The overview location is only a cached snapshot. Wait for the selected
   // bike's location endpoint (or socket) before putting a marker on the live
@@ -755,7 +755,7 @@ function TrackingScreen({ selectedBike, onSelectBike, accessToken, vehicles = []
     && speedAgeMs >= 0 && speedAgeMs <= STALE_MS
     ? Math.round(Number(bike.location.speedKph))
     : null;
-  useEffect(() => { const timer = setInterval(() => setRefreshSeconds(value => value >= 5 ? 0 : value + 1), 1000); return () => clearInterval(timer); }, []);
+  useEffect(() => { const timer = setInterval(() => setRefreshSeconds(value => value <= 1 ? 3 : value - 1), 1000); return () => clearInterval(timer); }, []);
   useEffect(() => { if (!manualRefreshMessage) return undefined; const timer = setTimeout(() => setManualRefreshMessage(""), 5000); return () => clearTimeout(timer); }, [manualRefreshMessage]);
   useEffect(() => { setVehicleSearch(`${selectedBike.registration} • ${selectedBike.model}`); setVehiclePickerOpen(false); }, [selectedBike.id, selectedBike.registration, selectedBike.model]);
   const selectBike = useCallback(id => {
@@ -801,7 +801,7 @@ function TrackingScreen({ selectedBike, onSelectBike, accessToken, vehicles = []
     {!!error && <View style={styles.mapError}><Ionicons name="warning" color={colors.orange} /><Text numberOfLines={2} style={styles.mapErrorText}>{error}</Text></View>}
     <View style={[styles.mapSheet, { bottom: 12, height: undefined, paddingBottom: 14 }]}>
       <View style={styles.bikeTop}><View style={{ flex: 1 }}><Text style={styles.sheetBike}>{selectedBike.model}</Text><Text style={styles.cardSub}>{selectedBike.registration} · {locatedCount} of {allFleetVehicles.length} bikes reporting</Text></View><StatusPill status={connectionBadgeStatus} /></View>
-      {bike.location ? <View style={styles.mapMetrics}><View style={{ flex: 1 }}><Text style={styles.microLabel}>{bike.location.speedEstimated ? "SPEED · GPS EST." : "SPEED"}</Text><Text style={styles.speed}>{currentSpeedKph == null ? "—" : `${bike.location.speedEstimated ? "~" : ""}${currentSpeedKph}`} <Text style={styles.speedUnit}>km/h</Text></Text></View><View style={styles.metricDivider} /><View style={{ flex: 1 }}><Text style={styles.microLabel}>AUTO UPDATE</Text><Text style={styles.lastUpdate}>{refreshSeconds} sec</Text>{status === "stale" && <Text style={styles.gpsAccuracyHint}>GPS delayed · showing last saved location</Text>}{status === "offline" && <Text style={styles.gpsAccuracyHint}>No recent GPS fix · showing last saved location</Text>}{Number.isFinite(Number(bike.location.accuracyMeters)) && Number(bike.location.accuracyMeters) > 0 && <Text style={styles.gpsAccuracyHint}>GPS accuracy ±{Math.round(Number(bike.location.accuracyMeters))} m</Text>}</View></View> : <Text style={styles.stateMessage}>{error ?? "No valid GPS position is available for this bike yet."}</Text>}
+      {bike.location ? <View style={styles.mapMetrics}><View style={{ flex: 1 }}><Text style={styles.microLabel}>{bike.location.speedEstimated ? "SPEED · GPS EST." : "SPEED"}</Text><Text style={styles.speed}>{currentSpeedKph == null ? "—" : `${bike.location.speedEstimated ? "~" : ""}${currentSpeedKph}`} <Text style={styles.speedUnit}>km/h</Text></Text></View><View style={styles.metricDivider} /><View style={{ flex: 1 }}><Text style={styles.microLabel}>AUTO UPDATE IN</Text><Text style={styles.lastUpdate}>{refreshSeconds} sec</Text>{status === "stale" && <Text style={styles.gpsAccuracyHint}>GPS delayed · showing last saved location</Text>}{status === "offline" && <Text style={styles.gpsAccuracyHint}>No recent GPS fix · showing last saved location</Text>}{Number.isFinite(Number(bike.location.accuracyMeters)) && Number(bike.location.accuracyMeters) > 0 && <Text style={styles.gpsAccuracyHint}>GPS accuracy ±{Math.round(Number(bike.location.accuracyMeters))} m</Text>}</View></View> : <Text style={styles.stateMessage}>{error ?? "No valid GPS position is available for this bike yet."}</Text>}
       <View style={styles.rangeRow}>{ranges.map(item => <Pressable key={item} onPress={() => { setRange(item); if (route) loadRoute(item); }} style={[styles.rangeButton, range === item && styles.rangeActive]}><Text style={[styles.rangeText, range === item && styles.rangeTextActive]}>{item}</Text></Pressable>)}</View>
       <View style={{ flexDirection: "row", gap: 8 }}>
         <Pressable disabled={routeLoading} onPress={toggleRoute} style={[styles.outlineButton, { flex: 1, marginTop: 10 }]}>{routeLoading ? <ActivityIndicator color={colors.blue} /> : <><Ionicons name={route ? "git-branch" : "git-branch-outline"} color={colors.blue} /><Text style={styles.outlineButtonText}>{route ? "Hide selected bike route" : "View selected bike route"}</Text></>}</Pressable>

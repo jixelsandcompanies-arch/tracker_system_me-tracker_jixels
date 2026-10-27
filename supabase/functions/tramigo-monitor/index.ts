@@ -23,8 +23,9 @@ function locationFrom(report: any) {
   const source = report?.main_reports?.[0] ?? report?.mainReports?.[0] ?? report?.data?.main_reports?.[0] ?? report?.data ?? report;
   const latitude = Number(source?.Latitude ?? source?.latitude);
   const longitude = Number(source?.Longitude ?? source?.longitude);
-  const rawTime = source?.DateTimeActual ?? source?.DateTime_Actual ?? source?.DateTime_Received
-    ?? report?.DateTimeActual ?? report?.DateTime_Actual ?? report?.DateTime_Received;
+  const rawTime = source?.DateTime_Received ?? source?.DateTimeReceived
+    ?? report?.DateTime_Received ?? report?.DateTimeReceived
+    ?? source?.DateTimeActual ?? source?.DateTime_Actual ?? report?.DateTimeActual ?? report?.DateTime_Actual;
   const recordedAt = rawTime == null ? null : new Date(String(rawTime));
   const rawSpeed = source?.Speed ?? source?.speed;
   const speed = rawSpeed == null || rawSpeed === "" ? null : Number(rawSpeed);

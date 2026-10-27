@@ -54,6 +54,7 @@ if(window.L){
     if(firstUpdate){
       if(routeLine)map.fitBounds(routeLine.getBounds(),{padding:[35,35],maxZoom:16});
       else if(routePoint)map.setView(route[0],16);
+      else if(selectedId&&markers[selectedId])map.setView(markers[selectedId].getLatLng(),16);
       else if(pointBounds.length>1)map.fitBounds(pointBounds,{padding:[35,35],maxZoom:16});
       else if(pointBounds.length===1)map.setView(pointBounds[0],16);
       firstUpdate=false;

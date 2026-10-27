@@ -4,7 +4,9 @@ import { trackingApi } from "../services/tracking";
 
 // Keep REST refresh active even while the socket is connected: some provider
 // integrations keep a socket open without delivering every fresh GPS report.
-const POLL_INTERVAL_MS = 5_000;
+// The API permits four provider reads per vehicle per minute. Match that
+// cadence and do not start a second request while Tramigo is still answering.
+const POLL_INTERVAL_MS = 15_000;
 
 export function useTracking({ motorcycleId, accessToken }) {
   const [motorcycle, setMotorcycle] = useState(null);
@@ -17,10 +19,13 @@ export function useTracking({ motorcycleId, accessToken }) {
   const appIsActive = useRef(AppState.currentState === "active");
   const requestSequence = useRef(0);
   const routeSequence = useRef(0);
+  const refreshInFlight = useRef(false);
   const activeMotorcycleId = useRef(motorcycleId);
   activeMotorcycleId.current = motorcycleId;
 
   const refresh = useCallback(async () => {
+    if (refreshInFlight.current) return;
+    refreshInFlight.current = true;
     const requestedId = motorcycleId;
     const sequence = ++requestSequence.current;
     try {
@@ -31,6 +36,7 @@ export function useTracking({ motorcycleId, accessToken }) {
     } catch (cause) {
       if (mounted.current && activeMotorcycleId.current === requestedId && requestSequence.current === sequence) setError(cause instanceof Error ? cause.message : "Location temporarily unavailable");
     } finally {
+      refreshInFlight.current = false;
       if (mounted.current && activeMotorcycleId.current === requestedId && requestSequence.current === sequence) setLoading(false);
     }
   }, [accessToken, motorcycleId]);

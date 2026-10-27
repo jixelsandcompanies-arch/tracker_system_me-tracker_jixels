@@ -14,12 +14,12 @@ export function normalizeProviderTrackerStatus(record) {
   return null;
 }
 
-// A device-provider connection state is authoritative; age its location only
-// when the provider did not send a connectivity state.
 export function trackerState({ providerStatus, recordedAt, now = Date.now(), staleMs = 2 * 60_000, offlineMs = 10 * 60_000 } = {}) {
-  if (providerStatus === "online" || providerStatus === "offline") return providerStatus;
+  if (providerStatus === "offline") return "offline";
   const timestamp = new Date(recordedAt).getTime();
+  if (providerStatus === "online" && !Number.isFinite(timestamp)) return "stale";
   if (!Number.isFinite(timestamp)) return "offline";
   const age = Math.max(0, now - timestamp);
+  if (providerStatus === "online") return age > staleMs ? "stale" : "online";
   return age > offlineMs ? "offline" : age > staleMs ? "stale" : "online";
 }

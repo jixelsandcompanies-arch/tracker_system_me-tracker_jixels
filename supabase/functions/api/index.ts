@@ -126,7 +126,9 @@ function tramigoLocation(report: any) {
   const batteryPercent = parsedBattery !== null && Number.isInteger(parsedBattery) && parsedBattery >= 0 && parsedBattery <= 100 ? parsedBattery : null;
   const rawSpeed = source?.Speed ?? source?.speed;
   const parsedSpeed = rawSpeed == null || rawSpeed === "" ? null : Number(rawSpeed);
-  const rawRecordedAt = source?.DateTimeActual ?? source?.DateTime_Actual ?? source?.DateTime_Received ?? report?.DateTimeActual ?? report?.DateTime_Actual ?? report?.DateTime_Received;
+  // Prefer Tramigo's receipt time for "last update". Device GPS clocks can
+  // be ahead, making the UI show zero before falling back to an older point.
+  const rawRecordedAt = source?.DateTime_Received ?? source?.DateTimeReceived ?? report?.DateTime_Received ?? report?.DateTimeReceived ?? source?.DateTimeActual ?? source?.DateTime_Actual ?? report?.DateTimeActual ?? report?.DateTime_Actual;
   const parsedRecordedAt = rawRecordedAt == null ? null : new Date(String(rawRecordedAt));
   return {
     latitude,
@@ -148,6 +150,11 @@ async function fetchLatestTramigoLocation(identifier: string, existingSession?: 
 
 function reportIsFresh(location: any, maxAgeMs = 60_000) {
   if (!location?.recordedAt || location.speedKph == null || !Number.isFinite(Number(location.speedKph))) return false;
+  return reportPositionIsFresh(location, maxAgeMs);
+}
+
+function reportPositionIsFresh(location: any, maxAgeMs = 60_000) {
+  if (!Number.isFinite(Number(location?.latitude)) || !Number.isFinite(Number(location?.longitude)) || !location?.recordedAt) return false;
   const ageMs = Date.now() - new Date(location.recordedAt).getTime();
   return Number.isFinite(ageMs) && ageMs >= 0 && ageMs <= maxAgeMs;
 }
@@ -2197,7 +2204,7 @@ Deno.serve(async (request) => {
         providerSession ??= await tramigoSession();
         deviceCatalogue ??= await tramigoRequest("/api/v2/devices?page=1&per_page=1000", {}, providerSession);
         const location = await fetchLatestTramigoLocation(identifier, providerSession, deviceCatalogue);
-        if (!reportIsFresh(location)) continue;
+        if (!reportPositionIsFresh(location)) continue;
         const { error: locationError } = await admin.from("tracker_locations").insert({
           vehicle_id: null,
           tracker_id: tracker.id,
@@ -2338,7 +2345,7 @@ Deno.serve(async (request) => {
             const latest = await fetchLatestTramigoLocation(trackerIdentifier);
             if (latest?.recordedAt && Number.isFinite(latest.latitude) && Number.isFinite(latest.longitude)) {
               location = { ...latest, trackerStatus: latest.trackerStatus ?? (tracker.is_online ? "online" : "offline") };
-              if (reportIsFresh(latest)) {
+              if (reportPositionIsFresh(latest)) {
                 const { error: locationError } = await admin.from("tracker_locations").insert({ vehicle_id: null, tracker_id: tracker.id, latitude: latest.latitude, longitude: latest.longitude, speed_kph: latest.speedKph, recorded_at: latest.recordedAt });
                 if (locationError) console.error("Customer live tracker point could not be saved", vehicleId, locationError.message);
               }

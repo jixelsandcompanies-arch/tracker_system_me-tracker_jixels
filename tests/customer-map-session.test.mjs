@@ -48,5 +48,8 @@ assert.match(fleetMap, /\.leaflet-top\.leaflet-right\{top:60px\}/, "zoom control
 assert.match(fleetMap, /#follow-bike\{position:absolute;z-index:700;top:126px;right:12px;display:flex;width:42px;height:42px;.*border-radius:50%/, "follow control must be a compact circular map button below zoom controls");
 assert.match(fleetMap, /followButton\.setAttribute\('aria-label',label\)/, "compact follow button must retain an accessible state label");
 assert.match(app, /currentSpeedKph \?\? "—"/, "missing or stale tracker speed must not be displayed as zero");
+assert.match(app, /setNow\(Date\.now\(\)\), 5000\)/, "the displayed last-update age must refresh every five seconds");
+assert.match(fleetMap, /selectedPositionOutsideMap=selectedTarget&&!map\.getBounds\(\)\.contains\(selectedTarget\)/, "new tracker points outside the viewport must trigger recentering");
+assert.match(fleetMap, /\(\(followSelected&&selectedPositionChanged\)\|\|selectedPositionOutsideMap\)/, "the selected bike must be brought back into view when it leaves the map");
 
 console.log("Customer map and session regression checks passed.");

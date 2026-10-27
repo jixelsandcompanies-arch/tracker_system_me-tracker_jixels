@@ -761,7 +761,7 @@ function TrackingScreen({ selectedBike, onSelectBike, accessToken, vehicles = []
     && speedAgeMs >= 0 && speedAgeMs <= STALE_MS
     ? Math.round(Number(bike.location.speedKph))
     : null;
-  useEffect(() => { const timer = setInterval(() => setNow(Date.now()), 10000); return () => clearInterval(timer); }, []);
+  useEffect(() => { const timer = setInterval(() => setNow(Date.now()), 5000); return () => clearInterval(timer); }, []);
   useEffect(() => { setVehicleSearch(`${selectedBike.registration} • ${selectedBike.model}`); setVehiclePickerOpen(false); }, [selectedBike.id, selectedBike.registration, selectedBike.model]);
   const selectBike = useCallback(id => {
     const vehicle = allFleetVehicles.find(item => String(item.id) === String(id));

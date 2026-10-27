@@ -65,6 +65,7 @@ if(window.L){
     var routeKey=route.length?route.length+':'+route[0].join(',')+':'+route[route.length-1].join(','):'';
     var selectedPoint=points.find(function(point){return point.id===selectedId;});
     var selectedPosition=selectedPoint?[selectedPoint.latitude,selectedPoint.longitude]:null;
+    var selectedPositionOutsideMap=selectedTarget&&!map.getBounds().contains(selectedTarget);
     var selectionChanged=selectedId&&selectedId!==previousSelected;
     var selectedPositionChanged=selectedPosition&&(!lastSelectedPosition||map.distance(lastSelectedPosition,selectedPosition)>3);
     if(firstUpdate){
@@ -77,7 +78,7 @@ if(window.L){
     }else if(routeKey!==previousRouteKey&&routeLine){map.fitBounds(routeLine.getBounds(),{padding:[35,35],maxZoom:16});}
     else if(routeKey!==previousRouteKey&&routePoint){map.setView(route[0],16);}
     else if(selectionChanged&&selectedTarget){followSelected=true;updateFollowButton();map.flyTo(selectedTarget,Math.max(map.getZoom(),16),{duration:.7});}
-    else if(followSelected&&selectedTarget&&selectedPositionChanged){map.panTo(selectedTarget,{animate:true,duration:.8});}
+    else if(selectedTarget&&((followSelected&&selectedPositionChanged)||selectedPositionOutsideMap)){map.panTo(selectedTarget,{animate:true,duration:.8});}
     if(selectedPosition)lastSelectedPosition=selectedPosition;
     else lastSelectedPosition=null;
     previousRouteKey=routeKey;previousSelected=selectedId;

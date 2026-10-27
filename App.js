@@ -96,14 +96,6 @@ const menu = [
   { key: "settings", label: "Settings", icon: "settings-outline" },
 ];
 
-function relativeTime(value, now) {
-  const timestamp = new Date(value).getTime();
-  if (!Number.isFinite(timestamp)) return "Unknown";
-  const seconds = Math.max(0, Math.floor((now - timestamp) / 1000));
-  if (seconds <= 5) return `${seconds} sec ago`;
-  return "Waiting for next GPS update";
-}
-
 const Logo = memo(function Logo({ compact = false }) {
   return <View style={styles.logoRow}><View style={[styles.logoBacking, compact && styles.logoBackingCompact]}><Image source={require("./assets/jixels-logo.png")} resizeMode="contain" style={[styles.brandLogoImage, compact && styles.brandLogoCompact]} /></View></View>;
 });
@@ -737,7 +729,7 @@ function TrackingScreen({ selectedBike, onSelectBike, accessToken, vehicles = []
   const [vehicleSearch, setVehicleSearch] = useState(`${selectedBike.registration} • ${selectedBike.model}`);
   const [vehiclePickerOpen, setVehiclePickerOpen] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
-  const [now, setNow] = useState(Date.now());
+  const [refreshSeconds, setRefreshSeconds] = useState(1);
   const { motorcycle, route, setRoute, loading, routeLoading, routeError, error, refresh, loadRoute } = useTracking({ motorcycleId: selectedBike.id, accessToken });
   // The overview location is only a cached snapshot. Wait for the selected
   // bike's location endpoint (or socket) before putting a marker on the live
@@ -760,7 +752,7 @@ function TrackingScreen({ selectedBike, onSelectBike, accessToken, vehicles = []
     && speedAgeMs >= 0 && speedAgeMs <= STALE_MS
     ? Math.round(Number(bike.location.speedKph))
     : null;
-  useEffect(() => { const timer = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(timer); }, []);
+  useEffect(() => { const timer = setInterval(() => setRefreshSeconds(value => value >= 5 ? 0 : value + 1), 1000); return () => clearInterval(timer); }, []);
   useEffect(() => { setVehicleSearch(`${selectedBike.registration} • ${selectedBike.model}`); setVehiclePickerOpen(false); }, [selectedBike.id, selectedBike.registration, selectedBike.model]);
   const selectBike = useCallback(id => {
     const vehicle = allFleetVehicles.find(item => String(item.id) === String(id));
@@ -781,7 +773,7 @@ function TrackingScreen({ selectedBike, onSelectBike, accessToken, vehicles = []
     && Number.isFinite(Number(bike.location.latitude)) && Number.isFinite(Number(bike.location.longitude))
     && Number(bike.location.latitude) >= -90 && Number(bike.location.latitude) <= 90
     && Number(bike.location.longitude) >= -180 && Number(bike.location.longitude) <= 180;
-  if (!selectedHasLocation) return <View style={[styles.mapContainer, { backgroundColor: colors.surface }]}><View style={styles.mapState}><Ionicons name="location-outline" size={42} color={colors.blue} /><Text style={styles.stateTitle}>Bike location unavailable</Text><Text style={styles.stateMessage}>{error ?? "Waiting for a valid GPS position from this bike's tracker. The map will appear when the position is available."}</Text><Pressable disabled={refreshing} onPress={refreshLocation} style={styles.tryButton}>{refreshing ? <ActivityIndicator color={colors.white} /> : <Text style={styles.primaryButtonText}>Check location</Text>}</Pressable></View></View>;
+  if (!selectedHasLocation) return <View style={[styles.mapContainer, { backgroundColor: colors.surface }]}><View style={styles.mapState}><Ionicons name="location-outline" size={42} color={colors.blue} /><Text style={styles.stateTitle}>Bike location unavailable</Text><Text style={styles.stateMessage}>{error ?? "No GPS position has been received from this bike yet. The app checks automatically every three seconds."}</Text><Pressable disabled={refreshing} onPress={refreshLocation} style={styles.tryButton}>{refreshing ? <ActivityIndicator color={colors.white} /> : <Text style={styles.primaryButtonText}>Check location</Text>}</Pressable></View></View>;
   return <View style={[styles.mapContainer, { backgroundColor: colors.surface }]}>
     <LiveFleetMap selected={bike} vehicles={allFleetVehicles} route={route} onSelectVehicle={selectBike} />
     <View style={styles.vehiclePicker}>
@@ -795,7 +787,7 @@ function TrackingScreen({ selectedBike, onSelectBike, accessToken, vehicles = []
     {!!error && <View style={styles.mapError}><Ionicons name="warning" color={colors.orange} /><Text numberOfLines={2} style={styles.mapErrorText}>{error}</Text></View>}
     <View style={[styles.mapSheet, { bottom: 12, height: undefined, paddingBottom: 14 }]}>
       <View style={styles.bikeTop}><View style={{ flex: 1 }}><Text style={styles.sheetBike}>{selectedBike.model}</Text><Text style={styles.cardSub}>{selectedBike.registration} · {locatedCount} of {allFleetVehicles.length} bikes reporting</Text></View><StatusPill status={status} /></View>
-      {bike.location ? <View style={styles.mapMetrics}><View style={{ flex: 1 }}><Text style={styles.microLabel}>SPEED</Text><Text style={styles.speed}>{currentSpeedKph ?? "—"} <Text style={styles.speedUnit}>km/h</Text></Text></View><View style={styles.metricDivider} /><View style={{ flex: 1 }}><Text style={styles.microLabel}>LAST UPDATE</Text><Text style={styles.lastUpdate}>{relativeTime(bike.location.recordedAt, now)}</Text>{Number.isFinite(Number(bike.location.accuracyMeters)) && Number(bike.location.accuracyMeters) > 0 && <Text style={styles.gpsAccuracyHint}>GPS accuracy ±{Math.round(Number(bike.location.accuracyMeters))} m</Text>}</View></View> : <Text style={styles.stateMessage}>{error ?? "Waiting for this bike's first valid GPS location. Other bikes with locations remain visible."}</Text>}
+      {bike.location ? <View style={styles.mapMetrics}><View style={{ flex: 1 }}><Text style={styles.microLabel}>SPEED</Text><Text style={styles.speed}>{currentSpeedKph ?? "—"} <Text style={styles.speedUnit}>km/h</Text></Text></View><View style={styles.metricDivider} /><View style={{ flex: 1 }}><Text style={styles.microLabel}>AUTO UPDATE</Text><Text style={styles.lastUpdate}>{refreshSeconds} sec</Text>{Number.isFinite(Number(bike.location.accuracyMeters)) && Number(bike.location.accuracyMeters) > 0 && <Text style={styles.gpsAccuracyHint}>GPS accuracy ±{Math.round(Number(bike.location.accuracyMeters))} m</Text>}</View></View> : <Text style={styles.stateMessage}>{error ?? "No valid GPS position is available for this bike yet."}</Text>}
       <View style={styles.rangeRow}>{ranges.map(item => <Pressable key={item} onPress={() => { setRange(item); if (route) loadRoute(item); }} style={[styles.rangeButton, range === item && styles.rangeActive]}><Text style={[styles.rangeText, range === item && styles.rangeTextActive]}>{item}</Text></Pressable>)}</View>
       <View style={{ flexDirection: "row", gap: 8 }}>
         <Pressable disabled={routeLoading} onPress={toggleRoute} style={[styles.outlineButton, { flex: 1, marginTop: 10 }]}>{routeLoading ? <ActivityIndicator color={colors.blue} /> : <><Ionicons name={route ? "git-branch" : "git-branch-outline"} color={colors.blue} /><Text style={styles.outlineButtonText}>{route ? "Hide selected bike route" : "View selected bike route"}</Text></>}</Pressable>

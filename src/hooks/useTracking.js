@@ -2,11 +2,10 @@ import { AppState } from "react-native";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { trackingApi } from "../services/tracking";
 
-// Keep REST refresh active even while the socket is connected: some provider
-// integrations keep a socket open without delivering every fresh GPS report.
-// The API permits four provider reads per vehicle per minute. Leave a small
-// margin below that limit so timer drift cannot create a fifth read.
-const POLL_INTERVAL_MS = 16_000;
+// Refresh the customer map automatically every three seconds, including when
+// a socket remains connected without delivering reports. The API separately
+// rate-limits actual Tramigo reads and returns the newest saved point meanwhile.
+const POLL_INTERVAL_MS = 3_000;
 
 function keepNewestLocation(incoming, existing) {
   if (!existing?.location) return incoming;

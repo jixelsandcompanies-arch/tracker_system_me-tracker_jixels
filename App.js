@@ -761,7 +761,7 @@ function TrackingScreen({ selectedBike, onSelectBike, accessToken, vehicles = []
     && speedAgeMs >= 0 && speedAgeMs <= STALE_MS
     ? Math.round(Number(bike.location.speedKph))
     : null;
-  useEffect(() => { const timer = setInterval(() => setNow(Date.now()), 5000); return () => clearInterval(timer); }, []);
+  useEffect(() => { const timer = setInterval(() => setNow(Date.now()), 1000); return () => clearInterval(timer); }, []);
   useEffect(() => { setVehicleSearch(`${selectedBike.registration} • ${selectedBike.model}`); setVehiclePickerOpen(false); }, [selectedBike.id, selectedBike.registration, selectedBike.model]);
   const selectBike = useCallback(id => {
     const vehicle = allFleetVehicles.find(item => String(item.id) === String(id));
@@ -991,13 +991,12 @@ function CustomerApp({ session, onLogout }) {
       }
     };
     loadCustomerRecords();
-    // Refresh the full fleet every 5s while its live map is open; elsewhere
-    // keep the existing 15s cadence to avoid extra background API traffic.
+    // Refresh the selected live map every 3s; elsewhere keep a 15s cadence.
     let refreshTicks = 0;
     const refreshTimer = setInterval(() => {
       refreshTicks += 1;
       if (screenRef.current === "tracking" || refreshTicks % 3 === 0) loadCustomerRecords(false);
-    }, 5_000);
+    }, 3_000);
     const appStateSubscription = AppState.addEventListener("change", state => {
       if (state === "active") loadCustomerRecords(false);
     });

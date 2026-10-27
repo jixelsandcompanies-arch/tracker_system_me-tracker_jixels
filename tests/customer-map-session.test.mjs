@@ -8,6 +8,7 @@ const fleetMap = readFileSync(new URL("../src/components/LiveFleetMap.native.js"
 const api = readFileSync(new URL("../supabase/functions/api/index.ts", import.meta.url), "utf8");
 const appConfig = readFileSync(new URL("../app.config.js", import.meta.url), "utf8");
 const sessionStore = readFileSync(new URL("../src/services/session.js", import.meta.url), "utf8");
+const operationsLiveMap = readFileSync(new URL("../jixes/src/components/LiveMapView.jsx", import.meta.url), "utf8");
 
 assert.match(app, /import OpenStreetMap from "\.\/src\/components\/OpenStreetMap"/);
 assert.doesNotMatch(app, /import MapView, .*PROVIDER_GOOGLE/);
@@ -41,7 +42,7 @@ assert.match(trackingHook, /setLoadedMotorcycle\(null\)/, "switching selected ve
 assert.match(trackingHook, /socket\?\.disconnect\(\)/);
 assert.match(fleetMap, /map\.fitBounds\(routeLine\.getBounds\(/, "loading a historical route must bring the route into view");
 assert.match(fleetMap, /routePoint=L\.circleMarker/, "a single returned GPS point must be visible even when a line cannot be drawn");
-assert.match(trackingHook, /const POLL_INTERVAL_MS = 16_000/, "automatic location refresh must stay just under the provider's four-reads-per-minute limit");
+assert.match(trackingHook, /const POLL_INTERVAL_MS = 3_000/, "the customer live map must refresh automatically every three seconds");
 assert.match(trackingHook, /setInterval\(poll, POLL_INTERVAL_MS\)/, "location refresh must continue automatically while the tracking screen is active");
 assert.match(fleetMap, /L\.map\('map',\{zoomControl:false\}\)/, "Leaflet's default zoom controls must not overlap the vehicle search bar");
 assert.match(fleetMap, /L\.control\.zoom\(\{position:'topright'\}\)/, "zoom controls must be grouped on the right below the search bar");
@@ -50,11 +51,14 @@ assert.match(fleetMap, /L\.control\.zoom\(\{position:'topright'\}\)[\s\S]*follow
 assert.match(fleetMap, /#follow-bike\{display:flex;width:42px;height:42px;.*border-radius:50%/, "follow control must be compact and circular");
 assert.match(fleetMap, /followButton\.setAttribute\('aria-label',label\)/, "compact follow button must retain an accessible state label");
 assert.match(app, /currentSpeedKph \?\? "—"/, "missing or stale tracker speed must not be displayed as zero");
-assert.match(app, /setNow\(Date\.now\(\)\), 5000\)/, "the displayed last-update age must refresh every five seconds");
+assert.match(app, /setNow\(Date\.now\(\)\), 1000\)/, "the displayed last-update age must refresh every second");
 assert.match(fleetMap, /selectedPositionOutsideMap=selectedTarget&&!map\.getBounds\(\)\.contains\(selectedTarget\)/, "new tracker points outside the viewport must trigger recentering");
 assert.match(fleetMap, /\(\(followSelected&&selectedPositionChanged\)\|\|selectedPositionOutsideMap\)/, "the selected bike must be brought back into view when it leaves the map");
+assert.match(operationsLiveMap, /window\.setInterval\(load, 3000\)/, "the operations live map must refresh automatically every three seconds");
+assert.match(operationsLiveMap, /Math\.min\(2700, Math\.max\(600, distance \/ 12\)\)/, "operations map markers must move smoothly between reported GPS points");
 assert.match(api, /const locationReport = tramigoLocation\(await tramigoRequest\(`\/api\/reports\/last_location\/\$\{encodeURIComponent\(cloudDeviceId\)\}`/);
 assert.match(api, /latestReport = tramigoLocation\(await tramigoRequest\(`\/api\/reports\/last\/\$\{encodeURIComponent\(cloudDeviceId\)\}`/);
 assert.match(api, /new Date\(latestReport\.recordedAt\)\.getTime\(\) >= new Date\(locationReport\.recordedAt\)\.getTime\(\)/, "speed fallback must never overwrite a newer GPS fix");
+assert.match(api, /p_max_requests: 1, p_window_seconds: 15/, "three-second map polling must pace real Tramigo reads to one per 15 seconds instead of bursting provider requests");
 
 console.log("Customer map and session regression checks passed.");

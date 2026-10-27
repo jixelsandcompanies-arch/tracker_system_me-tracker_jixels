@@ -51,6 +51,7 @@ assert.match(apiFunction, /claim_location_provider_read/, "customer location req
 assert.match(apiFunction, /async function bikeActivationReadiness/, "security activation must require the agent installation record and confirmed deposit");
 assert.match(apiFunction, /from\("bikes"\)\.select\("id,identifier,model,product_type,payable_amount,status,monitoring_armed,immobilized,trackers/, "customer overview refreshes must include saved monitoring and immobilizer state");
 assert.match(app, /raw\.monitoring_armed/, "customer security refreshes must accept persisted database field names");
+assert.match(app, /readinessValue === undefined[\s\S]*Checking the agent's installation confirmation/, "unknown setup status must be shown as checking, not incorrectly marked incomplete");
 assert.match(apiFunction, /requested > 0.*confirmedDeposit >= requested/s, "a deposit counts as paid only when confirmed funds cover the requested amount");
 assert.match(apiFunction, /VEHICLE_SETUP_INCOMPLETE/, "the backend must refuse security arming until installation and deposit are both confirmed");
 assert.match(apiFunction, /confirmedDepositAmount/, "agent payment status must count confirmed deposit transactions specifically");

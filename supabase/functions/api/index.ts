@@ -2352,7 +2352,7 @@ Deno.serve(async (request) => {
       }
     }
     return response({ vehicles: [
-      ...(vehicles ?? []),
+      ...(vehicles ?? []).map((vehicle: any) => ({ ...vehicle, securityReady: true })),
       ...(customerBikes ?? []).map((bike: any) => ({ ...bike, registration: bike.identifier, securityReady: readinessByBike.get(String(bike.id))?.ready ?? false, securityMessage: readinessByBike.get(String(bike.id))?.message ?? "Setup is incomplete." })),
     ] });
   }

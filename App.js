@@ -596,11 +596,14 @@ function MonitoringScreen({ selectedBike, vehicles, onSelectBike, security, onMo
   const state = security[selectedBike.id] ?? {};
   const armed = state.monitoringArmed ?? selectedBike.monitoringArmed ?? false;
   const immobilized = state.immobilized ?? selectedBike.immobilized ?? false;
-  const securityReady = state.securityReady ?? selectedBike.securityReady ?? false;
-  const securityMessage = state.securityMessage ?? selectedBike.securityMessage ?? "The agent must confirm installation and the system must confirm the full deposit before security controls are enabled.";
+  const readinessValue = state.securityReady ?? selectedBike.securityReady;
+  const securityReady = readinessValue === true;
+  const securityMessage = state.securityMessage ?? selectedBike.securityMessage ?? (readinessValue === undefined
+    ? "Checking the agent's installation confirmation and confirmed deposit…"
+    : "The agent installation confirmation and full deposit are not both confirmed yet.");
   const controlGateMessage = !isOnline
     ? "Connect the Customer app to the internet to send a secure vehicle control command."
-    : !securityReady ? securityMessage : null;
+    : readinessValue === undefined || !securityReady ? securityMessage : null;
   const tampered = (state.tamperStatus ?? selectedBike.tamperStatus) === "tampered";
   const orderedVehicles = [...vehicles].sort((a, b) => Number((security[b.id]?.tamperStatus ?? b.tamperStatus) === "tampered") - Number((security[a.id]?.tamperStatus ?? a.tamperStatus) === "tampered"));
   const tamperedVehicles = orderedVehicles.filter(vehicle => (security[vehicle.id]?.tamperStatus ?? vehicle.tamperStatus) === "tampered");

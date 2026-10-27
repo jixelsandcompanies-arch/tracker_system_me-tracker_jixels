@@ -777,6 +777,11 @@ function TrackingScreen({ selectedBike, onSelectBike, accessToken, vehicles = []
   };
   if (loading && !bike?.location) return <ActivitySkeleton screen="tracking" />;
   const locatedCount = allFleetVehicles.filter(vehicle => vehicle.location?.latitude != null && vehicle.location?.longitude != null && Number.isFinite(Number(vehicle.location.latitude)) && Number.isFinite(Number(vehicle.location.longitude))).length;
+  const selectedHasLocation = bike.location?.latitude != null && bike.location?.longitude != null
+    && Number.isFinite(Number(bike.location.latitude)) && Number.isFinite(Number(bike.location.longitude))
+    && Number(bike.location.latitude) >= -90 && Number(bike.location.latitude) <= 90
+    && Number(bike.location.longitude) >= -180 && Number(bike.location.longitude) <= 180;
+  if (!selectedHasLocation) return <View style={[styles.mapContainer, { backgroundColor: colors.surface }]}><View style={styles.mapState}><Ionicons name="location-outline" size={42} color={colors.blue} /><Text style={styles.stateTitle}>Bike location unavailable</Text><Text style={styles.stateMessage}>{error ?? "Waiting for a valid GPS position from this bike's tracker. The map will appear when the position is available."}</Text><Pressable disabled={refreshing} onPress={refreshLocation} style={styles.tryButton}>{refreshing ? <ActivityIndicator color={colors.white} /> : <Text style={styles.primaryButtonText}>Check location</Text>}</Pressable></View></View>;
   return <View style={[styles.mapContainer, { backgroundColor: colors.surface }]}>
     <LiveFleetMap selected={bike} vehicles={allFleetVehicles} route={route} onSelectVehicle={selectBike} />
     <View style={styles.vehiclePicker}>

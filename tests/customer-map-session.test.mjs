@@ -54,6 +54,8 @@ assert.match(app, /currentSpeedKph \?\? "—"/, "missing or stale tracker speed 
 assert.match(app, /setNow\(Date\.now\(\)\), 1000\)/, "the displayed last-update age must refresh every second");
 assert.match(app, /if \(seconds <= 5\) return `\$\{seconds\} sec ago`;/, "the displayed GPS age must stop at five seconds instead of counting into minutes without a new fix");
 assert.match(app, /Waiting for next GPS update/, "the customer map must clearly indicate when a new GPS fix has not arrived");
+assert.match(app, /if \(!selectedHasLocation\) return <View style=\{\[styles\.mapContainer/, "the customer app must not show the default Kenya map when the selected bike has no GPS position");
+assert.match(api, /if \(!location && tracker\.latitude != null && tracker\.longitude != null && tracker\.last_seen_at\)/, "customer location lookup must fall back to the tracker's saved coordinates when no location-history row exists");
 assert.match(fleetMap, /selectedPositionOutsideMap=selectedTarget&&!map\.getBounds\(\)\.contains\(selectedTarget\)/, "new tracker points outside the viewport must trigger recentering");
 assert.match(fleetMap, /\(\(followSelected&&selectedPositionChanged\)\|\|selectedPositionOutsideMap\)/, "the selected bike must be brought back into view when it leaves the map");
 assert.match(operationsLiveMap, /window\.setInterval\(load, 3000\)/, "the operations live map must refresh automatically every three seconds");

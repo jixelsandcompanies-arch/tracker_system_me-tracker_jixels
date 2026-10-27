@@ -2497,6 +2497,13 @@ Deno.serve(async (request) => {
       if (!location && tracker?.id) {
         const { data: saved } = await admin.from("tracker_locations").select("latitude,longitude,speed_kph,heading,accuracy_meters,recorded_at").eq("tracker_id", tracker.id).order("recorded_at", { ascending: false }).limit(1).maybeSingle();
         location = saved && { latitude: saved.latitude, longitude: saved.longitude, speedKph: saved.speed_kph, heading: saved.heading, accuracyMeters: saved.accuracy_meters, recordedAt: saved.recorded_at, trackerStatus: tracker.is_online ? "online" : "offline" };
+        if (!location && tracker.latitude != null && tracker.longitude != null && tracker.last_seen_at) {
+          const latitude = Number(tracker.latitude);
+          const longitude = Number(tracker.longitude);
+          if (Number.isFinite(latitude) && latitude >= -90 && latitude <= 90 && Number.isFinite(longitude) && longitude >= -180 && longitude <= 180) {
+            location = { latitude, longitude, recordedAt: tracker.last_seen_at, trackerStatus: tracker.is_online ? "online" : "offline" };
+          }
+        }
       }
       return response({ id: assignedBike.id, registration: tracker?.plate_number || assignedBike.identifier, model: assignedBike.model, vehicle_type: assignedBike.product_type, location });
     }

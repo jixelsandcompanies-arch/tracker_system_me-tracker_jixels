@@ -131,7 +131,7 @@ function tramigoLocation(report: any) {
   return {
     latitude,
     longitude,
-    speedKph: parsedSpeed !== null && Number.isFinite(parsedSpeed) && parsedSpeed >= 0 ? parsedSpeed : null,
+    speedKph: parsedSpeed !== null && Number.isFinite(parsedSpeed) && parsedSpeed >= 0 && parsedSpeed <= 300 ? parsedSpeed : null,
     recordedAt: parsedRecordedAt && Number.isFinite(parsedRecordedAt.getTime()) ? safeLiveTimestamp(parsedRecordedAt.toISOString()) : null,
     trackerStatus,
     batteryPercent,
@@ -177,7 +177,7 @@ function tramigoRouteLocations(payload: any) {
     const recordedAt = source?.DateTimeActual ?? source?.DateTime_Actual ?? source?.datetime_actual ?? source?.dateTime ?? source?.timestamp ?? report?.DateTimeActual ?? report?.DateTime_Actual ?? report?.DateTime_Received;
     const rawSpeed = source?.Speed ?? source?.speed;
     const parsedSpeed = rawSpeed == null || rawSpeed === "" ? null : Number(rawSpeed);
-    return { latitude, longitude, speedKph: parsedSpeed != null && Number.isFinite(parsedSpeed) && parsedSpeed >= 0 ? parsedSpeed : null, recordedAt };
+    return { latitude, longitude, speedKph: parsedSpeed != null && Number.isFinite(parsedSpeed) && parsedSpeed >= 0 && parsedSpeed <= 300 ? parsedSpeed : null, recordedAt };
   }).filter((point) => Number.isFinite(point.latitude) && Number.isFinite(point.longitude) && point.latitude >= -90 && point.latitude <= 90 && point.longitude >= -180 && point.longitude <= 180 && point.recordedAt);
 }
 

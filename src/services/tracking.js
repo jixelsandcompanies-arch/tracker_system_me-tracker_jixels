@@ -19,9 +19,11 @@ function normalizeLocation(location) {
     ...location,
     latitude,
     longitude,
-    speedKph: location.speedKph == null && location.speed == null
-      ? null
-      : Number(location.speedKph ?? location.speed),
+    speedKph: (() => {
+      if (location.speedKph == null && location.speed == null) return null;
+      const speed = Number(location.speedKph ?? location.speed);
+      return Number.isFinite(speed) && speed >= 0 && speed <= 300 ? speed : null;
+    })(),
     accuracyMeters: Number.isFinite(Number(rawAccuracy)) ? Math.max(0, Math.round(Number(rawAccuracy))) : null,
     recordedAt: location.recordedAt ?? location.timestamp ?? null,
   };

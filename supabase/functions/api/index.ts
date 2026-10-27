@@ -7,6 +7,73 @@ const cors = {
 };
 const response = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { ...cors, "Content-Type": "application/json", "Cache-Control": "no-store" } });
 const fail = (message: string, status = 400, code?: string, details?: Record<string, unknown>) => response({ message, code, details }, status);
+const CUSTOMER_MONTHLY_AMOUNT = 750;
+const confirmedPaymentStatuses = ["paid", "completed", "confirmed"];
+function addBillingMonth(date: Date, anchorDay = date.getUTCDate()) {
+  const next = new Date(date);
+  next.setUTCDate(1);
+  next.setUTCMonth(next.getUTCMonth() + 1);
+  const lastDay = new Date(Date.UTC(next.getUTCFullYear(), next.getUTCMonth() + 1, 0)).getUTCDate();
+  next.setUTCDate(Math.min(anchorDay, lastDay));
+  return next;
+}
+async function customerMonthlyBilling(admin: SupabaseClient, ownerId: string) {
+  const { data: profile, error: profileError } = await admin.from("profiles").select("email").eq("id", ownerId).maybeSingle();
+  if (profileError) throw new Error("Customer billing status is temporarily unavailable.");
+  const email = String(profile?.email ?? "").trim();
+  const { data: customer, error: customerError } = email
+    ? await admin.from("customers").select("id").ilike("email", email).maybeSingle()
+    : { data: null, error: null };
+  if (customerError) throw new Error("Customer billing status is temporarily unavailable.");
+  if (!customer?.id) return { locked: false, monthlyAmount: CUSTOMER_MONTHLY_AMOUNT, amountDue: 0, overdueSince: null, vehicles: [] as any[] };
+  const [{ data: bikes, error: bikesError }, { data: applications, error: applicationsError }] = await Promise.all([
+    admin.from("bikes").select("id,identifier").eq("customer_id", customer.id),
+    admin.from("screening_applications").select("product_id,monthly_service_amount,monthly_service_started_at,approved_at,created_at").eq("customer_id", customer.id).eq("status", "approved"),
+  ]);
+  if (bikesError || applicationsError) throw new Error("Customer billing status is temporarily unavailable.");
+  const bikeIds = (bikes ?? []).map((bike: any) => String(bike.id));
+  if (!bikeIds.length) return { locked: false, monthlyAmount: CUSTOMER_MONTHLY_AMOUNT, amountDue: 0, overdueSince: null, vehicles: [] as any[] };
+  const { data: payments, error: paymentsError } = await admin.from("payments")
+    .select("product_id,amount,payment_type,paid_at,created_at,status")
+    .eq("customer_id", customer.id).in("product_id", bikeIds).in("status", confirmedPaymentStatuses)
+    .order("paid_at", { ascending: true, nullsFirst: true });
+  if (paymentsError) throw new Error("Customer billing status is temporarily unavailable.");
+  const appByBike = new Map((applications ?? []).map((application: any) => [String(application.product_id), application]));
+  const result = bikeIds.map((bikeId) => {
+    const application: any = appByBike.get(bikeId);
+    const fee = CUSTOMER_MONTHLY_AMOUNT;
+    const startValue = application?.monthly_service_started_at ?? application?.approved_at ?? application?.created_at;
+    const started = startValue ? new Date(startValue) : null;
+    if (!started || !Number.isFinite(started.getTime()) || fee <= 0) return { bikeId, monthlyAmount: fee, locked: false, amountDue: 0, overdueSince: null };
+    const cycles: Array<{ start: number; due: number; paid: number }> = [];
+    let cycleStart = started;
+    let cycleDue = addBillingMonth(cycleStart, started.getUTCDate());
+    const now = Date.now();
+    for (let count = 0; cycleDue.getTime() <= now && count < 240; count++) {
+      cycles.push({ start: cycleStart.getTime(), due: cycleDue.getTime(), paid: 0 });
+      cycleStart = cycleDue;
+      cycleDue = addBillingMonth(cycleStart, started.getUTCDate());
+    }
+    const transactions = (payments ?? []).filter((payment: any) => String(payment.product_id) === bikeId
+      && String(payment.payment_type ?? "daily").toLowerCase().replace(/[ _-]/g, "") !== "deposit")
+      .map((payment: any) => ({ amount: Math.max(0, Number(payment.amount ?? 0)), at: new Date(payment.paid_at ?? payment.created_at).getTime() }))
+      .filter((payment: any) => payment.amount > 0 && Number.isFinite(payment.at) && payment.at >= started.getTime());
+    for (const transaction of transactions) {
+      let remaining = transaction.amount;
+      while (remaining > 0) {
+        const cycle = cycles.find((item) => item.start <= transaction.at && item.paid < fee);
+        if (!cycle) break;
+        const allocated = Math.min(remaining, fee - cycle.paid);
+        cycle.paid += allocated;
+        remaining -= allocated;
+      }
+    }
+    const unpaid = cycles.filter((cycle) => cycle.paid < fee);
+    return { bikeId, monthlyAmount: fee, locked: unpaid.length > 0, amountDue: unpaid.reduce((sum, cycle) => sum + Math.ceil(fee - cycle.paid), 0), overdueSince: unpaid.length ? new Date(unpaid[0].due).toISOString() : null };
+  });
+  const overdue = result.filter((vehicle) => vehicle.locked);
+  return { locked: overdue.length > 0, monthlyAmount: CUSTOMER_MONTHLY_AMOUNT, amountDue: overdue.reduce((sum, vehicle) => sum + vehicle.amountDue, 0), overdueSince: overdue.map((vehicle) => vehicle.overdueSince).filter(Boolean).sort()[0] ?? null, vehicles: result };
+}
 const darajaBase = Deno.env.get("DARAJA_ENV") === "production" ? "https://api.safaricom.co.ke" : "https://sandbox.safaricom.co.ke";
 async function darajaToken() {
   const key = Deno.env.get("DARAJA_CONSUMER_KEY"); const secret = Deno.env.get("DARAJA_CONSUMER_SECRET");
@@ -1302,6 +1369,18 @@ Deno.serve(async (request) => {
   const user = identity.user;
   if (!user) return fail("Authentication is required.", 401, "UNAUTHORIZED");
 
+  if (route.startsWith("/v1/customer/")) {
+    let billing;
+    try { billing = await customerMonthlyBilling(admin, user.id); }
+    catch (error) { return fail(error instanceof Error ? error.message : "Customer billing status is temporarily unavailable.", 503, "CUSTOMER_BILLING_UNAVAILABLE"); }
+    const paymentAccess = (route === "/v1/customer/overview" && request.method === "GET")
+      || (route === "/v1/customer/payments" && ["GET", "DELETE"].includes(request.method))
+      || (route === "/v1/customer/payments/mpesa" && request.method === "POST");
+    if (billing.locked && !paymentAccess) {
+      return fail("Your account is temporarily limited because a KSh 750 monthly instalment is overdue. You can sign in and make a payment to restore access.", 423, "CUSTOMER_MONTHLY_PAYMENT_DUE", { billing });
+    }
+  }
+
   if (route === "/v1/admin/trackers/refresh" && request.method === "POST") {
     const { data: manager, error: managerError } = await admin.from("profiles").select("role,account_status").eq("id", user.id).maybeSingle();
     if (managerError || !manager || !adminRoles.has(manager.role)) return fail("Administrator permission is required to refresh trackers.", 403, "FORBIDDEN");
@@ -1823,7 +1902,7 @@ Deno.serve(async (request) => {
       : await applicationQuery.eq("customer_id", customerId).order("created_at", { ascending: false }).limit(1).maybeSingle();
     if (applicationError || !application) return fail("Screening application not found.", 404, "NOT_FOUND");
     const now = new Date().toISOString();
-    const { error: approvalError } = await admin.from("screening_applications").update({ status: "approved", reviewed_by: user.id, reviewed_at: now, approved_at: now, updated_at: now }).eq("id", application.id);
+    const { error: approvalError } = await admin.from("screening_applications").update({ status: "approved", reviewed_by: user.id, reviewed_at: now, approved_at: now, monthly_service_started_at: now, updated_at: now }).eq("id", application.id);
     if (approvalError) return fail("The screening application could not be approved.", 400, "APPROVAL_FAILED");
     if (application.customer_id) {
       const { data: tracker } = application.product_id
@@ -2041,6 +2120,9 @@ Deno.serve(async (request) => {
   }
 
   if (route === "/v1/customer/overview" && request.method === "GET") {
+    let billing;
+    try { billing = await customerMonthlyBilling(admin, user.id); }
+    catch (error) { return fail(error instanceof Error ? error.message : "Customer billing status is temporarily unavailable.", 503, "CUSTOMER_BILLING_UNAVAILABLE"); }
     const { data: profile, error: profileError } = await client.from("profiles").select("full_name,email,phone,avatar_url").single();
     if (profileError || !profile) return fail("This customer account is no longer available.", 404, "ACCOUNT_NOT_FOUND");
     const { data: customer, error: customerError } = await admin.from("customers").select("id,national_id").ilike("email", String(profile.email ?? "").trim()).maybeSingle();
@@ -2050,10 +2132,9 @@ Deno.serve(async (request) => {
       : { data: [], error: null };
     if (bikesError) return fail("Customer vehicles could not be loaded.", 503, "CUSTOMER_RECORDS_UNAVAILABLE");
     const bikeIds = (bikes ?? []).map((bike: any) => bike.id);
-    const [{ data: confirmedPayments }, { data: financeAccounts }, { data: applications }] = await Promise.all([
+    const [{ data: confirmedPayments }, { data: financeAccounts }] = await Promise.all([
       customer?.id && bikeIds.length ? admin.from("payments").select("product_id,amount").eq("customer_id", customer.id).in("product_id", bikeIds).in("status", ["paid", "completed", "confirmed"]) : Promise.resolve({ data: [] }),
       customer?.id ? admin.from("finance_accounts").select("external_id,due_at,outstanding,status,data").eq("customer_id", customer.id) : Promise.resolve({ data: [] }),
-      customer?.id && bikeIds.length ? admin.from("screening_applications").select("product_id,monthly_service_amount").eq("customer_id", customer.id).in("product_id", bikeIds) : Promise.resolve({ data: [] }),
     ]);
     const paidByBike = new Map<string, number>();
     for (const payment of confirmedPayments ?? []) paidByBike.set(String(payment.product_id), (paidByBike.get(String(payment.product_id)) ?? 0) + Number(payment.amount ?? 0));
@@ -2062,7 +2143,6 @@ Deno.serve(async (request) => {
       const product = String(account.data?.productId ?? account.data?.product ?? account.data?.bike ?? "");
       if (product) accountByBike.set(product, account);
     }
-    const monthlyByBike = new Map((applications ?? []).map((application: any) => [String(application.product_id), Number(application.monthly_service_amount ?? 0)]));
     const now = Date.now();
     const vehicles = (bikes ?? []).map((bike: any) => {
       const total = Number(bike.payable_amount ?? 0);
@@ -2071,9 +2151,15 @@ Deno.serve(async (request) => {
       const balance = Math.max(0, Number(account?.outstanding ?? total - paid));
       const dueAt = account?.due_at ?? account?.data?.dueAt ?? null;
       const financeStatus = balance <= 0 ? "Completed" : dueAt && new Date(dueAt).getTime() < now ? "Overdue" : account?.data?.status ?? "On Track";
-      return { id: bike.id, registration: bike.trackers?.[0]?.plate_number || bike.identifier, identifier: bike.identifier, model: bike.model || "Jixels vehicle", vehicle_type: bike.product_type, product_type: bike.product_type, tracker: bike.trackers?.[0]?.identifier ?? "Pending", status: bike.trackers?.[0]?.is_online ? "online" : "offline", is_online: Boolean(bike.trackers?.[0]?.is_online), latitude: bike.trackers?.[0]?.latitude, longitude: bike.trackers?.[0]?.longitude, last_seen_at: bike.trackers?.[0]?.last_seen_at, total, payable_amount: total, paid, balance, outstanding: balance, finance_status: financeStatus, monthly_payment: monthlyByBike.get(String(bike.id)) ?? 0, next_payment: dueAt ? new Date(dueAt).toLocaleDateString("en-KE", { timeZone: "Africa/Nairobi" }) : "", monitoring_armed: Boolean(bike.monitoring_armed), immobilized: Boolean(bike.immobilized) };
+      const serviceBilling = billing.vehicles.find((item: any) => item.bikeId === String(bike.id));
+      return { id: bike.id, registration: bike.trackers?.[0]?.plate_number || bike.identifier, identifier: bike.identifier, model: bike.model || "Jixels vehicle", vehicle_type: bike.product_type, product_type: bike.product_type, tracker: bike.trackers?.[0]?.identifier ?? "Pending", status: bike.trackers?.[0]?.is_online ? "online" : "offline", is_online: Boolean(bike.trackers?.[0]?.is_online), latitude: bike.trackers?.[0]?.latitude, longitude: bike.trackers?.[0]?.longitude, last_seen_at: bike.trackers?.[0]?.last_seen_at, total, payable_amount: total, paid, balance, outstanding: balance, finance_status: financeStatus, monthly_payment: serviceBilling?.monthlyAmount ?? CUSTOMER_MONTHLY_AMOUNT, service_payment_due: serviceBilling?.amountDue ?? 0, service_due_at: serviceBilling?.overdueSince ?? null, service_locked: serviceBilling?.locked ?? false, next_payment: dueAt ? new Date(dueAt).toLocaleDateString("en-KE", { timeZone: "Africa/Nairobi" }) : "", monitoring_armed: Boolean(bike.monitoring_armed), immobilized: Boolean(bike.immobilized) };
     });
-    return response({ profile: { ...profile, national_id: customer?.national_id ?? null }, vehicles });
+    const visibleVehicles = billing.locked ? vehicles.map((vehicle: any) => ({
+      id: vehicle.id, registration: vehicle.registration, identifier: vehicle.identifier, model: vehicle.model,
+      total: vehicle.total, payable_amount: vehicle.payable_amount, balance: vehicle.balance, outstanding: vehicle.outstanding,
+      monthly_payment: vehicle.monthly_payment, service_payment_due: vehicle.service_payment_due,
+    })) : vehicles;
+    return response({ profile: { ...profile, national_id: customer?.national_id ?? null }, billing, vehicles: visibleVehicles });
   }
   if (route === "/v1/customer/payments" && request.method === "DELETE") {
     const ids = Array.isArray(body.ids) ? [...new Set(body.ids.map(String).map((id: string) => id.trim()).filter(Boolean))].slice(0, 200) : [];

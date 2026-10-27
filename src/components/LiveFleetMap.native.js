@@ -33,7 +33,7 @@ if(window.L){
   var map=L.map('map',{zoomControl:false}).setView([__INITIAL_LAT__,__INITIAL_LNG__],__INITIAL_ZOOM__);
   L.control.zoom({position:'topright'}).addTo(map);
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'© OpenStreetMap'}).addTo(map).on('tileerror',function(){document.getElementById('status').textContent='Map tiles unavailable. Check your internet connection.'});
-  var markers={},accuracyCircles={},routeLine=null,routePoint=null,firstUpdate=true,previousSelected=null,previousRouteKey='',lastSelectedPosition=null,selectedTarget=null,followSelected=true;
+  var markers={},accuracyCircles={},routeLine=null,routePoint=null,firstUpdate=true,previousSelected=null,previousRouteKey='',selectedTarget=null,followSelected=true;
   var followButton=null;
   var followControl=L.control({position:'topright'});
   followControl.onAdd=function(){
@@ -47,11 +47,20 @@ if(window.L){
   followControl.addTo(map);
   function updateFollowButton(){if(!followButton)return;var label=followSelected?'Following bike':'Follow bike';followButton.setAttribute('aria-label',label);followButton.setAttribute('title',label);followButton.setAttribute('aria-pressed',String(followSelected));followButton.classList.toggle('paused',!followSelected);}
   map.on('dragstart',function(){followSelected=false;updateFollowButton();});
-  function moveMarker(marker,target,duration){
+  function moveMarker(marker,target,duration,follow){
     if(marker._motionFrame)cancelAnimationFrame(marker._motionFrame);
     var start=marker.getLatLng(),started=performance.now(),fromLat=start.lat,fromLng=start.lng;
-    function step(now){var t=Math.min(1,(now-started)/duration),eased=t*t*(3-2*t);marker.setLatLng([fromLat+(target[0]-fromLat)*eased,fromLng+(target[1]-fromLng)*eased]);if(t<1)marker._motionFrame=requestAnimationFrame(step);else marker._motionFrame=null;}
+    function step(now){var t=Math.min(1,(now-started)/duration),position=[fromLat+(target[0]-fromLat)*t,fromLng+(target[1]-fromLng)*t];marker.setLatLng(position);if(follow&&followSelected)map.panTo(position,{animate:false});if(t<1)marker._motionFrame=requestAnimationFrame(step);else marker._motionFrame=null;}
     marker._motionFrame=requestAnimationFrame(step);
+  }
+  function reportMoveDuration(marker,point){
+    var receivedAt=Date.now();
+    var reportTime=Date.parse(point.recordedAt||'');
+    var gap=Number.isFinite(reportTime)&&Number.isFinite(marker._reportTime)?reportTime-marker._reportTime:0;
+    if(Number.isFinite(reportTime))marker._reportTime=reportTime;
+    var elapsed=Number.isFinite(marker._targetReceivedAt)?receivedAt-marker._targetReceivedAt:0;
+    marker._targetReceivedAt=receivedAt;
+    return Math.min(12000,Math.max(3000,gap,elapsed));
   }
   window.applyFleet=function(points,route,selectedId,center){
     var visible={};
@@ -62,8 +71,8 @@ if(window.L){
       var cls='bike-marker '+(p.status==='online'?'bike-online':'bike-offline')+(p.active?' bike-selected':'');
       var icon=L.divIcon({className:'',html:'<div class="'+cls+'"></div>',iconSize:[37,37],iconAnchor:[18,18]});
       var target=[p.latitude,p.longitude],marker=markers[p.id];
-      if(marker){var distance=map.distance(marker.getLatLng(),target);if(distance>3)moveMarker(marker,target,Math.min(3000,Math.max(700,distance/12)));marker.setIcon(icon);marker.setPopupContent(p.label);}
-      else{marker=L.marker(target,{icon:icon}).addTo(map).bindPopup(p.label);marker.on('click',function(){if(window.ReactNativeWebView)window.ReactNativeWebView.postMessage(p.id)});markers[p.id]=marker;}
+      if(marker){var targetDistance=marker._targetLatLng?map.distance(marker._targetLatLng,target):Infinity;if(targetDistance>0.2){var distance=map.distance(marker.getLatLng(),target);if(distance>3)moveMarker(marker,target,reportMoveDuration(marker,p),p.active);else reportMoveDuration(marker,p);marker._targetLatLng=target;}else if(p.recordedAt){var reportTime=Date.parse(p.recordedAt);if(Number.isFinite(reportTime)&&reportTime>marker._reportTime){marker._reportTime=reportTime;marker._targetReceivedAt=Date.now();}}marker.setIcon(icon);marker.setPopupContent(p.label);}
+      else{marker=L.marker(target,{icon:icon}).addTo(map).bindPopup(p.label);marker._reportTime=Date.parse(p.recordedAt||'');marker._targetReceivedAt=Date.now();marker._targetLatLng=target;marker.on('click',function(){if(window.ReactNativeWebView)window.ReactNativeWebView.postMessage(p.id)});markers[p.id]=marker;}
       if(p.active){selectedTarget=target;var accuracy=Number(p.accuracyMeters),circle=accuracyCircles[p.id];if(Number.isFinite(accuracy)&&accuracy>0&&accuracy<=10000){if(circle){circle.setLatLng(target);circle.setRadius(accuracy);}else{accuracyCircles[p.id]=L.circle(target,{radius:accuracy,color:'#0d467d',weight:1,opacity:.65,fillColor:'#1683e8',fillOpacity:.12,interactive:false}).addTo(map);}}else if(circle){map.removeLayer(circle);delete accuracyCircles[p.id];}}
       pointBounds.push(target);
     });
@@ -74,10 +83,8 @@ if(window.L){
     else if(route.length===1)routePoint=L.circleMarker(route[0],{radius:8,color:'#fff',weight:3,fillColor:'#1f6feb',fillOpacity:1}).addTo(map).bindPopup('One GPS point in this range; a route line needs at least two points.');
     var routeKey=route.length?route.length+':'+route[0].join(',')+':'+route[route.length-1].join(','):'';
     var selectedPoint=points.find(function(point){return point.id===selectedId;});
-    var selectedPosition=selectedPoint?[selectedPoint.latitude,selectedPoint.longitude]:null;
     var selectedPositionOutsideMap=selectedTarget&&!map.getBounds().contains(selectedTarget);
     var selectionChanged=selectedId&&selectedId!==previousSelected;
-    var selectedPositionChanged=selectedPosition&&(!lastSelectedPosition||map.distance(lastSelectedPosition,selectedPosition)>3);
     if(firstUpdate){
       if(routeLine)map.fitBounds(routeLine.getBounds(),{padding:[35,35],maxZoom:16});
       else if(routePoint)map.setView(route[0],16);
@@ -88,9 +95,7 @@ if(window.L){
     }else if(routeKey!==previousRouteKey&&routeLine){map.fitBounds(routeLine.getBounds(),{padding:[35,35],maxZoom:16});}
     else if(routeKey!==previousRouteKey&&routePoint){map.setView(route[0],16);}
     else if(selectionChanged&&selectedTarget){followSelected=true;updateFollowButton();map.flyTo(selectedTarget,Math.max(map.getZoom(),16),{duration:.7});}
-    else if(selectedTarget&&((followSelected&&selectedPositionChanged)||selectedPositionOutsideMap)){map.panTo(selectedTarget,{animate:true,duration:.8});}
-    if(selectedPosition)lastSelectedPosition=selectedPosition;
-    else lastSelectedPosition=null;
+    else if(selectedTarget&&!followSelected&&selectedPositionOutsideMap){map.panTo(selectedTarget,{animate:true,duration:.8});}
     previousRouteKey=routeKey;previousSelected=selectedId;
     var routeStatus=route.length>1?' · '+route.length+' route points shown':route.length===1?' · one route point; another GPS point is needed for a line':'';
     document.getElementById('status').textContent=points.length+' customer bike'+(points.length===1?'':'s')+' with a location'+routeStatus;
@@ -110,6 +115,7 @@ export default function LiveFleetMap({ selected, vehicles = [], route, onSelectV
       id: String(vehicle.id),
       latitude: Number(vehicle.location.latitude),
       longitude: Number(vehicle.location.longitude),
+      recordedAt: vehicle.location.recordedAt ?? null,
       label: `${vehicle.registration || vehicle.identifier || "Bike"} · ${vehicle.model || ""}`,
       status: vehicle.status === "online" ? "online" : "offline",
       accuracyMeters: Number.isFinite(Number(vehicle.location.accuracyMeters)) ? Number(vehicle.location.accuracyMeters) : null,

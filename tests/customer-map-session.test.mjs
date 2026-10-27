@@ -57,7 +57,12 @@ assert.doesNotMatch(app, /Waiting for next GPS update/, "the customer map must n
 assert.match(app, /if \(!selectedHasLocation\) return <View style=\{\[styles\.mapContainer/, "the customer app must not show the default Kenya map when the selected bike has no GPS position");
 assert.match(api, /if \(!location && tracker\.latitude != null && tracker\.longitude != null && tracker\.last_seen_at\)/, "customer location lookup must fall back to the tracker's saved coordinates when no location-history row exists");
 assert.match(fleetMap, /selectedPositionOutsideMap=selectedTarget&&!map\.getBounds\(\)\.contains\(selectedTarget\)/, "new tracker points outside the viewport must trigger recentering");
-assert.match(fleetMap, /\(\(followSelected&&selectedPositionChanged\)\|\|selectedPositionOutsideMap\)/, "the selected bike must be brought back into view when it leaves the map");
+assert.match(fleetMap, /function reportMoveDuration\(marker,point\)[\s\S]*Math\.min\(12000,Math\.max\(3000,gap,elapsed\)\)/, "live movement must animate across the GPS report interval");
+assert.match(fleetMap, /if\(follow&&followSelected\)map\.panTo\(position,\{animate:false\}\)/, "follow mode must move the camera continuously with the interpolated bike marker");
+assert.match(fleetMap, /recordedAt: vehicle\.location\.recordedAt \?\? null/, "live map animation must receive the GPS report timestamp");
+assert.match(fleetMap, /targetDistance>0\.2/, "repeated map polls with the same GPS point must not restart the marker animation");
+assert.doesNotMatch(fleetMap, /followSelected&&selectedPositionChanged\)\|\|selectedPositionOutsideMap/, "follow mode must not snap the camera to each new GPS point");
+assert.match(fleetMap, /else if\(selectedTarget&&!followSelected&&selectedPositionOutsideMap\)/, "a manually moved map must still bring an offscreen selected bike back into view");
 assert.match(operationsLiveMap, /window\.setInterval\(load, 3000\)/, "the operations live map must refresh automatically every three seconds");
 assert.match(operationsLiveMap, /Math\.min\(2700, Math\.max\(600, distance \/ 12\)\)/, "operations map markers must move smoothly between reported GPS points");
 assert.match(api, /const locationReport = tramigoLocation\(await tramigoRequest\(`\/api\/reports\/last_location\/\$\{encodeURIComponent\(cloudDeviceId\)\}`/);

@@ -737,7 +737,12 @@ function TrackingScreen({ selectedBike, onSelectBike, accessToken, vehicles = []
   const [refreshing, setRefreshing] = useState(false);
   const [now, setNow] = useState(Date.now());
   const { motorcycle, route, setRoute, loading, routeLoading, routeError, error, refresh, loadRoute } = useTracking({ motorcycleId: selectedBike.id, accessToken });
-  const bike = useMemo(() => motorcycle ? { ...selectedBike, ...motorcycle, location: motorcycle.location ?? selectedBike.location } : selectedBike, [motorcycle, selectedBike]);
+  // The overview location is only a cached snapshot. Wait for the selected
+  // bike's location endpoint (or socket) before putting a marker on the live
+  // map, so opening the screen never flashes an old point and then jumps.
+  const bike = useMemo(() => motorcycle
+    ? { ...selectedBike, ...motorcycle, location: motorcycle.location ?? null }
+    : { ...selectedBike, location: null }, [motorcycle, selectedBike]);
   const allFleetVehicles = useMemo(() => allVehicles.map(vehicle => vehicle.id === selectedBike.id ? { ...vehicle, ...bike } : vehicle), [allVehicles, bike, selectedBike.id]);
   const matchingVehicles = useMemo(() => {
     const query = vehicleSearch.trim().toLowerCase();
@@ -783,7 +788,7 @@ function TrackingScreen({ selectedBike, onSelectBike, accessToken, vehicles = []
     {!!error && <View style={styles.mapError}><Ionicons name="warning" color={colors.orange} /><Text numberOfLines={2} style={styles.mapErrorText}>{error}</Text></View>}
     <View style={[styles.mapSheet, { bottom: 12, height: undefined, paddingBottom: 14 }]}>
       <View style={styles.bikeTop}><View style={{ flex: 1 }}><Text style={styles.sheetBike}>{selectedBike.model}</Text><Text style={styles.cardSub}>{selectedBike.registration} · {locatedCount} of {allFleetVehicles.length} bikes reporting</Text></View><StatusPill status={status} /></View>
-      {bike.location ? <View style={styles.mapMetrics}><View style={{ flex: 1 }}><Text style={styles.microLabel}>SPEED</Text><Text style={styles.speed}>{currentSpeedKph ?? "—"} <Text style={styles.speedUnit}>km/h</Text></Text></View><View style={styles.metricDivider} /><View style={{ flex: 1 }}><Text style={styles.microLabel}>LAST UPDATE</Text><Text style={styles.lastUpdate}>{relativeTime(bike.location.recordedAt, now)}</Text></View></View> : <Text style={styles.stateMessage}>{error ?? "Waiting for this bike's first valid GPS location. Other bikes with locations remain visible."}</Text>}
+      {bike.location ? <View style={styles.mapMetrics}><View style={{ flex: 1 }}><Text style={styles.microLabel}>SPEED</Text><Text style={styles.speed}>{currentSpeedKph ?? "—"} <Text style={styles.speedUnit}>km/h</Text></Text></View><View style={styles.metricDivider} /><View style={{ flex: 1 }}><Text style={styles.microLabel}>LAST UPDATE</Text><Text style={styles.lastUpdate}>{relativeTime(bike.location.recordedAt, now)}</Text>{Number.isFinite(Number(bike.location.accuracyMeters)) && Number(bike.location.accuracyMeters) > 0 && <Text style={styles.gpsAccuracyHint}>GPS accuracy ±{Math.round(Number(bike.location.accuracyMeters))} m</Text>}</View></View> : <Text style={styles.stateMessage}>{error ?? "Waiting for this bike's first valid GPS location. Other bikes with locations remain visible."}</Text>}
       <View style={styles.rangeRow}>{ranges.map(item => <Pressable key={item} onPress={() => { setRange(item); if (route) loadRoute(item); }} style={[styles.rangeButton, range === item && styles.rangeActive]}><Text style={[styles.rangeText, range === item && styles.rangeTextActive]}>{item}</Text></Pressable>)}</View>
       <View style={{ flexDirection: "row", gap: 8 }}>
         <Pressable disabled={routeLoading} onPress={toggleRoute} style={[styles.outlineButton, { flex: 1, marginTop: 10 }]}>{routeLoading ? <ActivityIndicator color={colors.blue} /> : <><Ionicons name={route ? "git-branch" : "git-branch-outline"} color={colors.blue} /><Text style={styles.outlineButtonText}>{route ? "Hide selected bike route" : "View selected bike route"}</Text></>}</Pressable>

@@ -8,8 +8,26 @@ import { trackingApi } from "../services/tracking";
 // cadence and do not start a second request while Tramigo is still answering.
 const POLL_INTERVAL_MS = 15_000;
 
+function keepNewestLocation(incoming, existing) {
+  if (!existing?.location) return incoming;
+  if (!incoming?.location) return { ...incoming, location: existing.location };
+  const incomingTime = new Date(incoming.location.recordedAt ?? 0).getTime();
+  const existingTime = new Date(existing.location.recordedAt ?? 0).getTime();
+  return Number.isFinite(existingTime) && (!Number.isFinite(incomingTime) || existingTime > incomingTime)
+    ? { ...incoming, location: existing.location }
+    : incoming;
+}
+
+function locationIsOlder(incoming, existing) {
+  if (!existing) return false;
+  const incomingTime = new Date(incoming?.recordedAt ?? 0).getTime();
+  const existingTime = new Date(existing.recordedAt ?? 0).getTime();
+  return Number.isFinite(existingTime) && (!Number.isFinite(incomingTime) || incomingTime < existingTime);
+}
+
 export function useTracking({ motorcycleId, accessToken }) {
-  const [motorcycle, setMotorcycle] = useState(null);
+  const [loadedMotorcycle, setLoadedMotorcycle] = useState(null);
+  const motorcycle = loadedMotorcycle?.id === motorcycleId ? loadedMotorcycle.value : null;
   const [route, setRoute] = useState(null);
   const [loading, setLoading] = useState(true);
   const [routeLoading, setRouteLoading] = useState(false);
@@ -17,27 +35,27 @@ export function useTracking({ motorcycleId, accessToken }) {
   const [error, setError] = useState(null);
   const mounted = useRef(true);
   const appIsActive = useRef(AppState.currentState === "active");
-  const requestSequence = useRef(0);
   const routeSequence = useRef(0);
-  const refreshInFlight = useRef(false);
+  const refreshInFlight = useRef(new Set());
   const activeMotorcycleId = useRef(motorcycleId);
   activeMotorcycleId.current = motorcycleId;
 
   const refresh = useCallback(async () => {
-    if (refreshInFlight.current) return;
-    refreshInFlight.current = true;
     const requestedId = motorcycleId;
-    const sequence = ++requestSequence.current;
+    if (refreshInFlight.current.has(requestedId)) return;
+    refreshInFlight.current.add(requestedId);
     try {
       if (mounted.current && activeMotorcycleId.current === requestedId) setError(null);
       if (!accessToken) throw new Error("Please sign in to view your motorcycle.");
       const result = await trackingApi.getMotorcycle(motorcycleId, accessToken);
-      if (mounted.current && activeMotorcycleId.current === requestedId && requestSequence.current === sequence) setMotorcycle(result);
+      if (mounted.current && activeMotorcycleId.current === requestedId) {
+        setLoadedMotorcycle(current => ({ id: requestedId, value: keepNewestLocation(result, current?.id === requestedId ? current.value : null) }));
+      }
     } catch (cause) {
-      if (mounted.current && activeMotorcycleId.current === requestedId && requestSequence.current === sequence) setError(cause instanceof Error ? cause.message : "Location temporarily unavailable");
+      if (mounted.current && activeMotorcycleId.current === requestedId) setError(cause instanceof Error ? cause.message : "Location temporarily unavailable");
     } finally {
-      refreshInFlight.current = false;
-      if (mounted.current && activeMotorcycleId.current === requestedId && requestSequence.current === sequence) setLoading(false);
+      refreshInFlight.current.delete(requestedId);
+      if (mounted.current && activeMotorcycleId.current === requestedId) setLoading(false);
     }
   }, [accessToken, motorcycleId]);
 
@@ -62,7 +80,7 @@ export function useTracking({ motorcycleId, accessToken }) {
     mounted.current = true;
     appIsActive.current = AppState.currentState === "active";
     setLoading(true);
-    setMotorcycle(null);
+    setLoadedMotorcycle(null);
     setRoute(null);
     setRouteError(null);
     routeSequence.current += 1;
@@ -79,7 +97,12 @@ export function useTracking({ motorcycleId, accessToken }) {
     try {
       socket = trackingApi.connect(motorcycleId, accessToken, (location) => {
         if (mounted.current && activeMotorcycleId.current === motorcycleId && location) {
-          setMotorcycle((current) => current ? { ...current, location } : current);
+          setLoadedMotorcycle(current => {
+            const currentValue = current?.id === motorcycleId ? current.value : null;
+            if (locationIsOlder(location, currentValue?.location)) return current;
+            return { id: motorcycleId, value: { ...(currentValue ?? {}), location } };
+          });
+          setLoading(false);
           setError(null);
         }
       });
@@ -89,7 +112,6 @@ export function useTracking({ motorcycleId, accessToken }) {
 
     return () => {
       mounted.current = false;
-      requestSequence.current += 1;
       routeSequence.current += 1;
       if (pollTimer) clearInterval(pollTimer);
       appStateSubscription.remove();

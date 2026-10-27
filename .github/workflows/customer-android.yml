@@ -57,7 +57,7 @@ jobs:
           "$BUILD_TOOLS/apksigner" verify --verbose --print-certs "$APK" | tee certificate.txt
           grep -qi 'a57c3d1f9900e351e2c40586e0fc6edbd5972f325b69ed537005d176074c50d0' certificate.txt
           "$BUILD_TOOLS/aapt" dump badging "$APK" | head -1 | tee package.txt
-          grep -q "name='com.jixelstechnologies.customer' versionCode='24' versionName='1.0.21'" package.txt
+          grep -q "name='com.jixelstechnologies.customer' versionCode='25' versionName='1.0.22'" package.txt
           NATIVE_CODE=$("$BUILD_TOOLS/aapt" dump badging "$APK" | grep '^native-code:')
           for ABI in arm64-v8a armeabi-v7a; do echo "$NATIVE_CODE" | grep -q "'$ABI'"; done
           "$BUILD_TOOLS/aapt" dump badging "$APK" | grep -q "sdkVersion:'24'"
@@ -66,18 +66,18 @@ jobs:
           "$BUILD_TOOLS/aapt" dump xmltree "$APK" AndroidManifest.xml > manifest.txt
           grep -q 'expo-channel-name' manifest.txt
           grep -q 'production' manifest.txt
-          cp "$APK" Jixels-Customer-1.0.21.apk
-          sha256sum Jixels-Customer-1.0.21.apk > SHA256SUMS.txt
+          cp "$APK" Jixels-Customer-1.0.22.apk
+          sha256sum Jixels-Customer-1.0.22.apk > SHA256SUMS.txt
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: Jixels-Customer-1.0.21
+          name: Jixels-Customer-1.0.22
           path: |
-            Jixels-Customer-1.0.21.apk
+            Jixels-Customer-1.0.22.apk
             SHA256SUMS.txt
           retention-days: 30
       - name: Publish download
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          TAG="customer-1.0.21-build-${GITHUB_RUN_NUMBER}"
-          gh release create "$TAG" Jixels-Customer-1.0.21.apk SHA256SUMS.txt --target "$GITHUB_SHA" --title "Jixels Customer 1.0.21" --notes "Fixes customer security activation readiness and prevents stale refreshes from reversing recent monitoring and immobilizer changes. ARM 32-bit and 64-bit Android phone build, signed with the existing customer Android signing key."
+          TAG="customer-1.0.22-build-${GITHUB_RUN_NUMBER}"
+          gh release create "$TAG" Jixels-Customer-1.0.22.apk SHA256SUMS.txt --target "$GITHUB_SHA" --title "Jixels Customer 1.0.22" --notes "Opens Live Tracking on the latest tracker location, follows bike movement smoothly, and ignores older location updates. ARM 32-bit and 64-bit Android phone build, signed with the existing customer Android signing key."

@@ -276,24 +276,35 @@ async function customerBikeForUser(admin: SupabaseClient, userId: string, bikeId
 }
 
 async function bikeActivationReadiness(admin: SupabaseClient, bike: any) {
-  const { data: application, error } = await admin.from("screening_applications")
+  const { data: applications, error } = await admin.from("screening_applications")
     .select("tracker_installed_at,deposit_amount,requested_deposit_amount")
     .eq("customer_id", bike.customer_id)
     .eq("product_id", bike.id)
-    .order("created_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
+    .order("created_at", { ascending: false });
   if (error) return { ready: false, error };
-  const requested = Number(application?.requested_deposit_amount ?? 0);
-  const confirmedDeposit = Number(application?.deposit_amount ?? 0);
+  const applicationRows = applications ?? [];
+  const { data: paidDeposits, error: paymentError } = await admin.from("payments")
+    .select("amount,status")
+    .eq("customer_id", bike.customer_id)
+    .eq("product_id", bike.id)
+    .eq("payment_type", "deposit");
+  if (paymentError) return { ready: false, error: paymentError };
+  const requested = applicationRows.reduce((highest: number, row: any) => Math.max(highest, Number(row.requested_deposit_amount ?? 0)), 0);
+  const confirmedDeposit = Math.max(
+    applicationRows.reduce((highest: number, row: any) => Math.max(highest, Number(row.deposit_amount ?? 0)), 0),
+    (paidDeposits ?? []).reduce((total: number, payment: any) => {
+      const status = String(payment.status ?? "").toLowerCase();
+      return ["paid", "completed", "confirmed"].includes(status) ? total + Number(payment.amount ?? 0) : total;
+    }, 0),
+  );
   const depositPaid = requested > 0 && Number.isFinite(confirmedDeposit) && confirmedDeposit >= requested;
-  const installed = Boolean(application?.tracker_installed_at);
+  const installed = applicationRows.some((row: any) => Boolean(row.tracker_installed_at));
   return {
-    ready: Boolean(application && installed && depositPaid),
+    ready: Boolean(applicationRows.length && installed && depositPaid),
     error: null,
     installed,
     depositPaid,
-    message: !application
+    message: !applicationRows.length
       ? "This vehicle is not linked to an agent installation and confirmed deposit."
       : !installed
         ? "The agent must confirm tracker installation first."

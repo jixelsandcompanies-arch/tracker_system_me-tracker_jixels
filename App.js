@@ -844,6 +844,7 @@ function CustomerApp({ session, onLogout }) {
   const paymentTimers = useRef(new Set());
   const paymentSubmissionBusy = useRef(false);
   const notifiedTamperEvents = useRef(new Set());
+  const securityCommandAt = useRef({});
   const syncFlushActive = useRef(false);
   // Page navigation is immediate. Individual data screens own their real
   // request-loading state and show skeletons only while awaiting a response.
@@ -910,11 +911,16 @@ function CustomerApp({ session, onLogout }) {
         setMonitoringVehicles(bikes);
         setFinanceBalances(Object.fromEntries(bikes.map((vehicle) => [vehicle.id, vehicle.balance])));
         setMonthlyProgress(Object.fromEntries(bikes.map((vehicle) => [vehicle.id, vehicle.paidThisMonth])));
-        setSecurity(Object.fromEntries(bikes.map((vehicle) => [vehicle.id, {
-          monitoringArmed: vehicle.monitoringArmed,
-          immobilized: vehicle.immobilized,
-          tamperStatus: vehicle.tamperStatus,
-        }])));
+        setSecurity(current => Object.fromEntries(bikes.map((vehicle) => {
+          const previous = current[vehicle.id] ?? {};
+          const commandPending = Date.now() - (securityCommandAt.current[vehicle.id] ?? 0) < 10_000;
+          return [vehicle.id, {
+            ...previous,
+            monitoringArmed: commandPending ? previous.monitoringArmed ?? vehicle.monitoringArmed : vehicle.monitoringArmed,
+            immobilized: commandPending ? previous.immobilized ?? vehicle.immobilized : vehicle.immobilized,
+            tamperStatus: vehicle.tamperStatus,
+          }];
+        })));
         setProfile((current) => ({
           ...current,
           ...(overview.profile ? {
@@ -1009,7 +1015,8 @@ function CustomerApp({ session, onLogout }) {
         const lastTrustedLocation = raw.lastTrustedLocation ?? raw.tamper?.lastTrustedLocation ?? null;
         const lastTrustedAddress = raw.lastTrustedAddress ?? lastTrustedLocation?.address ?? raw.tamper?.lastTrustedAddress ?? null;
         const detectedAt = raw.tamperDetectedAt ?? raw.tamper?.detectedAt ?? raw.updatedAt ?? null;
-        const normalized = { monitoringArmed: raw.monitoringArmed ?? raw.armed ?? false, immobilized: raw.immobilized ?? false, securityReady: raw.securityReady ?? vehicle.securityReady ?? false, securityMessage: raw.securityMessage ?? vehicle.securityMessage, tamperStatus, lastTrustedLocation, lastTrustedAddress, tamperDetectedAt: detectedAt };
+        const commandPending = Date.now() - (securityCommandAt.current[vehicle.id] ?? 0) < 10_000;
+        const normalized = { ...(!commandPending ? { monitoringArmed: raw.monitoringArmed ?? raw.armed ?? false, immobilized: raw.immobilized ?? false } : {}), securityReady: raw.securityReady ?? vehicle.securityReady ?? false, securityMessage: raw.securityMessage ?? vehicle.securityMessage, tamperStatus, lastTrustedLocation, lastTrustedAddress, tamperDetectedAt: detectedAt };
         setSecurity(current => ({ ...current, [vehicle.id]: { ...current[vehicle.id], ...normalized } }));
         if (tamperStatus !== "tampered") continue;
         const eventId = `tamper-${vehicle.id}-${detectedAt ?? "active"}`;
@@ -1172,6 +1179,7 @@ function CustomerApp({ session, onLogout }) {
   };
   const updateMonitoring = async (vehicle, armed) => {
     try {
+      securityCommandAt.current[vehicle.id] = Date.now();
       await trackingApi.setMonitoring(vehicle.id, armed, session.accessToken);
       setSecurity(current => ({ ...current, [vehicle.id]: { ...current[vehicle.id], monitoringArmed: armed } }));
       setAlerts(current => upsertById(current, { id: `monitoring-${vehicle.id}-${Date.now()}`, type: "tracker", icon: armed ? "shield-checkmark-outline" : "shield-outline", title: armed ? "Vehicle monitoring armed" : "Vehicle monitoring disarmed", message: `${vehicle.registration}: ${armed ? "movement and tamper alerts are active" : "movement alerts paused; GPS remains online"}.`, age: "now", unread: true }));
@@ -1181,6 +1189,7 @@ function CustomerApp({ session, onLogout }) {
   const updateImmobilizer = async (vehicle, immobilized) => {
     if (!isOnline) { Alert.alert("You are offline", "A secure immobilizer command requires a live tracker connection."); return false; }
     try {
+      securityCommandAt.current[vehicle.id] = Date.now();
       await trackingApi.setImmobilizer(vehicle.id, immobilized, session.accessToken);
       setSecurity(current => ({ ...current, [vehicle.id]: { ...current[vehicle.id], immobilized } }));
       setAlerts(current => upsertById(current, { id: `immobilizer-${vehicle.id}-${Date.now()}`, type: "tracker", icon: immobilized ? "lock-closed-outline" : "lock-open-outline", title: immobilized ? "Vehicle immobilized" : "Engine start allowed", message: `${vehicle.registration}: ${immobilized ? "engine start is blocked after stationary confirmation" : "immobilizer released"}.`, age: "now", unread: true }));

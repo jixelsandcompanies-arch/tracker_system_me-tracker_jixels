@@ -35,12 +35,13 @@ export function getSession() {
 }
 
 export async function signIn(email, password) {
+  const normalizedEmail = String(email ?? "").trim().toLowerCase();
   if (supabaseUrl && supabaseKey) {
     try {
       const response = await fetch(`${supabaseUrl}/functions/v1/api/v1/admin/auth/login`, {
         method: "POST",
         headers: { apikey: supabaseKey, "Content-Type": "application/json" },
-        body: JSON.stringify({ email: email.trim(), password })
+        body: JSON.stringify({ email: normalizedEmail, password })
       });
       if (!response.ok) {
         const payload = await response.json().catch(() => ({}));
@@ -50,7 +51,7 @@ export async function signIn(email, password) {
       const result = await response.json();
       if (!result?.accessToken || !result?.user) return { error: "Authentication temporarily unavailable. Please try again in a few moments." };
       const expiresAt = Date.parse(result.expiresAt || "") || Date.now() + SESSION_TTL;
-      const session = { userId: result.user.id, email: result.user.email || email, name: result.user.name || "Administrator", role: result.user.role, accessToken: result.accessToken, refreshToken: result.refreshToken || null, expiresAt, lastActivity: Date.now() };
+      const session = { userId: result.user.id, email: result.user.email || normalizedEmail, name: result.user.name || "Administrator", role: result.user.role, accessToken: result.accessToken, refreshToken: result.refreshToken || null, expiresAt, lastActivity: Date.now() };
       persistSession(session);
       return { data: session };
     } catch (error) {

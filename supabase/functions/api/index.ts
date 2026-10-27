@@ -1125,8 +1125,11 @@ Deno.serve(async (request) => {
       ]);
       if (!linkedCustomer.data && !linkedDeposit.data) {
         const [customerCandidates, depositCandidates] = await Promise.all([
-          admin.from("payment_requests").select("id,phone,created_at").eq("status", "processing").eq("amount", Number(items.Amount)).gte("created_at", cutoff).order("created_at", { ascending: false }).limit(20),
-          admin.from("payments").select("id,payer_phone,created_at").eq("status", "processing").eq("payment_type", "deposit").eq("amount", Number(items.Amount)).gte("created_at", cutoff).order("created_at", { ascending: false }).limit(20),
+          // A previous API version could mark an already accepted prompt failed
+          // when its checkout-ID write failed. Include those recent rows so a
+          // successful Safaricom callback can repair them safely.
+          admin.from("payment_requests").select("id,phone,created_at").in("status", ["processing", "failed"]).eq("amount", Number(items.Amount)).gte("created_at", cutoff).order("created_at", { ascending: false }).limit(20),
+          admin.from("payments").select("id,payer_phone,created_at").in("status", ["processing", "failed"]).eq("payment_type", "deposit").eq("amount", Number(items.Amount)).gte("created_at", cutoff).order("created_at", { ascending: false }).limit(20),
         ]);
         const customerMatches = (customerCandidates.data ?? []).filter((item: any) => String(item.phone ?? "").replace(/\D/g, "") === callbackPhone);
         const depositMatches = (depositCandidates.data ?? []).filter((item: any) => String(item.payer_phone ?? "").replace(/\D/g, "") === callbackPhone);
@@ -1779,6 +1782,8 @@ Deno.serve(async (request) => {
       return fail("The payment phone could not be saved.", 503, "PAYMENT_PHONE_SAVE_FAILED");
     }
 
+    let providerAccepted = false;
+    let checkoutRequestId = "";
     try {
       const timestamp = new Date().toISOString().replace(/[-:TZ.]/g, "").slice(0, 14);
       const result = await darajaPost("/mpesa/stkpush/v1/processrequest", {
@@ -1794,12 +1799,20 @@ Deno.serve(async (request) => {
         AccountReference: depositAccountNumber,
         TransactionDesc: "Bike deposit",
       });
-      const checkoutRequestId = stkCheckoutRequestId(result);
+      checkoutRequestId = stkCheckoutRequestId(result);
+      providerAccepted = true;
       const { error: checkoutUpdateError } = await admin.from("payments").update({ checkout_request_id: checkoutRequestId }).eq("id", payment.id);
       if (checkoutUpdateError) throw checkoutUpdateError;
       await admin.from("daraja_transactions").insert({ direction: "C2B", checkout_request_id: checkoutRequestId, account_reference: reference, phone: payerPhone, amount, status: "submitted", payload: result });
       return response({ payment: { id: payment.id, reference, status: "processing", checkoutRequestId } }, 202);
     } catch (error) {
+      if (providerAccepted) {
+        // The customer may already have entered their PIN. Keep the prompt
+        // reconcilable and never tell the agent it failed because our own DB
+        // write/logging failed after Safaricom accepted it.
+        console.error("Accepted agent STK prompt needs callback reconciliation", payment.id, checkoutRequestId, error);
+        return response({ payment: { id: payment.id, reference, status: "processing", checkoutRequestId }, reconciliationPending: true }, 202);
+      }
       await admin.from("payments").update({ status: "failed" }).eq("id", payment.id);
       return fail(error instanceof Error ? error.message : "M-Pesa request failed.", 502, "MPESA_ERROR");
     }
@@ -2315,8 +2328,26 @@ Deno.serve(async (request) => {
       }
       return fail("The payment could not be recorded.", 503, "PAYMENT_RECORD_FAILED");
     }
-    try { const timestamp = new Date().toISOString().replace(/[-:TZ.]/g, "").slice(0, 14); const result = await darajaPost("/mpesa/stkpush/v1/processrequest", { BusinessShortCode: Deno.env.get("DARAJA_SHORTCODE"), Password: stkPassword(timestamp), Timestamp: timestamp, TransactionType: "CustomerPayBillOnline", Amount: amount, PartyA: phone, PartyB: Deno.env.get("DARAJA_SHORTCODE"), PhoneNumber: phone, CallBackURL: Deno.env.get("DARAJA_STK_CALLBACK_URL"), AccountReference: customerAccountNumber, TransactionDesc: "Bike payment" }); const checkoutRequestId = stkCheckoutRequestId(result); const { error: linkError } = await admin.from("payment_requests").update({ provider_reference: checkoutRequestId, status: "processing", updated_at: new Date().toISOString() }).eq("id", payment.id); if (linkError) throw linkError; await admin.from("daraja_transactions").insert({ direction: "C2B", checkout_request_id: checkoutRequestId, account_reference: idempotencyKey, phone, amount, status: "submitted", payload: result }); return response({ ...payment, ...result }, 202); }
-    catch (cause) { await admin.from("payment_requests").update({ status: "failed", updated_at: new Date().toISOString() }).eq("id", payment.id); return fail(cause instanceof Error ? cause.message : "M-Pesa request failed.", 502, "MPESA_ERROR"); }
+    let providerAccepted = false;
+    let checkoutRequestId = "";
+    try {
+      const timestamp = new Date().toISOString().replace(/[-:TZ.]/g, "").slice(0, 14);
+      const result = await darajaPost("/mpesa/stkpush/v1/processrequest", { BusinessShortCode: Deno.env.get("DARAJA_SHORTCODE"), Password: stkPassword(timestamp), Timestamp: timestamp, TransactionType: "CustomerPayBillOnline", Amount: amount, PartyA: phone, PartyB: Deno.env.get("DARAJA_SHORTCODE"), PhoneNumber: phone, CallBackURL: Deno.env.get("DARAJA_STK_CALLBACK_URL"), AccountReference: customerAccountNumber, TransactionDesc: "Bike payment" });
+      checkoutRequestId = stkCheckoutRequestId(result);
+      providerAccepted = true;
+      const { error: linkError } = await admin.from("payment_requests").update({ provider_reference: checkoutRequestId, status: "processing", updated_at: new Date().toISOString() }).eq("id", payment.id);
+      if (linkError) throw linkError;
+      const { error: logError } = await admin.from("daraja_transactions").insert({ direction: "C2B", checkout_request_id: checkoutRequestId, account_reference: idempotencyKey, phone, amount, status: "submitted", payload: result });
+      if (logError) console.error("Accepted customer STK prompt transaction log failed", payment.id, checkoutRequestId, logError);
+      return response({ ...payment, ...result }, 202);
+    } catch (cause) {
+      if (providerAccepted) {
+        console.error("Accepted customer STK prompt needs callback reconciliation", payment.id, checkoutRequestId, cause);
+        return response({ ...payment, status: "processing", checkoutRequestId, reconciliationPending: true }, 202);
+      }
+      await admin.from("payment_requests").update({ status: "failed", updated_at: new Date().toISOString() }).eq("id", payment.id);
+      return fail(cause instanceof Error ? cause.message : "M-Pesa request failed.", 502, "MPESA_ERROR");
+    }
   }
   const statusMatch = route.match(/^\/v1\/customer\/motorcycles\/([^/]+)\/security-status$/);
   if (statusMatch && request.method === "GET") {

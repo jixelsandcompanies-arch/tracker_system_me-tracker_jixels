@@ -19,8 +19,16 @@ async function darajaToken() {
 async function darajaPost(path: string, payload: unknown) {
   const result = await fetch(`${darajaBase}${path}`, { method: "POST", headers: { Authorization: `Bearer ${await darajaToken()}`, "Content-Type": "application/json" }, body: JSON.stringify(payload) });
   const data = await result.json().catch(() => ({}));
-  if (!result.ok) throw new Error(data.errorMessage ?? data.errorDescription ?? "Daraja request failed.");
+  if (!result.ok) throw new Error(data.errorMessage ?? data.errorDescription ?? data.error_description ?? data.error ?? "Daraja request failed.");
   return data;
+}
+function stkCheckoutRequestId(result: any) {
+  if (String(result?.ResponseCode ?? "") !== "0") {
+    throw new Error(String(result?.ResponseDescription ?? result?.CustomerMessage ?? "Safaricom did not accept the STK request."));
+  }
+  const checkoutRequestId = String(result?.CheckoutRequestID ?? "");
+  if (!checkoutRequestId) throw new Error("Safaricom accepted no checkout request ID.");
+  return checkoutRequestId;
 }
 function stkPassword(timestamp: string) {
   const shortcode = Deno.env.get("DARAJA_SHORTCODE") ?? "";
@@ -357,6 +365,11 @@ function normalizeKenyanPhone(value: unknown) {
   return null;
 }
 
+function normalizeNationalId(value: unknown) {
+  const digits = String(value ?? "").replace(/\D/g, "");
+  return /^\d{1,12}$/.test(digits) ? digits : null;
+}
+
 type WifiGatewayAdapter = { activate: (session: any) => Promise<{ gatewaySessionId: string }>; revoke: (session: any) => Promise<void> };
 function wifiGateway(): WifiGatewayAdapter {
   const adapter = (Deno.env.get("WIFI_GATEWAY_ADAPTER") ?? "mock").toLowerCase();
@@ -640,16 +653,33 @@ async function resolvePaybillReference(admin: SupabaseClient, reference: string)
   const { data: directBikes } = await admin.from("bikes").select("id,identifier,customer_id").eq("identifier", reference).limit(2);
   const { data: plateTrackers } = await admin.from("trackers").select("bike_id,plate_number").eq("plate_number", reference).limit(3);
   const bikeIds = [...new Set([...(directBikes ?? []).map((bike: any) => String(bike.id)), ...(plateTrackers ?? []).map((tracker: any) => String(tracker.bike_id ?? "")).filter(Boolean)])];
-  if (bikeIds.length !== 1) return null;
-  const { data: bike } = await admin.from("bikes").select("id,identifier,customer_id").eq("id", bikeIds[0]).maybeSingle();
-  if (!bike?.customer_id) return null;
-  const { data: customer } = await admin.from("customers").select("email").eq("id", bike.customer_id).maybeSingle();
-  const { data: profile } = customer?.email
+  if (bikeIds.length === 1) {
+    const { data: bike } = await admin.from("bikes").select("id,identifier,customer_id").eq("id", bikeIds[0]).maybeSingle();
+    if (!bike?.customer_id) return null;
+    const { data: customer } = await admin.from("customers").select("email").eq("id", bike.customer_id).maybeSingle();
+    const { data: profile } = customer?.email
+      ? await admin.from("profiles").select("id").ilike("email", String(customer.email).trim()).maybeSingle()
+      : { data: null };
+    if (!profile?.id) return null;
+    const tracker = (plateTrackers ?? []).find((item: any) => String(item.bike_id) === String(bike.id));
+    return { vehicleId: null, bikeId: bike.id as string, ownerId: profile.id as string, registration: String(tracker?.plate_number || bike.identifier) };
+  }
+
+  const nationalId = normalizeNationalId(reference);
+  if (!nationalId) return null;
+  const { data: customers } = await admin.from("customers").select("id,email,national_id").eq("national_id", nationalId).limit(2);
+  if (customers?.length !== 1 || normalizeNationalId(customers[0].national_id) !== nationalId) return null;
+  const customer = customers[0];
+  const { data: customerBikes } = await admin.from("bikes").select("id,identifier").eq("customer_id", customer.id).limit(2);
+  // A national ID identifies a customer; for manual PayBill payments it must
+  // also identify one bike so the receipt can be allocated without guessing.
+  if (customerBikes?.length !== 1) return null;
+  const { data: profile } = customer.email
     ? await admin.from("profiles").select("id").ilike("email", String(customer.email).trim()).maybeSingle()
     : { data: null };
   if (!profile?.id) return null;
-  const tracker = (plateTrackers ?? []).find((item: any) => String(item.bike_id) === String(bike.id));
-  return { vehicleId: null, bikeId: bike.id as string, ownerId: profile.id as string, registration: String(tracker?.plate_number || bike.identifier) };
+  const { data: tracker } = await admin.from("trackers").select("plate_number").eq("bike_id", customerBikes[0].id).order("created_at", { ascending: true }).limit(1).maybeSingle();
+  return { vehicleId: null, bikeId: customerBikes[0].id as string, ownerId: profile.id as string, registration: String(tracker?.plate_number || customerBikes[0].identifier) };
 }
 
 async function saveCustomerPushToken(
@@ -1564,10 +1594,16 @@ Deno.serve(async (request) => {
     const payerPhone = normalizeKenyanPhone(body.paymentPhone);
     if (!Number.isFinite(amount) || amount <= 0 || !payerPhone) return fail("Enter a valid deposit amount and Kenyan payment phone number.", 422, "INVALID_PAYMENT");
     let { data: application, error: applicationError } = await admin.from("screening_applications")
-      .select("id,customer_id,product_id,bikes(payable_amount)")
+      .select("id,customer_id,product_id,national_id,bikes(payable_amount)")
       .eq("id", targetId).eq("installer_agent_id", user.id).maybeSingle();
-    if (!application && !applicationError) ({ data: application, error: applicationError } = await admin.from("screening_applications").select("id,customer_id,product_id,bikes(payable_amount)").eq("customer_id", targetId).eq("installer_agent_id", user.id).order("created_at", { ascending: false }).limit(1).maybeSingle());
+    if (!application && !applicationError) ({ data: application, error: applicationError } = await admin.from("screening_applications").select("id,customer_id,product_id,national_id,bikes(payable_amount)").eq("customer_id", targetId).eq("installer_agent_id", user.id).order("created_at", { ascending: false }).limit(1).maybeSingle());
     if (applicationError || !application?.customer_id || !application.product_id) return fail("Customer payment details could not be found.", 404, "CUSTOMER_NOT_FOUND");
+    let depositAccountNumber = normalizeNationalId(application.national_id);
+    if (!depositAccountNumber) {
+      const { data: depositCustomer } = await admin.from("customers").select("national_id").eq("id", application.customer_id).maybeSingle();
+      depositAccountNumber = normalizeNationalId(depositCustomer?.national_id);
+    }
+    if (!depositAccountNumber) return fail("The customer's national ID is missing or invalid. Update the customer record before requesting payment.", 409, "CUSTOMER_ID_MISSING");
     const payableAmount = Number((application.bikes as any)?.payable_amount ?? 0);
     if (payableAmount > 0 && amount > payableAmount) return fail("The deposit cannot be higher than the total payable amount.", 422, "INVALID_DEPOSIT");
 
@@ -1622,11 +1658,10 @@ Deno.serve(async (request) => {
         PartyB: Deno.env.get("DARAJA_SHORTCODE"),
         PhoneNumber: payerPhone,
         CallBackURL: Deno.env.get("DARAJA_STK_CALLBACK_URL"),
-        AccountReference: Deno.env.get("DARAJA_SHORTCODE"),
-        TransactionDesc: "Jixels tracker deposit",
+        AccountReference: depositAccountNumber,
+        TransactionDesc: "Bike deposit",
       });
-      const checkoutRequestId = String(result.CheckoutRequestID ?? "");
-      if (!checkoutRequestId) throw new Error("M-Pesa did not return a checkout request ID.");
+      const checkoutRequestId = stkCheckoutRequestId(result);
       const { error: checkoutUpdateError } = await admin.from("payments").update({ checkout_request_id: checkoutRequestId }).eq("id", payment.id);
       if (checkoutUpdateError) throw checkoutUpdateError;
       await admin.from("daraja_transactions").insert({ direction: "C2B", checkout_request_id: checkoutRequestId, account_reference: reference, phone: payerPhone, amount, status: "submitted", payload: result });
@@ -1906,13 +1941,13 @@ Deno.serve(async (request) => {
     const name = String(body.name ?? "").trim();
     const phone = String(body.phone ?? "").trim();
     const email = String(body.email ?? "").trim().toLowerCase();
-    const nationalId = String(body.nationalId ?? "").trim();
+    const nationalId = normalizeNationalId(body.nationalId);
     const location = String(body.location ?? "").trim();
     const plateNumber = String(body.plateNumber ?? "").trim().toUpperCase();
     const bikeId = String(body.bikeId ?? "").trim();
     const depositAmount = Number(body.depositAmount ?? 0);
     const dueDate = String(body.dueDate ?? "").trim();
-    if (!name || !phone || !email || !nationalId || !bikeId || !body.customerPhoto || !body.idFrontPhoto || !body.idBackPhoto) return fail("Enter the customer name, phone number, email address, national ID, assigned bike, and all three images.", 422, "INVALID_CUSTOMER_REGISTRATION");
+    if (!name || !phone || !email || !nationalId || !bikeId || !body.customerPhoto || !body.idFrontPhoto || !body.idBackPhoto) return fail("Enter the customer name, phone number, a valid national ID, assigned bike, and all three images.", 422, "INVALID_CUSTOMER_REGISTRATION");
     if (dueDate && (!/^\d{4}-\d{2}-\d{2}$/.test(dueDate) || Number.isNaN(Date.parse(`${dueDate}T00:00:00Z`)))) return fail("Choose a valid first installment due date.", 422, "INVALID_DUE_DATE");
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return fail("Enter a valid customer email address.", 422, "INVALID_EMAIL");
     if (!Number.isFinite(depositAmount) || depositAmount < 0) return fail("Enter a valid customer deposit amount.", 422, "INVALID_DEPOSIT");
@@ -2008,7 +2043,7 @@ Deno.serve(async (request) => {
   if (route === "/v1/customer/overview" && request.method === "GET") {
     const { data: profile, error: profileError } = await client.from("profiles").select("full_name,email,phone,avatar_url").single();
     if (profileError || !profile) return fail("This customer account is no longer available.", 404, "ACCOUNT_NOT_FOUND");
-    const { data: customer, error: customerError } = await admin.from("customers").select("id").ilike("email", String(profile.email ?? "").trim()).maybeSingle();
+    const { data: customer, error: customerError } = await admin.from("customers").select("id,national_id").ilike("email", String(profile.email ?? "").trim()).maybeSingle();
     if (customerError) return fail("Customer vehicles could not be loaded.", 503, "CUSTOMER_RECORDS_UNAVAILABLE");
     const { data: bikes, error: bikesError } = customer?.id
       ? await admin.from("bikes").select("id,identifier,model,product_type,payable_amount,status,trackers(identifier,plate_number,is_online,latitude,longitude,last_seen_at)").eq("customer_id", customer.id)
@@ -2038,7 +2073,7 @@ Deno.serve(async (request) => {
       const financeStatus = balance <= 0 ? "Completed" : dueAt && new Date(dueAt).getTime() < now ? "Overdue" : account?.data?.status ?? "On Track";
       return { id: bike.id, registration: bike.trackers?.[0]?.plate_number || bike.identifier, identifier: bike.identifier, model: bike.model || "Jixels vehicle", vehicle_type: bike.product_type, product_type: bike.product_type, tracker: bike.trackers?.[0]?.identifier ?? "Pending", status: bike.trackers?.[0]?.is_online ? "online" : "offline", is_online: Boolean(bike.trackers?.[0]?.is_online), latitude: bike.trackers?.[0]?.latitude, longitude: bike.trackers?.[0]?.longitude, last_seen_at: bike.trackers?.[0]?.last_seen_at, total, payable_amount: total, paid, balance, outstanding: balance, finance_status: financeStatus, monthly_payment: monthlyByBike.get(String(bike.id)) ?? 0, next_payment: dueAt ? new Date(dueAt).toLocaleDateString("en-KE", { timeZone: "Africa/Nairobi" }) : "", monitoring_armed: Boolean(bike.monitoring_armed), immobilized: Boolean(bike.immobilized) };
     });
-    return response({ profile, vehicles });
+    return response({ profile: { ...profile, national_id: customer?.national_id ?? null }, vehicles });
   }
   if (route === "/v1/customer/payments" && request.method === "DELETE") {
     const ids = Array.isArray(body.ids) ? [...new Set(body.ids.map(String).map((id: string) => id.trim()).filter(Boolean))].slice(0, 200) : [];
@@ -2102,9 +2137,13 @@ Deno.serve(async (request) => {
     const { data: vehicle } = await admin.from("vehicles").select("id").eq("id", body.vehicleId).eq("owner_id", user.id).maybeSingle();
     let vehicleId = vehicle?.id ?? null;
     let bikeId: string | null = null;
+    const { data: profile } = await admin.from("profiles").select("email").eq("id", user.id).maybeSingle();
+    const { data: customer } = profile?.email
+      ? await admin.from("customers").select("id,national_id").ilike("email", String(profile.email).trim()).maybeSingle()
+      : { data: null };
+    const customerAccountNumber = normalizeNationalId(customer?.national_id);
+    if (!customerAccountNumber) return fail("Your national ID is missing or invalid. Contact Jixels support before making a payment.", 409, "CUSTOMER_ID_MISSING");
     if (!vehicleId) {
-      const { data: profile } = await admin.from("profiles").select("email").eq("id", user.id).maybeSingle();
-      const { data: customer } = profile?.email ? await admin.from("customers").select("id").ilike("email", String(profile.email).trim()).maybeSingle() : { data: null };
       const { data: bike } = await admin.from("bikes").select("id,customer_id").eq("id", body.vehicleId).maybeSingle();
       if (!bike || !customer?.id || bike.customer_id !== customer.id) return fail("Vehicle not found.", 404, "NOT_FOUND");
       bikeId = bike.id;
@@ -2136,7 +2175,7 @@ Deno.serve(async (request) => {
       }
       return fail("The payment could not be recorded.", 503, "PAYMENT_RECORD_FAILED");
     }
-    try { const timestamp = new Date().toISOString().replace(/[-:TZ.]/g, "").slice(0, 14); const result = await darajaPost("/mpesa/stkpush/v1/processrequest", { BusinessShortCode: Deno.env.get("DARAJA_SHORTCODE"), Password: stkPassword(timestamp), Timestamp: timestamp, TransactionType: "CustomerPayBillOnline", Amount: amount, PartyA: phone, PartyB: Deno.env.get("DARAJA_SHORTCODE"), PhoneNumber: phone, CallBackURL: Deno.env.get("DARAJA_STK_CALLBACK_URL"), AccountReference: Deno.env.get("DARAJA_SHORTCODE"), TransactionDesc: "Tracker service payment" }); const checkoutRequestId = String(result.CheckoutRequestID ?? ""); if (!checkoutRequestId) throw new Error("M-Pesa did not return a checkout request ID."); const { error: linkError } = await admin.from("payment_requests").update({ provider_reference: checkoutRequestId, status: "processing", updated_at: new Date().toISOString() }).eq("id", payment.id); if (linkError) throw linkError; await admin.from("daraja_transactions").insert({ direction: "C2B", checkout_request_id: checkoutRequestId, account_reference: idempotencyKey, phone, amount, status: "submitted", payload: result }); return response({ ...payment, ...result }, 202); }
+    try { const timestamp = new Date().toISOString().replace(/[-:TZ.]/g, "").slice(0, 14); const result = await darajaPost("/mpesa/stkpush/v1/processrequest", { BusinessShortCode: Deno.env.get("DARAJA_SHORTCODE"), Password: stkPassword(timestamp), Timestamp: timestamp, TransactionType: "CustomerPayBillOnline", Amount: amount, PartyA: phone, PartyB: Deno.env.get("DARAJA_SHORTCODE"), PhoneNumber: phone, CallBackURL: Deno.env.get("DARAJA_STK_CALLBACK_URL"), AccountReference: customerAccountNumber, TransactionDesc: "Bike payment" }); const checkoutRequestId = stkCheckoutRequestId(result); const { error: linkError } = await admin.from("payment_requests").update({ provider_reference: checkoutRequestId, status: "processing", updated_at: new Date().toISOString() }).eq("id", payment.id); if (linkError) throw linkError; await admin.from("daraja_transactions").insert({ direction: "C2B", checkout_request_id: checkoutRequestId, account_reference: idempotencyKey, phone, amount, status: "submitted", payload: result }); return response({ ...payment, ...result }, 202); }
     catch (cause) { await admin.from("payment_requests").update({ status: "failed", updated_at: new Date().toISOString() }).eq("id", payment.id); return fail(cause instanceof Error ? cause.message : "M-Pesa request failed.", 502, "MPESA_ERROR"); }
   }
   const statusMatch = route.match(/^\/v1\/customer\/motorcycles\/([^/]+)\/security-status$/);

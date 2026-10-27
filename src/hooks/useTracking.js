@@ -35,27 +35,33 @@ export function useTracking({ motorcycleId, accessToken }) {
   const mounted = useRef(true);
   const appIsActive = useRef(AppState.currentState === "active");
   const routeSequence = useRef(0);
-  const refreshInFlight = useRef(new Set());
+  const refreshInFlight = useRef(new Map());
   const activeMotorcycleId = useRef(motorcycleId);
   activeMotorcycleId.current = motorcycleId;
 
   const refresh = useCallback(async () => {
     const requestedId = motorcycleId;
-    if (refreshInFlight.current.has(requestedId)) return;
-    refreshInFlight.current.add(requestedId);
-    try {
-      if (mounted.current && activeMotorcycleId.current === requestedId) setError(null);
-      if (!accessToken) throw new Error("Please sign in to view your motorcycle.");
-      const result = await trackingApi.getMotorcycle(motorcycleId, accessToken);
-      if (mounted.current && activeMotorcycleId.current === requestedId) {
-        setLoadedMotorcycle(current => ({ id: requestedId, value: keepNewestLocation(result, current?.id === requestedId ? current.value : null) }));
+    const pending = refreshInFlight.current.get(requestedId);
+    if (pending) return pending;
+    const request = Promise.resolve().then(async () => {
+      try {
+        if (mounted.current && activeMotorcycleId.current === requestedId) setError(null);
+        if (!accessToken) throw new Error("Please sign in to view your motorcycle.");
+        const result = await trackingApi.getMotorcycle(motorcycleId, accessToken);
+        if (mounted.current && activeMotorcycleId.current === requestedId) {
+          setLoadedMotorcycle(current => ({ id: requestedId, value: keepNewestLocation(result, current?.id === requestedId ? current.value : null) }));
+        }
+        return result;
+      } catch (cause) {
+        if (mounted.current && activeMotorcycleId.current === requestedId) setError(cause instanceof Error ? cause.message : "Location temporarily unavailable");
+        return null;
+      } finally {
+        refreshInFlight.current.delete(requestedId);
+        if (mounted.current && activeMotorcycleId.current === requestedId) setLoading(false);
       }
-    } catch (cause) {
-      if (mounted.current && activeMotorcycleId.current === requestedId) setError(cause instanceof Error ? cause.message : "Location temporarily unavailable");
-    } finally {
-      refreshInFlight.current.delete(requestedId);
-      if (mounted.current && activeMotorcycleId.current === requestedId) setLoading(false);
-    }
+    });
+    refreshInFlight.current.set(requestedId, request);
+    return request;
   }, [accessToken, motorcycleId]);
 
   const loadRoute = useCallback(async (range) => {

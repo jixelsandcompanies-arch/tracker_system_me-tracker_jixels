@@ -729,6 +729,7 @@ function TrackingScreen({ selectedBike, onSelectBike, accessToken, vehicles = []
   const [vehicleSearch, setVehicleSearch] = useState(`${selectedBike.registration} • ${selectedBike.model}`);
   const [vehiclePickerOpen, setVehiclePickerOpen] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const [manualRefreshMessage, setManualRefreshMessage] = useState("");
   const [refreshSeconds, setRefreshSeconds] = useState(1);
   const { motorcycle, route, setRoute, loading, routeLoading, routeError, error, refresh, loadRoute } = useTracking({ motorcycleId: selectedBike.id, accessToken });
   // The overview location is only a cached snapshot. Wait for the selected
@@ -753,6 +754,7 @@ function TrackingScreen({ selectedBike, onSelectBike, accessToken, vehicles = []
     ? Math.round(Number(bike.location.speedKph))
     : null;
   useEffect(() => { const timer = setInterval(() => setRefreshSeconds(value => value >= 5 ? 0 : value + 1), 1000); return () => clearInterval(timer); }, []);
+  useEffect(() => { if (!manualRefreshMessage) return undefined; const timer = setTimeout(() => setManualRefreshMessage(""), 5000); return () => clearTimeout(timer); }, [manualRefreshMessage]);
   useEffect(() => { setVehicleSearch(`${selectedBike.registration} • ${selectedBike.model}`); setVehiclePickerOpen(false); }, [selectedBike.id, selectedBike.registration, selectedBike.model]);
   const selectBike = useCallback(id => {
     const vehicle = allFleetVehicles.find(item => String(item.id) === String(id));
@@ -760,8 +762,18 @@ function TrackingScreen({ selectedBike, onSelectBike, accessToken, vehicles = []
   }, [allFleetVehicles, onSelectBike]);
   const refreshLocation = async () => {
     if (refreshing) return;
+    const previousRecordedAt = bike.location?.recordedAt;
     setRefreshing(true);
-    try { await refresh(); } finally { setRefreshing(false); }
+    setManualRefreshMessage("Checking for a newer GPS position…");
+    try {
+      const result = await refresh();
+      const next = result?.location;
+      const nextTime = new Date(next?.recordedAt ?? 0).getTime();
+      const previousTime = new Date(previousRecordedAt ?? 0).getTime();
+      setManualRefreshMessage(next && Number.isFinite(nextTime) && nextTime > previousTime
+        ? "New GPS position received."
+        : next ? "No newer GPS position yet; showing the last saved location." : "GPS position is unavailable right now.");
+    } finally { setRefreshing(false); }
   };
   const toggleRoute = async () => {
     if (route) { setRoute(null); return; }
@@ -773,7 +785,7 @@ function TrackingScreen({ selectedBike, onSelectBike, accessToken, vehicles = []
     && Number.isFinite(Number(bike.location.latitude)) && Number.isFinite(Number(bike.location.longitude))
     && Number(bike.location.latitude) >= -90 && Number(bike.location.latitude) <= 90
     && Number(bike.location.longitude) >= -180 && Number(bike.location.longitude) <= 180;
-  if (!selectedHasLocation) return <View style={[styles.mapContainer, { backgroundColor: colors.surface }]}><View style={styles.mapState}><Ionicons name="location-outline" size={42} color={colors.blue} /><Text style={styles.stateTitle}>Bike location unavailable</Text><Text style={styles.stateMessage}>{error ?? "No GPS position has been received from this bike yet. The app checks automatically every three seconds."}</Text><Pressable disabled={refreshing} onPress={refreshLocation} style={styles.tryButton}>{refreshing ? <ActivityIndicator color={colors.white} /> : <Text style={styles.primaryButtonText}>Check location</Text>}</Pressable></View></View>;
+  if (!selectedHasLocation) return <View style={[styles.mapContainer, { backgroundColor: colors.surface }]}><View style={styles.mapState}><Ionicons name="location-outline" size={42} color={colors.blue} /><Text style={styles.stateTitle}>Bike location unavailable</Text><Text style={styles.stateMessage}>{error ?? "No GPS position has been received from this bike yet. The app checks automatically every three seconds."}</Text>{!!manualRefreshMessage && <Text style={styles.stateMessage}>{manualRefreshMessage}</Text>}<Pressable accessibilityRole="button" accessibilityLabel="Refresh GPS location now" disabled={refreshing} onPress={refreshLocation} style={styles.tryButton}>{refreshing ? <ActivityIndicator color={colors.white} /> : <Text style={styles.primaryButtonText}>Refresh now</Text>}</Pressable></View></View>;
   return <View style={[styles.mapContainer, { backgroundColor: colors.surface }]}>
     <LiveFleetMap selected={bike} vehicles={allFleetVehicles} route={route} onSelectVehicle={selectBike} />
     <View style={styles.vehiclePicker}>
@@ -791,8 +803,9 @@ function TrackingScreen({ selectedBike, onSelectBike, accessToken, vehicles = []
       <View style={styles.rangeRow}>{ranges.map(item => <Pressable key={item} onPress={() => { setRange(item); if (route) loadRoute(item); }} style={[styles.rangeButton, range === item && styles.rangeActive]}><Text style={[styles.rangeText, range === item && styles.rangeTextActive]}>{item}</Text></Pressable>)}</View>
       <View style={{ flexDirection: "row", gap: 8 }}>
         <Pressable disabled={routeLoading} onPress={toggleRoute} style={[styles.outlineButton, { flex: 1, marginTop: 10 }]}>{routeLoading ? <ActivityIndicator color={colors.blue} /> : <><Ionicons name={route ? "git-branch" : "git-branch-outline"} color={colors.blue} /><Text style={styles.outlineButtonText}>{route ? "Hide selected bike route" : "View selected bike route"}</Text></>}</Pressable>
-        <Pressable disabled={refreshing} onPress={refreshLocation} style={[styles.outlineButton, { marginTop: 10, paddingHorizontal: 13 }]}>{refreshing ? <ActivityIndicator color={colors.blue} /> : <Ionicons name="refresh" size={18} color={colors.blue} />}</Pressable>
+        <Pressable accessibilityRole="button" accessibilityLabel={refreshing ? "Checking for a new GPS location" : "Refresh GPS location now"} disabled={refreshing} onPress={refreshLocation} style={[styles.outlineButton, { marginTop: 10, paddingHorizontal: 13 }]}>{refreshing ? <ActivityIndicator color={colors.blue} /> : <><Ionicons name="refresh" size={18} color={colors.blue} /><Text style={[styles.outlineButtonText, { marginLeft: 6 }]}>Refresh now</Text></>}</Pressable>
       </View>
+      {!!manualRefreshMessage && <Text accessibilityLiveRegion="polite" style={styles.stateMessage}>{manualRefreshMessage}</Text>}
       {routeError && <Text style={styles.stateMessage}>{routeError}</Text>}
       {route && routeCoordinates.length >= 2 && <View style={styles.tripRow}><Text style={styles.tripText}>{Number(route.distanceKm ?? 0).toFixed(2)} km travelled</Text><Text style={styles.tripText}>{Math.floor((route.durationMinutes ?? 0) / 60)}h {(route.durationMinutes ?? 0) % 60}m</Text><Text style={styles.tripText}>{route.stops ?? 0} stops</Text></View>}
       {route && routeCoordinates.length < 2 && <Text style={styles.stateMessage}>{route.providerRouteError ? "Tramigo route history could not be reached, and there are not enough saved GPS points for this time range." : routeCoordinates.length === 1 ? "One GPS point was found. At least two points are needed to draw a route or calculate distance." : route.message || "No saved GPS points for this bike and time range."}</Text>}

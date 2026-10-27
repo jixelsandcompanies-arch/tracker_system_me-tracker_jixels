@@ -44,6 +44,9 @@ assert.match(fleetMap, /map\.fitBounds\(routeLine\.getBounds\(/, "loading a hist
 assert.match(fleetMap, /routePoint=L\.circleMarker/, "a single returned GPS point must be visible even when a line cannot be drawn");
 assert.match(trackingHook, /const POLL_INTERVAL_MS = 3_000/, "the customer live map must refresh automatically every three seconds");
 assert.match(trackingHook, /setInterval\(poll, POLL_INTERVAL_MS\)/, "location refresh must continue automatically while the tracking screen is active");
+assert.match(trackingHook, /const pending = refreshInFlight\.current\.get\(requestedId\);\s*if \(pending\) return pending;/, "manual refresh taps must join an in-flight automatic location check instead of being dropped");
+assert.match(app, /accessibilityLabel=\{refreshing \? "Checking for a new GPS location" : "Refresh GPS location now"\}/, "manual refresh must be accessible and clearly labeled");
+assert.match(app, /No newer GPS position yet; showing the last saved location\./, "manual refresh must explain when no new tracker fix was available");
 assert.match(fleetMap, /L\.map\('map',\{zoomControl:false\}\)/, "Leaflet's default zoom controls must not overlap the vehicle search bar");
 assert.match(fleetMap, /L\.control\.zoom\(\{position:'topright'\}\)/, "zoom controls must be grouped on the right below the search bar");
 assert.match(fleetMap, /\.leaflet-top\.leaflet-right\{top:60px\}/, "zoom controls must sit below the search bar");

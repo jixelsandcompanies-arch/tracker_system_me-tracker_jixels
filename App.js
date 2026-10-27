@@ -1213,8 +1213,9 @@ function CustomerApp({ session, onLogout }) {
   const updateMonitoring = async (vehicle, armed) => {
     try {
       securityCommandAt.current[vehicle.id] = Date.now();
-      await trackingApi.setMonitoring(vehicle.id, armed, session.accessToken);
-      setSecurity(current => ({ ...current, [vehicle.id]: { ...current[vehicle.id], monitoringArmed: armed } }));
+      const saved = await trackingApi.setMonitoring(vehicle.id, armed, session.accessToken);
+      if (saved?.enabled !== armed) throw new Error("The server did not confirm the monitoring state.");
+      setSecurity(current => ({ ...current, [vehicle.id]: { ...current[vehicle.id], monitoringArmed: saved.enabled } }));
       setAlerts(current => upsertById(current, { id: `monitoring-${vehicle.id}-${Date.now()}`, type: "tracker", icon: armed ? "shield-checkmark-outline" : "shield-outline", title: armed ? "Vehicle monitoring armed" : "Vehicle monitoring disarmed", message: `${vehicle.registration}: ${armed ? "movement and tamper alerts are active" : "movement alerts paused; GPS remains online"}.`, age: "now", unread: true }));
       return true;
     } catch (error) { Alert.alert("Command failed", error instanceof ApiError ? error.message : "Monitoring could not be updated."); return false; }

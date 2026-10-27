@@ -2421,11 +2421,14 @@ Deno.serve(async (request) => {
         ? await tramigoRequest(tramigoPath(configuredPath!, deviceId), { method: "POST", body: { deviceId, imei: deviceId, enabled, immobilized: enabled } })
         : null;
       const update = action === "monitoring" ? { monitoring_armed: enabled, updated_at: new Date().toISOString() } : { immobilized: enabled, updated_at: new Date().toISOString() };
-      const { error } = bike
-        ? await admin.from("bikes").update(update).eq("id", vehicleId).eq("customer_id", bike.customer_id)
-        : await admin.from("vehicles").update(update).eq("id", vehicleId).eq("owner_id", user.id);
+      const { data: savedState, error } = bike
+        ? await admin.from("bikes").update(update).eq("id", vehicleId).eq("customer_id", bike.customer_id).select("id,monitoring_armed,immobilized").maybeSingle()
+        : await admin.from("vehicles").update(update).eq("id", vehicleId).eq("owner_id", user.id).select("id,monitoring_armed,immobilized").maybeSingle();
       if (error) return fail("Tramigo accepted the command, but the security state could not be saved.", 502, "STATE_SYNC_FAILED");
-      return response({ vehicleId, action, enabled, provider });
+      if (!savedState) return fail("The security setting was not saved for this vehicle. Refresh the bike and try again.", 409, "STATE_NOT_SAVED");
+      const savedEnabled = Boolean(action === "monitoring" ? savedState.monitoring_armed : savedState.immobilized);
+      if (savedEnabled !== enabled) return fail("The database did not confirm the requested security setting. Try again.", 409, "STATE_NOT_CONFIRMED");
+      return response({ vehicleId, action, enabled: savedEnabled, provider });
     } catch (error) { return fail(error instanceof Error ? error.message : "Tramigo command failed.", 502, "TRAMIGO_ERROR"); }
   }  if (route === "/v1/customer/profile" && request.method === "PATCH") {
     const { data, error } = await client.from("profiles").update({ full_name: body.fullName, phone: body.phone, avatar_url: body.avatarUrl, updated_at: new Date().toISOString() }).eq("id", user.id).select().single();

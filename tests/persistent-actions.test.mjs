@@ -7,7 +7,7 @@ const api = read("../supabase/functions/api/index.ts");
 const customer = read("../App.js");
 const agent = read("../Jixels angets/App.js");
 const customerApp = read("../App.js");
-const trackerSpeedMigration = read("../supabase/migrations/202610250002_tracker_speed_is_optional.sql");
+const trackerSpeedMigration = read("../supabase/migrations/202610250004_tracker_speed_is_optional.sql");
 
 assert.match(migration, /tracker_installed_at/);
 assert.match(migration, /agent_alert_states/);

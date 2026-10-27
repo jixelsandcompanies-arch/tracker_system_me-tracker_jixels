@@ -56,8 +56,8 @@ assert.match(fleetMap, /#follow-bike\{display:flex;width:42px;height:42px;.*bord
 assert.match(fleetMap, /followButton\.setAttribute\('aria-label',label\)/, "compact follow button must retain an accessible state label");
 assert.match(app, /currentSpeedKph == null \? "—"/, "missing or stale tracker speed must not be displayed as zero");
 assert.match(app, /SPEED · GPS EST\./, "estimated GPS speed must be clearly identified in the customer app");
-assert.match(app, /useState\(1\);[\s\S]*setRefreshSeconds\(value => value >= 5 \? 0 : value \+ 1\), 1000\)/, "the customer map refresh counter must loop 1 through 5 then zero once per second");
-assert.match(app, /<Text style=\{styles\.microLabel\}>AUTO UPDATE<\/Text>/, "the counter must be labeled as an automatic app update cycle");
+assert.match(app, /useState\(3\);[\s\S]*setRefreshSeconds\(value => value <= 1 \? 3 : value - 1\), 1000\)/, "the customer map countdown must loop from three seconds to one second");
+assert.match(app, /<Text style=\{styles\.microLabel\}>AUTO UPDATE IN<\/Text>/, "the counter must show when the next automatic refresh is due");
 assert.doesNotMatch(app, /Waiting for next GPS update/, "the customer map must not show the confusing next-GPS waiting message");
 assert.match(app, /if \(!selectedHasLocation\) return <View style=\{\[styles\.mapContainer/, "the customer app must not show the default Kenya map when the selected bike has no GPS position");
 assert.match(api, /if \(!location && tracker\.latitude != null && tracker\.longitude != null && tracker\.last_seen_at\)/, "customer location lookup must fall back to the tracker's saved coordinates when no location-history row exists");

@@ -56,11 +56,12 @@ assert.match(app, /if \(seconds <= 5\) return `\$\{seconds\} sec ago`;/, "the di
 assert.match(app, /Waiting for next GPS update/, "the customer map must clearly indicate when a new GPS fix has not arrived");
 assert.match(fleetMap, /selectedPositionOutsideMap=selectedTarget&&!map\.getBounds\(\)\.contains\(selectedTarget\)/, "new tracker points outside the viewport must trigger recentering");
 assert.match(fleetMap, /\(\(followSelected&&selectedPositionChanged\)\|\|selectedPositionOutsideMap\)/, "the selected bike must be brought back into view when it leaves the map");
-assert.match(operationsLiveMap, /window\.setInterval\(load, 5000\)/, "the operations live map must refresh automatically every five seconds");
+assert.match(operationsLiveMap, /window\.setInterval\(load, 3000\)/, "the operations live map must refresh automatically every three seconds");
 assert.match(operationsLiveMap, /Math\.min\(2700, Math\.max\(600, distance \/ 12\)\)/, "operations map markers must move smoothly between reported GPS points");
 assert.match(api, /const locationReport = tramigoLocation\(await tramigoRequest\(`\/api\/reports\/last_location\/\$\{encodeURIComponent\(cloudDeviceId\)\}`/);
 assert.match(api, /latestReport = tramigoLocation\(await tramigoRequest\(`\/api\/reports\/last\/\$\{encodeURIComponent\(cloudDeviceId\)\}`/);
 assert.match(api, /new Date\(latestReport\.recordedAt\)\.getTime\(\) >= new Date\(locationReport\.recordedAt\)\.getTime\(\)/, "speed fallback must never overwrite a newer GPS fix");
-assert.match(api, /p_max_requests: 1, p_window_seconds: 15/, "three-second map polling must pace real Tramigo reads to one per 15 seconds instead of bursting provider requests");
+assert.match(api, /p_max_requests: 1, p_window_seconds: 3/, "customer map polling must allow one paced Tramigo read every three seconds");
+assert.match(operationsLiveMap, /window\.setInterval\(load, 3000\)/, "the operations live map must refresh automatically every three seconds");
 
 console.log("Customer map and session regression checks passed.");

@@ -219,8 +219,16 @@ async function fetchLatestTramigoLocation(identifier: string, existingSession?: 
   const session = existingSession ?? await tramigoSession();
   const catalogue = existingCatalogue ?? await tramigoRequest("/api/v2/devices?page=1&per_page=1000", {}, session);
   const cloudDeviceId = await tramigoCloudDeviceId(identifier, catalogue, session);
-  const report = await tramigoRequest(`/api/reports/last_location/${encodeURIComponent(cloudDeviceId)}`, {}, session);
-  return tramigoLocation(report);
+  const locationReport = tramigoLocation(await tramigoRequest(`/api/reports/last_location/${encodeURIComponent(cloudDeviceId)}`, {}, session));
+  if (locationReport?.speedKph != null) return locationReport;
+  // Tramigo's location endpoint can omit speed. The existing /reports/last
+  // integration returns the latest report with speed when the device sent it.
+  // Choose by report timestamp so the speed fallback never replaces a newer fix.
+  let latestReport = null;
+  try { latestReport = tramigoLocation(await tramigoRequest(`/api/reports/last/${encodeURIComponent(cloudDeviceId)}`, {}, session)); } catch (_) { /* last_location remains the fallback */ }
+  return latestReport?.recordedAt && (!locationReport || new Date(latestReport.recordedAt).getTime() >= new Date(locationReport.recordedAt).getTime())
+    ? latestReport
+    : locationReport;
 }
 
 function reportIsFresh(location: any, maxAgeMs = 60_000) {

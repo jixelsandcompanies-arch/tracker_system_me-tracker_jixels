@@ -18,7 +18,8 @@ const MAP_HTML = `<!doctype html>
 html,body,#map{margin:0;width:100%;height:100%;background:#e8f1fa;font-family:Arial,sans-serif}
 .leaflet-popup-content{font-weight:700;color:#0d467d}
 #status{position:absolute;z-index:500;left:12px;right:12px;bottom:12px;padding:10px 12px;border-radius:10px;background:#fff;color:#334155;font-size:13px;box-shadow:0 2px 10px #1233}
-#follow-bike{position:absolute;z-index:700;top:126px;right:12px;display:flex;width:42px;height:42px;align-items:center;justify-content:center;border:0;border-radius:50%;padding:0;background:#fff;color:#0d467d;box-shadow:0 2px 10px #1234;cursor:pointer}
+#follow-bike{display:flex;width:42px;height:42px;align-items:center;justify-content:center;border:0;border-radius:50%;padding:0;background:#fff;color:#0d467d;box-shadow:0 2px 10px #1234;cursor:pointer}
+#follow-bike.leaflet-control-follow{margin:10px 10px 0 0}
 #follow-bike svg{width:22px;height:22px}
 #follow-bike:focus-visible{outline:3px solid #68a9ed;outline-offset:2px}
 .leaflet-top.leaflet-right{top:60px}
@@ -33,10 +34,19 @@ if(window.L){
   L.control.zoom({position:'topright'}).addTo(map);
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'© OpenStreetMap'}).addTo(map).on('tileerror',function(){document.getElementById('status').textContent='Map tiles unavailable. Check your internet connection.'});
   var markers={},accuracyCircles={},routeLine=null,routePoint=null,firstUpdate=true,previousSelected=null,previousRouteKey='',lastSelectedPosition=null,selectedTarget=null,followSelected=true;
-  var followButton=document.createElement('button');followButton.id='follow-bike';followButton.type='button';followButton.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="7.5"></circle><circle cx="12" cy="12" r="2.2" fill="currentColor" stroke="none"></circle><path d="M12 1.75v3.5M12 18.75v3.5M1.75 12h3.5M18.75 12h3.5"></path></svg>';document.body.appendChild(followButton);
-  function updateFollowButton(){var label=followSelected?'Following bike':'Follow bike';followButton.setAttribute('aria-label',label);followButton.setAttribute('title',label);followButton.setAttribute('aria-pressed',String(followSelected));followButton.className=followSelected?'':'paused';}
+  var followButton=null;
+  var followControl=L.control({position:'topright'});
+  followControl.onAdd=function(){
+    followButton=L.DomUtil.create('button','leaflet-control-follow');
+    followButton.id='follow-bike';followButton.type='button';
+    followButton.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="7.5"></circle><circle cx="12" cy="12" r="2.2" fill="currentColor" stroke="none"></circle><path d="M12 1.75v3.5M12 18.75v3.5M1.75 12h3.5M18.75 12h3.5"></path></svg>';
+    L.DomEvent.disableClickPropagation(followButton);
+    L.DomEvent.on(followButton,'click',function(event){L.DomEvent.preventDefault(event);followSelected=true;updateFollowButton();if(selectedTarget)map.flyTo(selectedTarget,Math.max(map.getZoom(),16),{duration:.7});});
+    return followButton;
+  };
+  followControl.addTo(map);
+  function updateFollowButton(){if(!followButton)return;var label=followSelected?'Following bike':'Follow bike';followButton.setAttribute('aria-label',label);followButton.setAttribute('title',label);followButton.setAttribute('aria-pressed',String(followSelected));followButton.classList.toggle('paused',!followSelected);}
   map.on('dragstart',function(){followSelected=false;updateFollowButton();});
-  followButton.addEventListener('click',function(event){event.preventDefault();event.stopPropagation();followSelected=true;updateFollowButton();if(selectedTarget)map.flyTo(selectedTarget,Math.max(map.getZoom(),16),{duration:.7});});
   function moveMarker(marker,target,duration){
     if(marker._motionFrame)cancelAnimationFrame(marker._motionFrame);
     var start=marker.getLatLng(),started=performance.now(),fromLat=start.lat,fromLng=start.lng;

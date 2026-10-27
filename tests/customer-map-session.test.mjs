@@ -61,7 +61,7 @@ assert.match(operationsLiveMap, /Math\.min\(2700, Math\.max\(600, distance \/ 12
 assert.match(api, /const locationReport = tramigoLocation\(await tramigoRequest\(`\/api\/reports\/last_location\/\$\{encodeURIComponent\(cloudDeviceId\)\}`/);
 assert.match(api, /latestReport = tramigoLocation\(await tramigoRequest\(`\/api\/reports\/last\/\$\{encodeURIComponent\(cloudDeviceId\)\}`/);
 assert.match(api, /new Date\(latestReport\.recordedAt\)\.getTime\(\) >= new Date\(locationReport\.recordedAt\)\.getTime\(\)/, "speed fallback must never overwrite a newer GPS fix");
-assert.match(api, /p_max_requests: 1, p_window_seconds: 3/, "customer map polling must allow one paced Tramigo read every three seconds");
+assert.match(api, /p_max_requests: 1, p_window_seconds: 10/, "customer map polling must allow one paced Tramigo read every ten seconds");
 assert.match(operationsLiveMap, /window\.setInterval\(load, 3000\)/, "the operations live map must refresh automatically every three seconds");
 
 console.log("Customer map and session regression checks passed.");

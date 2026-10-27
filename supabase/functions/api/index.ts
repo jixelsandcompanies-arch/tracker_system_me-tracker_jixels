@@ -2136,7 +2136,7 @@ Deno.serve(async (request) => {
     const { data: customer, error: customerError } = await admin.from("customers").select("id,national_id").ilike("email", String(profile.email ?? "").trim()).maybeSingle();
     if (customerError) return fail("Customer vehicles could not be loaded.", 503, "CUSTOMER_RECORDS_UNAVAILABLE");
     const { data: bikes, error: bikesError } = customer?.id
-      ? await admin.from("bikes").select("id,identifier,model,product_type,payable_amount,status,trackers(identifier,plate_number,is_online,latitude,longitude,last_seen_at)").eq("customer_id", customer.id)
+      ? await admin.from("bikes").select("id,identifier,model,product_type,payable_amount,status,monitoring_armed,immobilized,trackers(identifier,plate_number,is_online,latitude,longitude,last_seen_at)").eq("customer_id", customer.id)
       : { data: [], error: null };
     if (bikesError) return fail("Customer vehicles could not be loaded.", 503, "CUSTOMER_RECORDS_UNAVAILABLE");
     const bikeIds = (bikes ?? []).map((bike: any) => bike.id);

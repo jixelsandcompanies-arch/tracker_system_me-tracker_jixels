@@ -4,9 +4,9 @@ import { trackingApi } from "../services/tracking";
 
 // Keep REST refresh active even while the socket is connected: some provider
 // integrations keep a socket open without delivering every fresh GPS report.
-// The API permits four provider reads per vehicle per minute. Match that
-// cadence and do not start a second request while Tramigo is still answering.
-const POLL_INTERVAL_MS = 15_000;
+// The API permits four provider reads per vehicle per minute. Leave a small
+// margin below that limit so timer drift cannot create a fifth read.
+const POLL_INTERVAL_MS = 16_000;
 
 function keepNewestLocation(incoming, existing) {
   if (!existing?.location) return incoming;

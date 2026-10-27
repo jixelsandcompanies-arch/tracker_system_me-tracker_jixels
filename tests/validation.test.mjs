@@ -52,11 +52,11 @@ test("stable IDs prevent duplicate production records", () => {
   assert.equal(dedupeById([{ id: "a" }, { id: "a" }, { id: "b" }]).length, 2);
 });
 
-test("Tramigo active status takes precedence over an old position timestamp", () => {
+test("old GPS positions remain delayed even when Tramigo reports the device online", () => {
   const oldPosition = "2020-01-01T00:00:00.000Z";
   assert.equal(normalizeProviderTrackerStatus({ deviceStatus: "Active" }), "online");
   assert.equal(normalizeProviderTrackerStatus({ isOnline: false }), "offline");
-  assert.equal(trackerState({ providerStatus: "online", recordedAt: oldPosition }), "online");
+  assert.equal(trackerState({ providerStatus: "online", recordedAt: oldPosition }), "stale");
   assert.equal(trackerState({ providerStatus: "offline", recordedAt: new Date().toISOString() }), "offline");
   assert.equal(trackerState({ recordedAt: oldPosition }), "offline");
 });

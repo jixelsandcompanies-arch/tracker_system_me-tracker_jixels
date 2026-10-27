@@ -18,7 +18,8 @@ const MAP_HTML = `<!doctype html>
 html,body,#map{margin:0;width:100%;height:100%;background:#e8f1fa;font-family:Arial,sans-serif}
 .leaflet-popup-content{font-weight:700;color:#0d467d}
 #status{position:absolute;z-index:500;left:12px;right:12px;bottom:12px;padding:10px 12px;border-radius:10px;background:#fff;color:#334155;font-size:13px;box-shadow:0 2px 10px #1233}
-#follow-bike{position:absolute;z-index:700;top:12px;right:12px;border:0;border-radius:9px;padding:10px 12px;background:#fff;color:#0d467d;font-size:13px;font-weight:700;box-shadow:0 2px 10px #1234}
+#follow-bike{position:absolute;z-index:700;top:126px;right:12px;border:0;border-radius:9px;padding:10px 12px;background:#fff;color:#0d467d;font-size:13px;font-weight:700;box-shadow:0 2px 10px #1234}
+.leaflet-top.leaflet-right{top:60px}
 #follow-bike.paused{color:#475569}
 .bike-marker{width:25px;height:25px;border:3px solid white;border-radius:50%;box-shadow:0 1px 7px #1238}
 .bike-online{background:#16865f}.bike-offline{background:#d98221}.bike-selected{width:31px;height:31px;background:#0d467d}
@@ -26,7 +27,8 @@ html,body,#map{margin:0;width:100%;height:100%;background:#e8f1fa;font-family:Ar
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" onerror="document.getElementById('status').textContent='Map unavailable. Check your internet connection and try again.'"></script>
 <script>
 if(window.L){
-  var map=L.map('map',{zoomControl:true}).setView([__INITIAL_LAT__,__INITIAL_LNG__],__INITIAL_ZOOM__);
+  var map=L.map('map',{zoomControl:false}).setView([__INITIAL_LAT__,__INITIAL_LNG__],__INITIAL_ZOOM__);
+  L.control.zoom({position:'topright'}).addTo(map);
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'© OpenStreetMap'}).addTo(map).on('tileerror',function(){document.getElementById('status').textContent='Map tiles unavailable. Check your internet connection.'});
   var markers={},accuracyCircles={},routeLine=null,routePoint=null,firstUpdate=true,previousSelected=null,previousRouteKey='',lastSelectedPosition=null,selectedTarget=null,followSelected=true;
   var followButton=document.createElement('button');followButton.id='follow-bike';followButton.type='button';followButton.textContent='Following bike';document.body.appendChild(followButton);

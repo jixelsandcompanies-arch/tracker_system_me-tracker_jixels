@@ -2435,7 +2435,7 @@ Deno.serve(async (request) => {
     return error ? fail(error.message, 400) : response(data);
   }
   if (route === "/v1/customer/alerts" && request.method === "GET") {
-    const { data, error } = await admin.from("alerts").select("id,title,body,detail,kind,severity,created_at,read_at").eq("owner_id", user.id).order("created_at", { ascending: false }).limit(100);
+    const { data, error } = await admin.from("alerts").select("id,title,body,detail,kind,severity,created_at,read_at").eq("owner_id", user.id).or("kind.is.null,kind.neq.movement").order("created_at", { ascending: false }).limit(100);
     if (error) return fail("Your notifications are temporarily unavailable.", 503, "ALERTS_UNAVAILABLE");
     return response({ alerts: (data ?? []).map((alert: any) => ({ id: alert.id, title: alert.title, message: alert.detail || alert.body, type: alert.kind || "notification", icon: alert.kind === "payment" ? "wallet-outline" : alert.kind === "movement" ? "bicycle-outline" : "notifications-outline", severity: alert.severity, age: new Date(alert.created_at).toLocaleString("en-KE", { timeZone: "Africa/Nairobi" }), unread: !alert.read_at, createdAt: alert.created_at })) });
   }

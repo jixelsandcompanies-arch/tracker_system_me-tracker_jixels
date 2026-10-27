@@ -126,47 +126,5 @@ Deno.serve(async (request) => {
   });
   await Promise.all(workers);
 
-  let pushed = 0;
-  const { data: pendingMessages, error: messageError } = await admin.from("alerts")
-    .select("id,owner_id,title,body")
-    .eq("kind", "movement")
-    .is("push_sent_at", null)
-    .order("created_at", { ascending: true })
-    .limit(100);
-  if (messageError) console.error("Movement message push queue could not be loaded", messageError.message);
-  for (const message of pendingMessages ?? []) {
-    const { data: tokens, error: tokenError } = await admin.from("customer_push_tokens")
-      .select("expo_push_token")
-      .eq("customer_id", message.owner_id);
-    if (tokenError || !tokens?.length) continue;
-    const messages = tokens
-      .map((row: any) => String(row.expo_push_token ?? ""))
-      .filter((pushToken: string) => /^(?:Expo|Exponent)PushToken\[[^\]]+\]$/.test(pushToken))
-      .map((pushToken: string) => ({
-        to: pushToken,
-        sound: "default",
-        title: message.title,
-        body: message.body,
-        data: { type: "movement", eventId: message.id, screen: "alerts", inAppRecorded: true },
-      }));
-    if (!messages.length) continue;
-    try {
-      const pushResponse = await fetch("https://exp.host/--/api/v2/push/send", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Accept: "application/json" },
-        body: JSON.stringify(messages),
-        signal: AbortSignal.timeout(10_000),
-      });
-      const pushBody = await pushResponse.json().catch(() => null);
-      const tickets = Array.isArray(pushBody?.data) ? pushBody.data : [];
-      if (!pushResponse.ok || tickets.length !== messages.length || tickets.some((ticket: any) => ticket?.status !== "ok")) continue;
-      const { error: markPushError } = await admin.from("alerts").update({ push_sent_at: new Date().toISOString() })
-        .eq("id", message.id).is("push_sent_at", null);
-      if (markPushError) console.error("Movement push delivery could not be recorded", message.id, markPushError.message);
-      else pushed += 1;
-    } catch (error) {
-      console.error("Movement push send failed", message.id, error instanceof Error ? error.message : "unknown error");
-    }
-  }
-  return json({ scanned: work.length, recorded, skipped, pushed });
+  return json({ scanned: work.length, recorded, skipped });
 });

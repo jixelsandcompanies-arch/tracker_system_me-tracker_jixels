@@ -1086,6 +1086,7 @@ function CustomerApp({ session, onLogout }) {
   useEffect(() => {
     const received = Notifications.addNotificationReceivedListener(notification => {
       const content = notification.request.content;
+      if (content.data?.type === "movement") return;
       const eventId = content.data?.eventId ?? content.data?.mpesaReceiptNumber ?? notification.request.identifier;
       if (content.data?.type === "payment" && !shownPaymentNoticeIds.current.has(String(eventId))) {
         shownPaymentNoticeIds.current.add(String(eventId));

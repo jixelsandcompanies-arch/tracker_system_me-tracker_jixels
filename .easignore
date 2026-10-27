@@ -46,3 +46,9 @@ ios/
 credentials/
 credentials.json
 **/credentials.json
+
+# Local APK release archives are not source inputs for cloud builds
+release-apks/
+release-artifacts/
+**/release-apks/
+**/release-artifacts/

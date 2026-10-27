@@ -130,6 +130,7 @@ Deno.serve(async (request) => {
   const { data: pendingMessages, error: messageError } = await admin.from("alerts")
     .select("id,owner_id,title,body")
     .eq("kind", "movement")
+    .neq("title", "Vehicle movement confirmed")
     .is("push_sent_at", null)
     .order("created_at", { ascending: true })
     .limit(100);

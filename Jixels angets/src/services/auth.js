@@ -23,5 +23,6 @@ export const authApi = {
   updatePaymentPhone: (token, customerId, paymentPhone) => apiRequest(`/v1/agent/customers/${encodeURIComponent(customerId)}/payment-phone`, { method: "PATCH", token, body: { paymentPhone } }),
   updateInstallation: (token, customerId, installed) => apiRequest(`/v1/agent/customers/${encodeURIComponent(customerId)}/installation`, { method: "PATCH", token, body: { installed } }),
   promptDeposit: (token, customerId, amount, paymentPhone) => apiRequest(`/v1/agent/customers/${encodeURIComponent(customerId)}/deposit-prompt`, { method: "POST", token, body: { amount, paymentPhone } }),
+  generateReport: (token, customerId, date) => apiRequest("/v1/agent/reports", { method: "POST", token, body: { customerId, date, reportType: "routes" } }),
   requestPasswordReset: email => apiRequest("/v1/agent/auth/request-password-reset", { method: "POST", body: { email } })
 };

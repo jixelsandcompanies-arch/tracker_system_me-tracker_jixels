@@ -32,6 +32,12 @@
         "EXPO_PUBLIC_JIXELS_API_URL": "https://tpzebfvhvjsezynqgdns.supabase.co/functions/v1/api"
       },
       "channel": "production"
+    },
+    "production-apk": {
+      "extends": "production",
+      "android": {
+        "buildType": "apk"
+      }
     }
   },
   "submit": {

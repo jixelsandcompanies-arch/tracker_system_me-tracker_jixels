@@ -1110,23 +1110,58 @@ Deno.serve(async (request) => {
     const checkoutRequestId = String(callback.CheckoutRequestID ?? "");
     const paidAt = new Date().toISOString();
     const receipt = String(items.MpesaReceiptNumber ?? "").trim();
-    await admin.from("daraja_transactions").upsert({ direction: "C2B", checkout_request_id: checkoutRequestId || null, transaction_id: receipt || null, phone: items.PhoneNumber ?? null, amount: Number(items.Amount ?? 0), status: completed ? "completed" : "failed", payload: body, updated_at: paidAt }, { onConflict: "transaction_id" });
-    if (checkoutRequestId) {
-      const { data: customerPayment } = await admin.from("payment_requests").select("id,owner_id,vehicle_id,bike_id,amount,phone").eq("provider_reference", checkoutRequestId).maybeSingle();
-      if (customerPayment) {
-        const { error } = await admin.from("payment_requests").update({ status: completed ? "paid" : "failed", provider_reference: completed ? (receipt || checkoutRequestId) : checkoutRequestId, updated_at: paidAt }).eq("id", customerPayment.id);
-        if (error) console.error("Customer STK payment update failed", customerPayment.id, error);
-        if (completed) await syncCustomerPaymentToPortals(admin, customerPayment.id, receipt, paidAt);
+    const { error: callbackLogError } = await admin.from("daraja_transactions").upsert({ direction: "C2B", checkout_request_id: checkoutRequestId || null, transaction_id: receipt || null, phone: items.PhoneNumber ?? null, amount: Number(items.Amount ?? 0), status: completed ? "completed" : "failed", payload: body, updated_at: paidAt }, { onConflict: "transaction_id" });
+    if (callbackLogError) console.error("STK callback transaction log failed", checkoutRequestId, callbackLogError);
+    let paymentMatched = false;
+    let reconciliationFailed = Boolean(callbackLogError);
+    let fallbackCustomerPaymentId: string | null = null;
+    let fallbackDepositPaymentId: string | null = null;
+    if (completed && checkoutRequestId && items.PhoneNumber && Number(items.Amount) > 0) {
+      const callbackPhone = String(items.PhoneNumber).replace(/\D/g, "");
+      const cutoff = new Date(Date.now() - 10 * 60_000).toISOString();
+      const [linkedCustomer, linkedDeposit] = await Promise.all([
+        admin.from("payment_requests").select("id").eq("provider_reference", checkoutRequestId).maybeSingle(),
+        admin.from("payments").select("id").eq("checkout_request_id", checkoutRequestId).maybeSingle(),
+      ]);
+      if (!linkedCustomer.data && !linkedDeposit.data) {
+        const [customerCandidates, depositCandidates] = await Promise.all([
+          admin.from("payment_requests").select("id,phone,created_at").eq("status", "processing").eq("amount", Number(items.Amount)).gte("created_at", cutoff).order("created_at", { ascending: false }).limit(20),
+          admin.from("payments").select("id,payer_phone,created_at").eq("status", "processing").eq("payment_type", "deposit").eq("amount", Number(items.Amount)).gte("created_at", cutoff).order("created_at", { ascending: false }).limit(20),
+        ]);
+        const customerMatches = (customerCandidates.data ?? []).filter((item: any) => String(item.phone ?? "").replace(/\D/g, "") === callbackPhone);
+        const depositMatches = (depositCandidates.data ?? []).filter((item: any) => String(item.payer_phone ?? "").replace(/\D/g, "") === callbackPhone);
+        if (customerCandidates.error) console.error("Customer STK fallback query failed", checkoutRequestId, customerCandidates.error);
+        if (depositCandidates.error) console.error("Agent STK fallback query failed", checkoutRequestId, depositCandidates.error);
+        // Only recover when exactly one recent prompt across both products
+        // matches the callback. This avoids crediting an unrelated payment.
+        if (!customerCandidates.error && !depositCandidates.error && customerMatches.length + depositMatches.length === 1) {
+          fallbackCustomerPaymentId = customerMatches[0]?.id ?? null;
+          fallbackDepositPaymentId = depositMatches[0]?.id ?? null;
+        } else if (customerMatches.length + depositMatches.length > 1) {
+          console.error("STK callback matched multiple pending records; manual reconciliation required", checkoutRequestId);
+        }
       }
     }
     if (checkoutRequestId) {
-    const { data: promptedPayment, error: promptedPaymentError } = await admin
+      let { data: customerPayment } = await admin.from("payment_requests").select("id,owner_id,vehicle_id,bike_id,amount,phone").eq("provider_reference", checkoutRequestId).maybeSingle();
+      if (!customerPayment && fallbackCustomerPaymentId) ({ data: customerPayment } = await admin.from("payment_requests").select("id,owner_id,vehicle_id,bike_id,amount,phone").eq("id", fallbackCustomerPaymentId).maybeSingle());
+      if (customerPayment) {
+        paymentMatched = true;
+        const { error } = await admin.from("payment_requests").update({ status: completed ? "paid" : "failed", provider_reference: completed ? (receipt || checkoutRequestId) : checkoutRequestId, updated_at: paidAt }).eq("id", customerPayment.id);
+        if (error) { reconciliationFailed = true; console.error("Customer STK payment update failed", customerPayment.id, error); }
+        else if (completed) await syncCustomerPaymentToPortals(admin, customerPayment.id, receipt, paidAt);
+      }
+    }
+    if (checkoutRequestId) {
+    let { data: promptedPayment, error: promptedPaymentError } = await admin
         .from("payments")
       .select("id,customer_id,product_id,amount,payment_type,status,receipt_number,payer_phone,payment_reference")
         .eq("checkout_request_id", checkoutRequestId)
         .maybeSingle();
+      if (!promptedPayment && fallbackDepositPaymentId) ({ data: promptedPayment, error: promptedPaymentError } = await admin.from("payments").select("id,customer_id,product_id,amount,payment_type,status,receipt_number,payer_phone,payment_reference").eq("id", fallbackDepositPaymentId).maybeSingle());
       if (promptedPaymentError) console.error("Prompted deposit lookup failed", promptedPaymentError);
       if (promptedPayment) {
+        paymentMatched = true;
         const paidAt = new Date().toISOString();
         const receipt = String(items.MpesaReceiptNumber ?? "").trim();
         let { error: paymentUpdateError } = await admin.from("payments").update({
@@ -1145,7 +1180,7 @@ Deno.serve(async (request) => {
             return response({ ResultCode: 0, ResultDesc: "Accepted" });
           }
         }
-        if (paymentUpdateError) console.error("Prompted deposit update failed", paymentUpdateError);
+        if (paymentUpdateError) { reconciliationFailed = true; console.error("Prompted deposit update failed", paymentUpdateError); }
         if (!completed) {
           const { error: alertError } = await admin.from("finance_alerts").upsert({
             external_id: `PAYMENT-FAILED-${promptedPayment.id}`,
@@ -1197,6 +1232,17 @@ Deno.serve(async (request) => {
           if (customerProfile?.id) await recordPaymentNotices(admin, promptedPayment.id, customerProfile.id, Number(items.Amount ?? 0), product?.identifier ?? "your vehicle", receipt, String(items.PhoneNumber ?? customer.phone ?? customerProfile.phone ?? ""), paidAt);
         }
       }
+    }
+    if (completed && !paymentMatched && receipt) {
+      const [{ data: knownCustomerPayment }, { data: knownDepositPayment }] = await Promise.all([
+        admin.from("payment_requests").select("id").eq("provider_reference", receipt).eq("status", "paid").maybeSingle(),
+        admin.from("payments").select("id").eq("receipt_number", receipt).in("status", ["paid", "completed", "confirmed"]).maybeSingle(),
+      ]);
+      paymentMatched = Boolean(knownCustomerPayment || knownDepositPayment);
+    }
+    if (reconciliationFailed || (completed && !paymentMatched)) {
+      console.error("STK callback was not fully reconciled", checkoutRequestId, { paymentMatched, reconciliationFailed });
+      return response({ ResultCode: 1, ResultDesc: "Payment reconciliation is pending. Retry callback." }, 503);
     }
     return response({ ResultCode: 0, ResultDesc: "Accepted" });
   }
@@ -2543,6 +2589,49 @@ Deno.serve(async (request) => {
     const { tracker_imei: _privateTrackerImei, ...safeVehicle } = vehicle;
     return response({ ...safeVehicle, location });
   }
+  if (route === "/v1/customer/reports" && request.method === "POST") {
+    const vehicleId = String(body.vehicleId ?? "").trim();
+    const reportType = String(body.reportType ?? "routes").toLowerCase();
+    const date = String(body.date ?? "").trim();
+    if (reportType !== "routes" || !vehicleId || !/^\d{4}-\d{2}-\d{2}$/.test(date) || Number.isNaN(Date.parse(`${date}T00:00:00Z`))) {
+      return fail("Choose a vehicle and valid route date.", 422, "INVALID_REPORT_REQUEST");
+    }
+    const start = new Date(`${date}T00:00:00.000Z`);
+    const window = { from: start.toISOString(), to: new Date(start.getTime() + 24 * 60 * 60 * 1000).toISOString() };
+    const ownedBike = await customerBikeForUser(admin, user.id, vehicleId);
+    if (ownedBike.error) return fail("Route report is temporarily unavailable.", 503, "REPORT_UNAVAILABLE");
+    if (ownedBike.bike) {
+      const tracker = ownedBike.tracker;
+      if (!tracker?.id) return response({ report: { vehicleId, points: [], distanceKm: 0, durationMinutes: 0, stops: 0, from: window.from, to: window.to, message: "No tracker is assigned to this vehicle." } });
+      try { return response({ report: { vehicleId, ...(await loadRoute(admin, null, tracker.id, window)) } }); }
+      catch (error) { console.error("Customer route report load failed", vehicleId, error); return fail("Route report is temporarily unavailable.", 503, "REPORT_UNAVAILABLE"); }
+    }
+    const { data: vehicle, error } = await admin.from("vehicles").select("id").eq("id", vehicleId).eq("owner_id", user.id).maybeSingle();
+    if (error) return fail("Route report is temporarily unavailable.", 503, "REPORT_UNAVAILABLE");
+    if (!vehicle) return fail("Vehicle not found.", 404, "NOT_FOUND");
+    try { return response({ report: { vehicleId, ...(await loadRoute(admin, vehicleId, null, window)) } }); }
+    catch (error) { console.error("Customer route report load failed", vehicleId, error); return fail("Route report is temporarily unavailable.", 503, "REPORT_UNAVAILABLE"); }
+  }
+
+  if (route === "/v1/agent/reports" && request.method === "POST") {
+    const { data: agentProfile, error: agentError } = await admin.from("profiles").select("role,account_status").eq("id", user.id).maybeSingle();
+    if (agentError || !agentProfile || !agentRoles.has(agentProfile.role) || !approvedStatuses.has(agentProfile.account_status)) return fail("Approved agent access is required to generate reports.", 403, "PORTAL_ACCESS_DENIED");
+    const customerId = String(body.customerId ?? "").trim();
+    const date = String(body.date ?? "").trim();
+    if (!customerId || !/^\d{4}-\d{2}-\d{2}$/.test(date) || Number.isNaN(Date.parse(`${date}T00:00:00Z`))) return fail("Choose a customer and valid route date.", 422, "INVALID_REPORT_REQUEST");
+    const start = new Date(`${date}T00:00:00.000Z`);
+    const window = { from: start.toISOString(), to: new Date(start.getTime() + 24 * 60 * 60 * 1000).toISOString() };
+    let { data: application, error } = await admin.from("screening_applications").select("id,customer_id,product_id,bikes(identifier)").eq("installer_agent_id", user.id).eq("id", customerId).maybeSingle();
+    if (!application && !error) ({ data: application, error } = await admin.from("screening_applications").select("id,customer_id,product_id,bikes(identifier)").eq("installer_agent_id", user.id).eq("customer_id", customerId).order("created_at", { ascending: false }).limit(1).maybeSingle());
+    if (error || !application?.product_id) return fail("Customer route report is not available for this agent account.", 404, "CUSTOMER_NOT_FOUND");
+    const { data: tracker, error: trackerError } = await admin.from("trackers").select("id,plate_number").eq("bike_id", application.product_id).order("created_at", { ascending: true }).limit(1).maybeSingle();
+    if (trackerError) return fail("Route report is temporarily unavailable.", 503, "REPORT_UNAVAILABLE");
+    try {
+      const report = tracker?.id ? await loadRoute(admin, null, tracker.id, window) : { points: [], distanceKm: 0, durationMinutes: 0, stops: 0, from: window.from, to: window.to, message: "No tracker is assigned to this vehicle." };
+      return response({ report: { customerId: application.customer_id, vehicleId: application.product_id, registration: tracker?.plate_number ?? (application.bikes as any)?.identifier ?? "Vehicle", ...report } });
+    } catch (error) { console.error("Agent route report load failed", customerId, error); return fail("Route report is temporarily unavailable.", 503, "REPORT_UNAVAILABLE"); }
+  }
+
   const routeMatch = route.match(/^\/v1\/customer\/motorcycles\/([^/]+)\/route$/);
   if (routeMatch && request.method === "GET") {
     const vehicleId = decodeURIComponent(routeMatch[1]);

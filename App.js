@@ -8,6 +8,7 @@ import { AppUpdateNotice } from "./src/components/AppUpdateNotice";
 import * as Network from "expo-network";
 import * as ImagePicker from "expo-image-picker";
 import * as FileSystem from "expo-file-system";
+import * as Print from "expo-print";
 import * as Sharing from "expo-sharing";
 import * as Haptics from "expo-haptics";
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -1199,19 +1200,20 @@ function CustomerApp({ session, onLogout }) {
     const reportPeriod = options.periodName || period;
     const routeDate = options.routeDate || period;
     const fileName = reportFileName(reportType === "routes" ? `${reportPeriod}-${routeDate}` : reportPeriod, reportType);
-    const fileUri = `${FileSystem.documentDirectory}${fileName}`;
-    const action = { period: reportPeriod, reportType: "payments", include: ["transactions", "mpesa-receipts", "instalment-progress", "finance-balances"], format: "pdf", documentProtection: "account-password" };
-    if (reportType === "routes") Object.assign(action, { date: routeDate, vehicleId: reportBike.id, reportType: "routes", include: ["route-points", "distance", "stops", "last-position"] });
+    const action = { period: reportPeriod, date: routeDate, vehicleId: reportBike.id, reportType: "routes", include: ["route-points", "distance", "stops", "last-position"], format: "pdf" };
     if (!isOnline) {
       Alert.alert("You are offline", "Connect to the internet to download the protected report.");
       return false;
     }
     try {
       const response = await customerApi.generateReport(session.accessToken, action);
-      const reportUrl = response?.downloadUrl ?? response?.pdfUrl ?? response?.url ?? response?.documentUrl;
-      if (!reportUrl) throw new ApiError("The report service did not return a PDF download link.", 502, "MISSING_REPORT_URL");
-      const download = await FileSystem.downloadAsync(reportUrl, fileUri, { headers: { Authorization: `Bearer ${session.accessToken}` } });
-      return { uri: download.uri, name: fileName };
+      const report = response?.report;
+      if (!report || !Array.isArray(report.points)) throw new ApiError("The report service returned incomplete route data.", 502, "INVALID_REPORT_RESPONSE");
+      const esc = value => String(value ?? "").replace(/[&<>\"]/g, char => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;" }[char]));
+      const rows = report.points.map(point => `<tr><td>${esc(point.recordedAt)}</td><td>${esc(point.latitude)}</td><td>${esc(point.longitude)}</td><td>${esc(point.speedKph)} km/h</td></tr>`).join("");
+      const html = `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{font:12px Arial;color:#173e5b;padding:24px}h1{font-size:20px}p{color:#526b7d}table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:8px;border-bottom:1px solid #dce5ec}th{background:#edf4f9}.summary{display:flex;gap:20px;margin:18px 0}</style></head><body><h1>Jixels Route Report</h1><p>Vehicle: ${esc(reportBike.registration)} · Date: ${esc(routeDate)}</p><div class="summary"><span>Distance: ${esc(report.distanceKm)} km</span><span>Stops: ${esc(report.stops)}</span><span>GPS points: ${report.points.length}</span></div>${report.message ? `<p>${esc(report.message)}</p>` : ""}<table><thead><tr><th>Recorded</th><th>Latitude</th><th>Longitude</th><th>Speed</th></tr></thead><tbody>${rows || "<tr><td colspan=\"4\">No GPS points were recorded for this date.</td></tr>"}</tbody></table></body></html>`;
+      const pdf = await Print.printToFileAsync({ html, base64: false });
+      return { uri: pdf.uri, name: fileName };
     } catch (error) {
       Alert.alert("Could not download report", error instanceof ApiError ? error.message : "Check your connection and try again.");
       return false;

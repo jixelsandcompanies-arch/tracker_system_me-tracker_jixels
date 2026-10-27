@@ -27,6 +27,8 @@ import * as ImagePicker from "expo-image-picker";
 import * as Network from "expo-network";
 import * as Notifications from "expo-notifications";
 import * as Updates from "expo-updates";
+import * as Print from "expo-print";
+import * as Sharing from "expo-sharing";
 import { ApiError } from "./src/services/api";
 import { authApi, normalizeKenyanAgentPhone } from "./src/services/auth";
 
@@ -790,14 +792,24 @@ function Reports({ customers, profile, onRefresh, refreshing, darkMode = false }
   const [passwordPromptVisible, setPasswordPromptVisible] = useState(false);
   const selectedCustomer = customers.find(customer => customer.id === selectedCustomerId) || customers[0];
   const matchingCustomers = customers.filter(customer => `${customer.name} ${customer.plateNumber || customer.bike} ${customer.tracker}`.toLowerCase().includes(customerSearch.trim().toLowerCase()));
-  function downloadReport() {
+  async function downloadReport() {
     if (!selectedCustomer) return Alert.alert("Choose customer", "Select a customer before downloading the report.");
     if (!/^\d{4}-\d{2}-\d{2}$/.test(routeDate)) return Alert.alert("Check date", "Enter the route date as YYYY-MM-DD.");
     setBusy(true);
-    setTimeout(() => {
-      setBusy(false);
-      setReport({ name: `jixels-agent-${reportPeriod}-route-report-${selectedCustomer.bike.toLowerCase().replace(/[^a-z0-9]+/g, "-")}-${routeDate}.pdf` });
-    }, 700);
+    try {
+      const customerId = selectedCustomer.applicationId || selectedCustomer.id;
+      const result = await authApi.generateReport(profile?.accessToken, customerId, routeDate);
+      const data = result?.report;
+      if (!data || !Array.isArray(data.points)) throw new Error("The report service returned incomplete route data.");
+      const esc = value => String(value ?? "").replace(/[&<>\"]/g, char => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;" }[char]));
+      const rows = data.points.map(point => `<tr><td>${esc(point.recordedAt)}</td><td>${esc(point.latitude)}</td><td>${esc(point.longitude)}</td><td>${esc(point.speedKph)} km/h</td></tr>`).join("");
+      const html = `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{font:12px Arial;color:#173e5b;padding:24px}h1{font-size:20px}p{color:#526b7d}table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:8px;border-bottom:1px solid #dce5ec}th{background:#edf4f9}.summary{display:flex;gap:20px;margin:18px 0}</style></head><body><h1>Jixels Agent Route Report</h1><p>Customer: ${esc(selectedCustomer.name)} · Vehicle: ${esc(data.registration || selectedCustomer.plateNumber || selectedCustomer.bike)} · Date: ${esc(routeDate)}</p><div class="summary"><span>Distance: ${esc(data.distanceKm)} km</span><span>Stops: ${esc(data.stops)}</span><span>GPS points: ${data.points.length}</span></div>${data.message ? `<p>${esc(data.message)}</p>` : ""}<table><thead><tr><th>Recorded</th><th>Latitude</th><th>Longitude</th><th>Speed</th></tr></thead><tbody>${rows || "<tr><td colspan=\"4\">No GPS points were recorded for this date.</td></tr>"}</tbody></table></body></html>`;
+      const pdf = await Print.printToFileAsync({ html, base64: false });
+      const name = `jixels-agent-${reportPeriod}-route-report-${String(selectedCustomer.bike).toLowerCase().replace(/[^a-z0-9]+/g, "-")}-${routeDate}.pdf`;
+      setReport({ uri: pdf.uri, name });
+    } catch (error) {
+      Alert.alert("Could not generate report", error?.message || "Check your connection and try again.");
+    } finally { setBusy(false); }
   }
   async function openReport() {
     if (reportAccessBlocked) return Alert.alert("Account blocked", "Report access is blocked after too many wrong password attempts. Contact admin.");
@@ -809,7 +821,7 @@ function Reports({ customers, profile, onRefresh, refreshing, darkMode = false }
     if (password === profile.loginPassword) {
       setPasswordAttempts(0);
       setPasswordPromptVisible(false);
-      if (report?.uri) await Linking.openURL(report.uri);
+      if (report?.uri && await Sharing.isAvailableAsync()) await Sharing.shareAsync(report.uri, { mimeType: "application/pdf", UTI: "com.adobe.pdf" });
       else Alert.alert("Report opened", report?.name || "Agent route report");
       return;
     }

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { estimateSpeedKph } from "../src/utils/gpsSpeed.mjs";
 
 const app = readFileSync(new URL("../App.js", import.meta.url), "utf8");
 const trackingHook = readFileSync(new URL("../src/hooks/useTracking.js", import.meta.url), "utf8");
@@ -53,7 +54,8 @@ assert.match(fleetMap, /\.leaflet-top\.leaflet-right\{top:60px\}/, "zoom control
 assert.match(fleetMap, /L\.control\.zoom\(\{position:'topright'\}\)[\s\S]*followControl=L\.control\(\{position:'topright'\}\)[\s\S]*followControl\.addTo\(map\)/, "follow control must be stacked by Leaflet directly below zoom controls");
 assert.match(fleetMap, /#follow-bike\{display:flex;width:42px;height:42px;.*border-radius:50%/, "follow control must be compact and circular");
 assert.match(fleetMap, /followButton\.setAttribute\('aria-label',label\)/, "compact follow button must retain an accessible state label");
-assert.match(app, /currentSpeedKph \?\? "—"/, "missing or stale tracker speed must not be displayed as zero");
+assert.match(app, /currentSpeedKph == null \? "—"/, "missing or stale tracker speed must not be displayed as zero");
+assert.match(app, /SPEED · GPS EST\./, "estimated GPS speed must be clearly identified in the customer app");
 assert.match(app, /useState\(1\);[\s\S]*setRefreshSeconds\(value => value >= 5 \? 0 : value \+ 1\), 1000\)/, "the customer map refresh counter must loop 1 through 5 then zero once per second");
 assert.match(app, /<Text style=\{styles\.microLabel\}>AUTO UPDATE<\/Text>/, "the counter must be labeled as an automatic app update cycle");
 assert.doesNotMatch(app, /Waiting for next GPS update/, "the customer map must not show the confusing next-GPS waiting message");
@@ -72,6 +74,9 @@ assert.match(api, /const locationReport = tramigoLocation\(await tramigoRequest\
 assert.match(api, /latestReport = tramigoLocation\(await tramigoRequest\(`\/api\/reports\/last\/\$\{encodeURIComponent\(cloudDeviceId\)\}`/);
 assert.match(api, /new Date\(latestReport\.recordedAt\)\.getTime\(\) >= new Date\(locationReport\.recordedAt\)\.getTime\(\)/, "speed fallback must never overwrite a newer GPS fix");
 assert.match(api, /p_max_requests: 1, p_window_seconds: 10/, "customer map polling must allow one paced Tramigo read every ten seconds");
+assert.equal(estimateSpeedKph({ latitude: 0, longitude: 0.001, recordedAt: "2026-10-27T10:00:10Z" }, { latitude: 0, longitude: 0, recordedAt: "2026-10-27T10:00:00Z" }), 40.0, "speed fallback must estimate movement from timestamped GPS points");
+assert.equal(estimateSpeedKph({ latitude: 0, longitude: 0.00001, recordedAt: "2026-10-27T10:00:10Z" }, { latitude: 0, longitude: 0, recordedAt: "2026-10-27T10:00:00Z" }), 0, "GPS noise under the stationary threshold must not invent bike movement");
+assert.equal(estimateSpeedKph({ latitude: 0, longitude: 1, recordedAt: "2026-10-27T10:00:10Z" }, { latitude: 0, longitude: 0, recordedAt: "2026-10-27T10:00:00Z" }), null, "implausible GPS-derived speed must be rejected");
 assert.match(operationsLiveMap, /window\.setInterval\(load, 3000\)/, "the operations live map must refresh automatically every three seconds");
 
 console.log("Customer map and session regression checks passed.");

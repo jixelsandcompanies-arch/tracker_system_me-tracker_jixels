@@ -1,30 +1,40 @@
 import { AppState } from "react-native";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { trackingApi } from "../services/tracking";
+import { estimateSpeedKph } from "../utils/gpsSpeed.mjs";
 
 // Refresh the customer map automatically every three seconds, including when
 // a socket remains connected without delivering reports. The API separately
 // rate-limits actual Tramigo reads and returns the newest saved point meanwhile.
 const POLL_INTERVAL_MS = 3_000;
 
-function keepNewestLocation(incoming, existing) {
-  if (!existing?.location) return incoming;
+function keepNewestLocation(incoming, existing, baselineLocation = null) {
+  if (!existing?.location) {
+    if (!incoming?.location || incoming.location.speedKph != null) return incoming;
+    const estimate = estimateSpeedKph(incoming.location, baselineLocation);
+    return estimate == null
+      ? incoming
+      : { ...incoming, location: { ...incoming.location, speedKph: estimate, speedEstimated: true } };
+  }
   if (!incoming?.location) return { ...incoming, location: existing.location };
   const incomingTime = new Date(incoming.location.recordedAt ?? 0).getTime();
   const existingTime = new Date(existing.location.recordedAt ?? 0).getTime();
-  return Number.isFinite(existingTime) && (!Number.isFinite(incomingTime) || existingTime > incomingTime)
-    ? { ...incoming, location: existing.location }
-    : incoming;
+  if (Number.isFinite(existingTime) && (!Number.isFinite(incomingTime) || existingTime > incomingTime)) {
+    return { ...incoming, location: existing.location };
+  }
+  if (incomingTime === existingTime && incoming.location.speedKph == null && existing.location.speedKph != null) {
+    return { ...incoming, location: existing.location };
+  }
+  if (incoming.location.speedKph != null) {
+    return { ...incoming, location: { ...incoming.location, speedEstimated: false } };
+  }
+  const estimate = estimateSpeedKph(incoming.location, existing.location);
+  return estimate == null
+    ? incoming
+    : { ...incoming, location: { ...incoming.location, speedKph: estimate, speedEstimated: true } };
 }
 
-function locationIsOlder(incoming, existing) {
-  if (!existing) return false;
-  const incomingTime = new Date(incoming?.recordedAt ?? 0).getTime();
-  const existingTime = new Date(existing.recordedAt ?? 0).getTime();
-  return Number.isFinite(existingTime) && (!Number.isFinite(incomingTime) || incomingTime < existingTime);
-}
-
-export function useTracking({ motorcycleId, accessToken }) {
+export function useTracking({ motorcycleId, accessToken, baselineLocation = null }) {
   const [loadedMotorcycle, setLoadedMotorcycle] = useState(null);
   const motorcycle = loadedMotorcycle?.id === motorcycleId ? loadedMotorcycle.value : null;
   const [route, setRoute] = useState(null);
@@ -38,6 +48,8 @@ export function useTracking({ motorcycleId, accessToken }) {
   const refreshInFlight = useRef(new Map());
   const activeMotorcycleId = useRef(motorcycleId);
   activeMotorcycleId.current = motorcycleId;
+  const baselineLocationRef = useRef(baselineLocation);
+  baselineLocationRef.current = baselineLocation;
 
   const refresh = useCallback(async () => {
     const requestedId = motorcycleId;
@@ -49,7 +61,7 @@ export function useTracking({ motorcycleId, accessToken }) {
         if (!accessToken) throw new Error("Please sign in to view your motorcycle.");
         const result = await trackingApi.getMotorcycle(motorcycleId, accessToken);
         if (mounted.current && activeMotorcycleId.current === requestedId) {
-          setLoadedMotorcycle(current => ({ id: requestedId, value: keepNewestLocation(result, current?.id === requestedId ? current.value : null) }));
+          setLoadedMotorcycle(current => ({ id: requestedId, value: keepNewestLocation(result, current?.id === requestedId ? current.value : null, baselineLocationRef.current) }));
         }
         return result;
       } catch (cause) {
@@ -104,8 +116,7 @@ export function useTracking({ motorcycleId, accessToken }) {
         if (mounted.current && activeMotorcycleId.current === motorcycleId && location) {
           setLoadedMotorcycle(current => {
             const currentValue = current?.id === motorcycleId ? current.value : null;
-            if (locationIsOlder(location, currentValue?.location)) return current;
-            return { id: motorcycleId, value: { ...(currentValue ?? {}), location } };
+            return { id: motorcycleId, value: keepNewestLocation({ ...(currentValue ?? {}), location }, currentValue, baselineLocationRef.current) };
           });
           setLoading(false);
           setError(null);

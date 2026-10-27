@@ -1044,7 +1044,10 @@ function CustomerApp({ session, onLogout }) {
         const lastTrustedAddress = raw.lastTrustedAddress ?? lastTrustedLocation?.address ?? raw.tamper?.lastTrustedAddress ?? null;
         const detectedAt = raw.tamperDetectedAt ?? raw.tamper?.detectedAt ?? raw.updatedAt ?? null;
         const commandPending = Date.now() - (securityCommandAt.current[vehicle.id] ?? 0) < 10_000;
-        const normalized = { ...(!commandPending ? { monitoringArmed: raw.monitoringArmed ?? raw.armed ?? false, immobilized: raw.immobilized ?? false } : {}), securityReady: raw.securityReady ?? vehicle.securityReady ?? false, securityMessage: raw.securityMessage ?? vehicle.securityMessage, tamperStatus, lastTrustedLocation, lastTrustedAddress, tamperDetectedAt: detectedAt };
+        // The fleet endpoint returns raw database rows for persisted control
+        // fields, while the per-vehicle endpoint uses camelCase. Accept both so
+        // refreshes never display an armed vehicle as disarmed.
+        const normalized = { ...(!commandPending ? { monitoringArmed: raw.monitoringArmed ?? raw.monitoring_armed ?? raw.armed ?? vehicle.monitoringArmed ?? vehicle.monitoring_armed ?? false, immobilized: raw.immobilized ?? vehicle.immobilized ?? false } : {}), securityReady: raw.securityReady ?? vehicle.securityReady ?? false, securityMessage: raw.securityMessage ?? vehicle.securityMessage, tamperStatus, lastTrustedLocation, lastTrustedAddress, tamperDetectedAt: detectedAt };
         setSecurity(current => ({ ...current, [vehicle.id]: { ...current[vehicle.id], ...normalized } }));
         if (tamperStatus !== "tampered") continue;
         const eventId = `tamper-${vehicle.id}-${detectedAt ?? "active"}`;

@@ -45,7 +45,8 @@ assert.match(trackingHook, /setInterval\(poll, POLL_INTERVAL_MS\)/, "location re
 assert.match(fleetMap, /L\.map\('map',\{zoomControl:false\}\)/, "Leaflet's default zoom controls must not overlap the vehicle search bar");
 assert.match(fleetMap, /L\.control\.zoom\(\{position:'topright'\}\)/, "zoom controls must be grouped on the right below the search bar");
 assert.match(fleetMap, /\.leaflet-top\.leaflet-right\{top:60px\}/, "zoom controls must sit below the search bar");
-assert.match(fleetMap, /#follow-bike\{position:absolute;z-index:700;top:126px;right:12px;/, "follow control must align below zoom controls on the right");
+assert.match(fleetMap, /#follow-bike\{position:absolute;z-index:700;top:126px;right:12px;display:flex;width:42px;height:42px;.*border-radius:50%/, "follow control must be a compact circular map button below zoom controls");
+assert.match(fleetMap, /followButton\.setAttribute\('aria-label',label\)/, "compact follow button must retain an accessible state label");
 assert.match(app, /currentSpeedKph \?\? "—"/, "missing or stale tracker speed must not be displayed as zero");
 
 console.log("Customer map and session regression checks passed.");

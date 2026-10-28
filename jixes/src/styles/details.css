@@ -48,7 +48,7 @@
 .screening-image-inputs label { color: #5f7483; font-size: 11px; }
 .screening-image-inputs input { display: block; width: 100%; margin-top: 7px; color: #294858; font-size: 12px; }
 .inventory-backdrop { display: flex; align-items: center; justify-content: flex-end; padding: 20px; }
-.inventory-drawer { position: relative; top: auto; right: auto; width: min(560px, 100%); height: auto; max-height: calc(100dvh - 40px); border-radius: 14px; }
+.inventory-drawer { position: relative; top: auto; right: auto; width: min(560px, 100%); height: auto; max-height: calc(100dvh - 40px); border-radius: 14px; animation: none; }
 .inventory-drawer .detail-actions { margin-top: 24px; }
 .inventory-record-id { margin: 6px 0 0; color: #7893a4; font-size: 11px; }
 .inventory-status { display: inline-flex; padding: 5px 9px; border-radius: 999px; font-size: 10px; font-weight: 700; }.inventory-status.available { color: #176f5b; background: #e4f7ee; }.inventory-status.pending { color: #9a650c; background: #fff4d7; }.inventory-status.sold { color: #155b91; background: #e5f1fb; }

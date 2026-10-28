@@ -3,7 +3,7 @@ import { Bike, Radio, Search, Trash2, UserRound, X } from "lucide-react";
 import { createRecord, hasSupabaseConfig, invokeApi, listRecords, subscribeToTable, updateRecord } from "../lib/data";
 import { recordAudit } from "../lib/security";
 
-const empty = { product_type: "bike", tracker_number: "", assigned_agent_id: "", payable_amount: "" };
+const empty = { product_type: "bike", custom_product_type: "", tracker_number: "", assigned_agent_id: "", payable_amount: "" };
 
 function money(value) {
   return `KES ${Number(value || 0).toLocaleString("en-KE")}`;
@@ -40,9 +40,11 @@ export default function ProductInventoryView() {
   );
   const set = (key, value) => setForm((current) => ({ ...current, [key]: value }));
   const open = (product = null) => {
+    setMessage("");
     setEditing(product);
     setForm(product ? {
       product_type: product.product_type,
+      custom_product_type: product.custom_product_type || "",
       assigned_agent_id: product.assigned_agent_id || "",
       tracker_number: data.trackers.find((tracker) => tracker.bike_id === product.id)?.identifier || "",
       payable_amount: product.payable_amount == null ? "" : String(product.payable_amount),
@@ -65,17 +67,34 @@ export default function ProductInventoryView() {
 
   async function save(event) {
     event.preventDefault();
-    setSaving(true);
+    setMessage("");
     const trackerNumber = form.tracker_number.trim();
-    const payableAmount = Number(form.payable_amount || 0);
-    if (!Number.isFinite(payableAmount) || payableAmount < 0) {
-      setSaving(false);
-      return setMessage("Payable amount must be zero or a positive number.");
+    const amountText = String(form.payable_amount).trim();
+    const payableAmount = Number(amountText);
+    const productType = form.product_type;
+    const customProductType = form.custom_product_type.trim();
+    if (!trackerNumber) return setMessage("Tracker number is required.");
+    if (!/^\d+(?:\.\d{1,2})?$/.test(amountText) || !Number.isFinite(payableAmount) || payableAmount <= 0 || payableAmount > 9999999999.99) {
+      return setMessage("Enter a payable amount above zero with no more than two decimal places.");
     }
-    const identifier = trackerNumber || `${form.product_type.toUpperCase()}-${Date.now().toString(36).toUpperCase()}`;
+    if (!["bike", "car", "tuktuk", "device", "other"].includes(productType)) {
+      return setMessage("Choose a valid product type.");
+    }
+    if (productType === "other" && !customProductType) {
+      return setMessage("Enter the product type.");
+    }
+    const existingTracker = data.trackers.find((tracker) => tracker.identifier.toLowerCase() === trackerNumber.toLowerCase());
+    if (existingTracker?.bike_id && existingTracker.bike_id !== editing?.id) {
+      return setMessage("This tracker is already linked to another product.");
+    }
+    setSaving(true);
+    const identifier = trackerNumber;
+    const model = productType === "other" ? customProductType : productType;
     const payload = {
-      ...(editing ? {} : { identifier, model: form.product_type }),
-      product_type: form.product_type,
+      ...(editing ? {} : { identifier }),
+      model,
+      product_type: productType,
+      custom_product_type: productType === "other" ? customProductType : null,
       payable_amount: payableAmount,
       assigned_agent_id: form.assigned_agent_id || null,
     };
@@ -140,10 +159,11 @@ export default function ProductInventoryView() {
           <button className="icon-btn" onClick={() => setEditing(undefined)}><X size={18}/></button>
         </div>
         <form className="customer-record-form" onSubmit={save}>
+          {message && <div className="import-message" role="alert">{message}</div>}
           <div className="customer-form-grid">
-            <label>Product type<select value={form.product_type} onChange={(event) => set("product_type", event.target.value)}><option>bike</option><option>car</option><option>tuktuk</option><option>device</option><option>other</option></select></label>
-            <label><Radio size={14}/> Tracker number<input value={form.tracker_number} onChange={(event) => set("tracker_number", event.target.value)} placeholder="Type tracker number"/></label>
-            <label>Payable amount<input value={form.payable_amount} onChange={(event) => set("payable_amount", event.target.value)} inputMode="numeric" placeholder="Total customer payable"/></label>
+            <label>Product type<select required value={form.product_type} onChange={(event) => set("product_type", event.target.value)}><option value="bike">Bike</option><option value="car">Car</option><option value="tuktuk">Tuk-tuk</option><option value="device">Device</option><option value="other">Other</option></select></label>{form.product_type === "other" && <label>Custom product type<input required value={form.custom_product_type} onChange={(event) => set("custom_product_type", event.target.value)} placeholder="Enter product type"/></label>}
+            <label><Radio size={14}/> Tracker number<input required value={form.tracker_number} onChange={(event) => set("tracker_number", event.target.value)} placeholder="Type tracker number"/></label>
+            <label>Payable amount<input required type="number" min="0.01" max="9999999999.99" step="0.01" value={form.payable_amount} onChange={(event) => set("payable_amount", event.target.value)} placeholder="Total customer payable"/></label>
             <label className="wide"><UserRound size={14}/> Assigned agent<select value={form.assigned_agent_id} onChange={(event) => set("assigned_agent_id", event.target.value)}><option value="">No agent</option>{agents.map((agent) => <option key={agent.id} value={agent.id}>{agent.full_name}</option>)}</select></label>
           </div>
           <div className="detail-actions"><button className="button secondary" type="button" onClick={() => setEditing(undefined)}>Cancel</button><button className="button primary" disabled={saving}><Bike size={15}/>{saving ? "Saving…" : editing ? "Update product" : "Add to inventory"}</button></div>

@@ -16,6 +16,43 @@ export default function SettingsView() {
   const session = getSession(); const [settings, setSettings] = useState(defaults); const [settingRows, setSettingRows] = useState([]); const [profile, setProfile] = useState({ full_name: session?.name || "" }); const [message, setMessage] = useState(""); const [saving, setSaving] = useState(false);
   useEffect(() => { let mounted = true; (async () => { if (!hasSupabaseConfig) return mounted && setMessage("Connect Supabase to save workspace settings."); const [settingsResult, profileResult] = await Promise.all([listRecords("workspace_settings", { pageSize: 100 }), listRecords("profiles", { pageSize: 100 })]); if (!mounted) return; if (settingsResult.error) setMessage(settingsResult.error.message); else { setSettingRows(settingsResult.data); setSettings({ ...defaults, ...Object.fromEntries(settingsResult.data.map(row => [row.key, row.value])) }); } const own = profileResult.data?.find(row => row.id === session?.userId); if (own) setProfile({ full_name: own.full_name || "" }); })(); return () => { mounted = false; }; }, []);
   const set = (key, value) => setSettings(current => ({ ...current, [key]: String(value) }));
-  async function save() { setSaving(true); setMessage(""); const writes = Object.entries(settings).map(([key, value]) => { const row = settingRows.find(item => item.key === key); return row ? updateRecord("workspace_settings", row.id, { value }) : createRecord("workspace_settings", { key, value }); }); const profileRow = await listRecords("profiles", { pageSize: 100 }); const own = profileRow.data?.find(row => row.id === session?.userId); if (own && profile.full_name.trim() && profile.full_name !== own.full_name) writes.push(updateRecord("profiles", own.id, { full_name: profile.full_name.trim() })); const results = await Promise.all(writes); const error = results.find(result => result.error)?.error; setSaving(false); if (error) return setMessage(`Could not save settings: ${error.message}`); recordAudit({ action: "updated workspace settings", resource: "Settings" }); setMessage("Settings saved to Supabase."); const refreshed = await listRecords("workspace_settings", { pageSize: 100 }); if (!refreshed.error) setSettingRows(refreshed.data); }
+  async function save() {
+    setMessage("");
+    const numericRules = [
+      ["offline_timeout_minutes", 1, 1440],
+      ["low_battery_percent", 1, 100],
+      ["session_timeout_minutes", 5, 1440],
+      ["export_retention_days", 1, 3650],
+    ];
+    for (const [key, min, max] of numericRules) {
+      const value = Number(settings[key]);
+      if (!Number.isInteger(value) || value < min || value > max) {
+        return setMessage(`${key.replaceAll("_", " ")} must be a whole number from ${min} to ${max}.`);
+      }
+    }
+    if (!settings.workspace_name.trim() || settings.workspace_name.trim().length > 100) return setMessage("Enter a workspace name of 1 to 100 characters.");
+    if (!["Africa/Nairobi", "UTC", "Europe/London"].includes(settings.timezone)) return setMessage("Choose a valid timezone.");
+    if (!["KES", "USD", "EUR"].includes(settings.currency)) return setMessage("Choose a valid currency.");
+    if (["notify_new_cases", "notify_tracker_offline", "notify_screening_decisions"].some((key) => !["true", "false"].includes(settings[key]))) return setMessage("Choose a valid notification setting.");
+    if (!profile.full_name.trim() || profile.full_name.trim().length > 120) return setMessage("Enter a display name of 1 to 120 characters.");
+
+    setSaving(true);
+    const writes = Object.entries(settings).map(([key, value]) => {
+      const normalizedValue = key === "workspace_name" ? value.trim() : value;
+      const row = settingRows.find(item => item.key === key);
+      return row ? updateRecord("workspace_settings", row.id, { value: normalizedValue }) : createRecord("workspace_settings", { key, value: normalizedValue });
+    });
+    const profileRow = await listRecords("profiles", { pageSize: 100 });
+    const own = profileRow.data?.find(row => row.id === session?.userId);
+    if (own && profile.full_name.trim() !== own.full_name) writes.push(updateRecord("profiles", own.id, { full_name: profile.full_name.trim() }));
+    const results = await Promise.all(writes);
+    const error = results.find(result => result.error)?.error;
+    setSaving(false);
+    if (error) return setMessage(`Could not save settings: ${error.message}`);
+    recordAudit({ action: "updated workspace settings", resource: "Settings" });
+    setMessage("Settings saved to Supabase.");
+    const refreshed = await listRecords("workspace_settings", { pageSize: 100 });
+    if (!refreshed.error) setSettingRows(refreshed.data);
+  }
   return <section className="settings-layout"><div className="settings-intro"><div><span className="eyebrow">WORKSPACE CONTROLS</span><h2>Settings</h2><p>Manage your account and the operational rules used across the workspace.</p></div><button className="button primary" disabled={saving} onClick={save}><Save size={15}/>{saving ? "Saving…" : "Save changes"}</button></div>{message && <div className="import-message">{message}</div>}<div className="settings-grid"><Card icon={UserRound} title="My account"><label>Display name<input value={profile.full_name} onChange={e => setProfile({ full_name: e.target.value })}/></label><label>Email<input value={session?.email || ""} disabled/></label><p className="settings-hint">Password and multi-factor authentication are managed through Supabase Auth.</p></Card><Card icon={Database} title="Workspace"><label>Workspace name<input value={settings.workspace_name} onChange={e => set("workspace_name", e.target.value)}/></label><label>Timezone<select value={settings.timezone} onChange={e => set("timezone", e.target.value)}><option>Africa/Nairobi</option><option>UTC</option><option>Europe/London</option></select></label><label>Default currency<select value={settings.currency} onChange={e => set("currency", e.target.value)}><option>KES</option><option>USD</option><option>EUR</option></select></label></Card><Card icon={Bell} title="Notifications"><Toggle checked={toBool(settings.notify_new_cases)} onChange={value => set("notify_new_cases", value)} label="New support cases" detail="Notify staff when a case is opened."/><Toggle checked={toBool(settings.notify_tracker_offline)} onChange={value => set("notify_tracker_offline", value)} label="Tracker offline" detail="Notify staff when a device becomes unavailable."/><Toggle checked={toBool(settings.notify_screening_decisions)} onChange={value => set("notify_screening_decisions", value)} label="Screening decisions" detail="Notify operations of approvals and declines."/></Card><Card icon={MapPinned} title="Tracking rules"><label>Offline timeout (minutes)<input type="number" min="1" max="1440" value={settings.offline_timeout_minutes} onChange={e => set("offline_timeout_minutes", e.target.value)}/></label><label>Low battery alert (%)<input type="number" min="1" max="100" value={settings.low_battery_percent} onChange={e => set("low_battery_percent", e.target.value)}/></label><p className="settings-hint">Use these rules when configuring tracker heartbeats and scheduled stale-device checks.</p></Card><Card icon={ShieldCheck} title="Security"><label>Session timeout (minutes)<input type="number" min="5" max="1440" value={settings.session_timeout_minutes} onChange={e => set("session_timeout_minutes", e.target.value)}/></label><p className="settings-hint">Staff roles and database access are controlled by Supabase role policies. Audit logs remain append-only.</p></Card><Card icon={KeyRound} title="Data & integrations"><label>Export retention (days)<input type="number" min="1" max="3650" value={settings.export_retention_days} onChange={e => set("export_retention_days", e.target.value)}/></label><p className="settings-hint">Supabase status, tracker heartbeats, imports, and report exports use the configured workspace connection.</p></Card></div></section>;
 }

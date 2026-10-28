@@ -445,6 +445,22 @@ function normalizeNationalId(value: unknown) {
   return /^\d{1,12}$/.test(digits) ? digits : null;
 }
 
+function normalizeCustomerIdentity(value: unknown) {
+  const identity = String(value ?? "").trim().toUpperCase().replace(/\s+/g, "");
+  const digits = identity.replace(/\D/g, "");
+  if (/^\d{7,12}$/.test(digits)) return digits;
+  return /^(?=.*[A-Z])[A-Z0-9-]{5,20}$/.test(identity) ? identity : null;
+}
+
+function hasValidInventoryRecord(bike: any) {
+  const amount = Number(bike?.payable_amount);
+  const trackers = Array.isArray(bike?.trackers) ? bike.trackers : bike?.trackers ? [bike.trackers] : [];
+  const hasTracker = trackers.some((tracker: any) => String(tracker?.identifier ?? "").trim());
+  const productTypeValid = ["bike", "car", "tuktuk", "device", "other"].includes(String(bike?.product_type ?? ""));
+  const customTypeValid = bike?.product_type !== "other" || String(bike?.custom_product_type ?? "").trim();
+  return Boolean(String(bike?.identifier ?? "").trim() && productTypeValid && customTypeValid && Number.isFinite(amount) && amount > 0 && hasTracker);
+}
+
 type WifiGatewayAdapter = { activate: (session: any) => Promise<{ gatewaySessionId: string }>; revoke: (session: any) => Promise<void> };
 function wifiGateway(): WifiGatewayAdapter {
   const adapter = (Deno.env.get("WIFI_GATEWAY_ADAPTER") ?? "mock").toLowerCase();
@@ -844,9 +860,13 @@ async function registerPortalUser(client: SupabaseClient, admin: SupabaseClient,
   const password = String(body.password ?? "");
   const fullName = String(body.name ?? body.fullName ?? "").trim();
   const rawPhone = String(body.phone ?? "").trim();
-  const phone = role === "agent" ? normalizeKenyanPhone(rawPhone) : rawPhone;
-  if (!email || !password || !fullName) return fail("Complete your name, email, and password.", 422, "INVALID_REGISTRATION");
-  if (role === "agent" && !phone) return fail("Enter a valid Kenyan mobile number, such as 0712 345 678.", 422, "INVALID_AGENT_PHONE");
+  const normalizedPhone = rawPhone ? normalizeKenyanPhone(rawPhone) : null;
+  const phone = normalizedPhone ?? (role === "customer" ? rawPhone : "");
+  if (!fullName || fullName.length > 120 || !email || !password) return fail("Enter your name, email, and password.", 422, "INVALID_REGISTRATION");
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return fail("Enter a valid email address.", 422, "INVALID_EMAIL");
+  if (password.length < 8) return fail("Use a password with at least 8 characters.", 422, "INVALID_PASSWORD");
+  if (role !== "customer" && !normalizedPhone) return fail("Enter a valid Kenyan mobile number, such as 0712 345 678.", 422, "INVALID_PHONE");
+  if (rawPhone && !normalizedPhone) return fail("Enter a valid Kenyan mobile number.", 422, "INVALID_PHONE");
   // Only customers already onboarded in Operations may request app access.
   if (role === "customer") {
     const eligibility = await existingCustomerRecord(admin, email);
@@ -1587,13 +1607,20 @@ Deno.serve(async (request) => {
 
     const text = (key: string, current: unknown) => body[key] === undefined ? current : String(body[key] ?? "").trim() || null;
     const email = text("email", application.email);
-    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email))) return fail("Enter a valid customer email address.", 422, "INVALID_EMAIL");
+    const fullName = text("fullName", application.full_name);
+    const rawPhone = text("phone", application.phone);
+    const phone = rawPhone ? normalizeKenyanPhone(rawPhone) : null;
+    const nationalId = normalizeCustomerIdentity(text("nationalId", application.national_id));
+    if (!fullName || String(fullName).length > 120) return fail("Enter a valid customer name.", 422, "INVALID_NAME");
+    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email))) return fail("Enter a valid customer email address.", 422, "INVALID_EMAIL");
+    if (!phone) return fail("Enter a valid Kenyan mobile number.", 422, "INVALID_PHONE");
+    if (!nationalId) return fail("Enter a valid national ID or passport number.", 422, "INVALID_NATIONAL_ID");
     const now = new Date().toISOString();
     const applicationChanges: Record<string, unknown> = {
-      full_name: text("fullName", application.full_name),
-      phone: text("phone", application.phone),
+      full_name: fullName,
+      phone: phone ?? rawPhone,
       email,
-      national_id: text("nationalId", application.national_id),
+      national_id: nationalId,
       location: text("location", application.location),
       product_type: text("productType", application.product_type),
       product_model: text("productModel", application.product_model),
@@ -1992,10 +2019,13 @@ Deno.serve(async (request) => {
     const depositAmount = Number(body.depositAmount ?? 0);
     const dueDate = String(body.dueDate ?? "").trim();
     if (!bikeId || !plateNumber) return fail("Choose an available tracker and enter the vehicle plate number.", 422, "INVALID_VEHICLE_ASSIGNMENT");
+    if (!Number.isFinite(depositAmount) || depositAmount < 0) return fail("Enter a valid deposit amount of zero or more.", 422, "INVALID_DEPOSIT");
     if (dueDate && (!/^\d{4}-\d{2}-\d{2}$/.test(dueDate) || Number.isNaN(Date.parse(`${dueDate}T00:00:00Z`)))) return fail("Choose a valid first installment due date.", 422, "INVALID_DUE_DATE");
     const { data: customer } = await admin.from("customers").select("id,full_name,email,phone,national_id,address").eq("id", customerId).maybeSingle();
-    const { data: bike } = await admin.from("bikes").select("id,identifier,model,product_type,payable_amount,trackers(identifier)").eq("id", bikeId).eq("assigned_agent_id", user.id).is("customer_id", null).maybeSingle();
+    const { data: bike } = await admin.from("bikes").select("id,identifier,model,product_type,custom_product_type,payable_amount,trackers(identifier)").eq("id", bikeId).eq("assigned_agent_id", user.id).is("customer_id", null).maybeSingle();
     if (!customer || !bike) return fail("The customer or available tracker could not be found.", 404, "ASSIGNMENT_NOT_FOUND");
+    if (!hasValidInventoryRecord(bike)) return fail("This inventory record is missing a valid tracker or payable amount. Ask Admin to correct it before sale.", 409, "INVALID_INVENTORY_RECORD");
+    if (depositAmount > Number(bike.payable_amount ?? 0)) return fail("The deposit cannot exceed the total payable amount.", 422, "INVALID_DEPOSIT");
     const now = new Date().toISOString();
     const { data: reservedBike, error: reserveError } = await admin.from("bikes").update({ customer_id: customer.id, status: "pending", updated_at: now }).eq("id", bike.id).eq("assigned_agent_id", user.id).is("customer_id", null).select("id").maybeSingle();
     if (reserveError || !reservedBike) return fail("That tracker is no longer available.", 409, "TRACKER_ALREADY_SOLD");
@@ -2085,20 +2115,21 @@ Deno.serve(async (request) => {
       }) });
     }
     const name = String(body.name ?? "").trim();
-    const phone = String(body.phone ?? "").trim();
+    const phone = normalizeKenyanPhone(body.phone);
     const email = String(body.email ?? "").trim().toLowerCase();
-    const nationalId = normalizeNationalId(body.nationalId);
+    const nationalId = normalizeCustomerIdentity(body.nationalId);
     const location = String(body.location ?? "").trim();
     const plateNumber = String(body.plateNumber ?? "").trim().toUpperCase();
     const bikeId = String(body.bikeId ?? "").trim();
     const depositAmount = Number(body.depositAmount ?? 0);
     const dueDate = String(body.dueDate ?? "").trim();
-    if (!name || !phone || !email || !nationalId || !bikeId || !body.customerPhoto || !body.idFrontPhoto || !body.idBackPhoto) return fail("Enter the customer name, phone number, a valid national ID, assigned bike, and all three images.", 422, "INVALID_CUSTOMER_REGISTRATION");
+    if (!name || name.length > 120 || !phone || !email || !nationalId || !bikeId || !body.customerPhoto || !body.idFrontPhoto || !body.idBackPhoto) return fail("Enter a valid customer name, Kenyan phone, email, national ID or passport, assigned bike, and all three images.", 422, "INVALID_CUSTOMER_REGISTRATION");
     if (dueDate && (!/^\d{4}-\d{2}-\d{2}$/.test(dueDate) || Number.isNaN(Date.parse(`${dueDate}T00:00:00Z`)))) return fail("Choose a valid first installment due date.", 422, "INVALID_DUE_DATE");
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return fail("Enter a valid customer email address.", 422, "INVALID_EMAIL");
     if (!Number.isFinite(depositAmount) || depositAmount < 0) return fail("Enter a valid customer deposit amount.", 422, "INVALID_DEPOSIT");
-    const { data: bike, error: bikeError } = await admin.from("bikes").select("id,identifier,model,product_type,payable_amount,status,customer_id,trackers(identifier,plate_number)").eq("id", bikeId).eq("assigned_agent_id", user.id).maybeSingle();
+    const { data: bike, error: bikeError } = await admin.from("bikes").select("id,identifier,model,product_type,custom_product_type,payable_amount,status,customer_id,trackers(identifier,plate_number)").eq("id", bikeId).eq("assigned_agent_id", user.id).maybeSingle();
     if (bikeError || !bike) return fail("This bike is not assigned to your agent account.", 403, "BIKE_NOT_ASSIGNED");
+    if (!hasValidInventoryRecord(bike)) return fail("This inventory record is missing a valid tracker or payable amount. Ask Admin to correct it before sale.", 409, "INVALID_INVENTORY_RECORD");
     if (bike.customer_id || ["pending", "sold"].includes(String(bike.status).toLowerCase())) return fail("This tracker is already linked to another customer sale.", 409, "TRACKER_ALREADY_SOLD");
     if (depositAmount > Number(bike.payable_amount ?? 0)) return fail("The deposit cannot be higher than the total payable amount.", 422, "INVALID_DEPOSIT");
     const now = new Date().toISOString();
@@ -2508,7 +2539,12 @@ Deno.serve(async (request) => {
       return response({ vehicleId, action, enabled: savedEnabled, provider });
     } catch (error) { return fail(error instanceof Error ? error.message : "Tramigo command failed.", 502, "TRAMIGO_ERROR"); }
   }  if (route === "/v1/customer/profile" && request.method === "PATCH") {
-    const { data, error } = await client.from("profiles").update({ full_name: body.fullName, phone: body.phone, avatar_url: body.avatarUrl, updated_at: new Date().toISOString() }).eq("id", user.id).select().single();
+    const fullName = String(body.fullName ?? "").trim();
+    const rawPhone = String(body.phone ?? "").trim();
+    const phone = normalizeKenyanPhone(rawPhone);
+    if (!fullName || fullName.length > 120) return fail("Enter a name of 1 to 120 characters.", 422, "INVALID_NAME");
+    if (!phone) return fail("Enter a valid Kenyan mobile number.", 422, "INVALID_PHONE");
+    const { data, error } = await client.from("profiles").update({ full_name: fullName, phone, avatar_url: body.avatarUrl, updated_at: new Date().toISOString() }).eq("id", user.id).select().single();
     return error ? fail(error.message, 400) : response(data);
   }
   if (route === "/v1/customer/alerts" && request.method === "GET") {

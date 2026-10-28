@@ -53,8 +53,33 @@ export async function listRecords(table, { page = 0, pageSize = 25, order = "cre
   }
 }
 
+function validateRecordInput(table, record, partial = false) {
+  const text = (field) => String(record?.[field] ?? "").trim();
+  const has = (field) => Object.prototype.hasOwnProperty.call(record || {}, field);
+  if (table === "bikes") {
+    if ((!partial || has("identifier")) && !text("identifier")) return "A tracker number is required.";
+    if ((!partial || has("product_type")) && !["bike", "car", "tuktuk", "device", "other"].includes(text("product_type"))) return "Choose a valid product type.";
+    if ((!partial || has("payable_amount")) && (!has("payable_amount") || !/^\d+(?:\.\d{1,2})?$/.test(text("payable_amount")) || !Number.isFinite(Number(record.payable_amount)) || Number(record.payable_amount) <= 0 || Number(record.payable_amount) > 9999999999.99)) return "Enter a valid payable amount above zero with no more than two decimal places.";
+    if ((!partial || has("custom_product_type")) && text("product_type") === "other" && !text("custom_product_type")) return "A custom product type is required.";
+  }
+  if (table === "trackers" && (!partial || has("identifier")) && !text("identifier")) return "A tracker identifier is required.";
+  if (table === "customers") {
+    if ((!partial || has("full_name")) && !text("full_name")) return "A customer name is required.";
+    if (text("email") && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(text("email"))) return "Enter a valid email address.";
+    const phoneDigits = text("phone").replace(/\D/g, "");
+    if (phoneDigits && !/^(?:254[17]\d{8}|0[17]\d{8}|[17]\d{8})$/.test(phoneDigits)) return "Enter a valid Kenyan mobile number.";
+  }
+  if (table === "payments" && (!partial || has("amount")) && (!has("amount") || text("amount") === "" || !/^\d+(?:\.\d{1,2})?$/.test(text("amount")) || !Number.isFinite(Number(record.amount)) || Number(record.amount) <= 0)) return "Payment amount must be a positive number with no more than two decimal places.";
+  if (table === "support_cases" && (!partial || has("title")) && !text("title")) return "A case title is required.";
+  if (table === "workspace_settings" && ((!partial || has("key")) && !text("key") || (!partial || has("value")) && !text("value"))) return "A settings key and value are required.";
+  if (table === "support_case_history" && ((!partial || has("case_id")) && !text("case_id") || (!partial || has("action")) && !text("action"))) return "A case and action are required for history.";
+  return "";
+}
+
 export async function createRecord(table, record) {
   if (!allowedTables.has(table)) return { data: null, error: new Error("Table is not allowed") };
+  const validationError = validateRecordInput(table, record);
+  if (validationError) return { data: null, error: new Error(validationError) };
   const db = await client();
   if (!db || !navigator.onLine) return { data: null, error: new Error("Connect to Supabase to create records") };
   const payload = table === "audit_logs" && !record.actor_id ? { ...record, actor_id: getSession()?.userId } : record;
@@ -65,6 +90,8 @@ export async function createRecord(table, record) {
 
 export async function updateRecord(table, id, changes) {
   if (!allowedTables.has(table) || !id) return { data: null, error: new Error("Invalid record") };
+  const validationError = validateRecordInput(table, changes, true);
+  if (validationError) return { data: null, error: new Error(validationError) };
   try {
     const db = await client();
     if (!db || !navigator.onLine) return { data: null, error: new Error("Connect to Supabase to update records") };
